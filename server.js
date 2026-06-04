@@ -86,9 +86,11 @@ async function listFolderFiles() {
   const drive = await getDrive();
   const collected = [];
   const toVisit = [DRIVE_FOLDER_ID];
+  let foldersVisited = 0;
 
   while (toVisit.length) {
     const folderId = toVisit.shift();
+    foldersVisited++;
     let pageToken;
     do {
       const res = await drive.files.list({
@@ -101,6 +103,7 @@ async function listFolderFiles() {
       });
       for (const f of res.data.files || []) {
         if (f.mimeType === "application/vnd.google-apps.folder") {
+          console.log(`   ↳ subfolder found: ${f.name} (${f.id})`);
           toVisit.push(f.id); // recurse into subfolders
         } else if (f.mimeType === "application/pdf" || /\.(pdf|png|jpe?g)$/i.test(f.name)) {
           collected.push({ id: f.id, name: f.name });
@@ -111,7 +114,10 @@ async function listFolderFiles() {
   }
 
   fileIndex = { files: collected, ts: Date.now() };
-  console.log(`🗂️  Indexed ${collected.length} files from Drive folder`);
+  console.log(
+    `🗂️  Indexed ${collected.length} files across ${foldersVisited} folder(s): ` +
+    collected.map((f) => f.name).join(", ")
+  );
   return collected;
 }
 
@@ -496,6 +502,7 @@ app.post("/webhook", async (req, res) => {
     if (!looksLikeQuestion) {
       const files = await listFolderFiles();
       const hits = findFilesByName(text, files);
+      console.log(`🔎 Folder search "${text}": ${hits.length} hit(s) of ${files.length} indexed`);
 
       if (hits.length === 1) {
         return await sendDriveFile(from, hits[0]);
