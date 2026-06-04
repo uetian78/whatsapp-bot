@@ -88,12 +88,14 @@ async function loadSheet() {
   return cache;
 }
 
-// Convert a normal Drive share link into a direct-download link automatically.
+// Convert a normal Drive share link into a reliable direct-download link.
+// Uses drive.usercontent.google.com with confirm=t, which bypasses the
+// "can't scan for viruses" warning page that corrupts downloads.
 function normalizeDriveLink(link) {
   if (!link) return "";
   const m = link.match(/\/d\/([a-zA-Z0-9_-]+)/) || link.match(/[?&]id=([a-zA-Z0-9_-]+)/);
   if (link.includes("drive.google.com") && m) {
-    return `https://drive.google.com/uc?export=download&id=${m[1]}`;
+    return `https://drive.usercontent.google.com/download?id=${m[1]}&export=download&confirm=t`;
   }
   return link; // already direct, or a GitHub/other link
 }
@@ -243,20 +245,78 @@ function mimeFromName(name) {
   return EXT_MIME[ext] || "application/octet-stream";
 }
 
-async function uploadMedia(fileLink, filename) {
-  // 1) download the raw bytes from the link (follows Drive redirects)
-  const fileResp = await axios.get(fileLink, {
+// Robustly download a file from a Google Drive link.
+// fileLink has already been normalized to the usercontent download host
+// (with confirm=t), which serves the real bytes without the warning page.
+async function downloadDriveFile(fileLink) {
+  const resp = await axios.get(fileLink, {
     responseType: "arraybuffer",
     maxRedirects: 5,
+    validateStatus: () => true,
+    headers: {
+      // a browser-like UA avoids Drive serving a stripped-down page
+      "User-Agent":
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
+        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
+    },
   });
-  const buffer = Buffer.from(fileResp.data);
+
+  let buffer = Buffer.from(resp.data);
+
+  // If we still somehow got an HTML interstitial, parse a confirm token and retry.
+  const head = buffer.slice(0, 200).toString("utf8").toLowerCase();
+  const isHtml =
+    head.includes("<!doctype html") ||
+    head.includes("<html") ||
+    (resp.headers["content-type"] || "").includes("text/html");
+
+  if (isHtml) {
+    const html = buffer.toString("utf8");
+    const idMatch = fileLink.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+    const fileId = idMatch ? idMatch[1] : null;
+    const confirm = html.match(/name="confirm"\s+value="([^"]+)"/) ||
+                    html.match(/confirm=([0-9A-Za-z_-]+)/);
+    const uuid = html.match(/name="uuid"\s+value="([^"]+)"/);
+    if (fileId && confirm) {
+      const params = new URLSearchParams({
+        id: fileId,
+        export: "download",
+        confirm: confirm[1],
+      });
+      if (uuid) params.append("uuid", uuid[1]);
+      const r2 = await axios.get(
+        `https://drive.usercontent.google.com/download?${params.toString()}`,
+        { responseType: "arraybuffer", maxRedirects: 5 }
+      );
+      buffer = Buffer.from(r2.data);
+    }
+  }
+
+  return buffer;
+}
+
+async function uploadMedia(fileLink, filename) {
+  // 1) download the real file bytes (handles Drive's virus-scan page)
+  const buffer = await downloadDriveFile(fileLink);
   const mime = mimeFromName(filename);
 
-  // 2) upload to WhatsApp media with the correct content-type
+  // 2) sanity check: a real PDF starts with "%PDF". If we still got HTML, bail.
+  if (mime === "application/pdf") {
+    const sig = buffer.slice(0, 5).toString("utf8");
+    if (!sig.startsWith("%PDF")) {
+      throw new Error(
+        `Downloaded file is not a valid PDF (got ${buffer.length} bytes starting "${sig}"). ` +
+        `The Drive link may not be public or is returning a warning page.`
+      );
+    }
+  }
+
+  // 3) upload to WhatsApp media with the correct content-type
   const form = new FormData();
   form.append("messaging_product", "whatsapp");
   form.append("file", buffer, { filename, contentType: mime });
   form.append("type", mime);
+
 
   const up = await axios.post(MEDIA_URL, form, {
     headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, ...form.getHeaders() },
@@ -276,13 +336,12 @@ async function sendRule(to, rule) {
       });
     } catch (err) {
       console.error("❌ Document upload error:", err.response?.data || err.message);
-      // fallback: try the old link method so the user still gets the file
-      return send(to, {
-        messaging_product: "whatsapp",
+      // Don't fall back to the raw link — that re-sends Drive's warning page
+      // as a corrupted file. Tell the user instead.
+      return sendText(
         to,
-        type: "document",
-        document: { link: rule.fileLink, filename: rule.filename, caption: rule.caption },
-      });
+        `Sorry, I couldn't fetch that file right now. Please make sure it's shared "Anyone with the link," or contact us directly.`
+      );
     }
   }
   if (rule.type === "image") {
@@ -354,17 +413,31 @@ app.post("/webhook", async (req, res) => {
     const rule = matchRule(text, rules);
     if (rule) return await sendRule(from, rule);
 
-    // 2) Are there near-miss keywords? (likely a product-code typo) -> suggest them
+    // Decide: is this a QUESTION/sentence, or a short product-code attempt?
+    const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
+    const looksLikeQuestion =
+      /[?]/.test(text) ||
+      /\b(what|how|when|where|why|who|which|can|do|does|is|are|hours|open|deliver|price|cost|warranty|install|contact|help)\b/i.test(text) ||
+      wordCount >= 4;
+
+    // 2) If it's a real question -> answer from the Knowledge tab via Claude Haiku
+    if (looksLikeQuestion) {
+      const aiReply = await askClaude(text, knowledge);
+      if (aiReply) return await sendText(from, aiReply);
+    }
+
+    // 3) Otherwise (short, code-like input) -> suggest the closest catalogue codes
     const near = closestKeywords(text, rules);
     if (near.length) {
       return await sendText(from, suggestionMessage(text, rules));
     }
 
-    // 3) Claude Haiku fallback for genuine questions (answers from Knowledge tab)
-    const aiReply = await askClaude(text, knowledge);
-    if (aiReply) return await sendText(from, aiReply);
-
-    // 4) Final fallback: show the catalogue menu
+    // 4) Last resort: if a question slipped through with no AI answer, try Claude;
+    //    else show the catalogue menu.
+    if (!looksLikeQuestion) {
+      const aiReply = await askClaude(text, knowledge);
+      if (aiReply) return await sendText(from, aiReply);
+    }
     await sendText(from, suggestionMessage(text, rules));
   } catch (err) {
     console.error("Handler error:", err.message);
