@@ -36,16 +36,38 @@ const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 //   3) "Allowed"   -> Number        (optional whitelist; empty = reply to all)
 // ============================================================
 let sheetsClient = null;
+let driveClient = null;
+
+async function getGoogleAuth() {
+  const credentials = JSON.parse(GOOGLE_SERVICE_ACCOUNT_JSON);
+  return new google.auth.GoogleAuth({
+    credentials,
+    scopes: [
+      "https://www.googleapis.com/auth/spreadsheets.readonly",
+      "https://www.googleapis.com/auth/drive.readonly",
+    ],
+  });
+}
 
 async function getSheets() {
   if (sheetsClient) return sheetsClient;
-  const credentials = JSON.parse(GOOGLE_SERVICE_ACCOUNT_JSON);
-  const auth = new google.auth.GoogleAuth({
-    credentials,
-    scopes: ["https://www.googleapis.com/auth/spreadsheets.readonly"],
-  });
+  const auth = await getGoogleAuth();
   sheetsClient = google.sheets({ version: "v4", auth: await auth.getClient() });
   return sheetsClient;
+}
+
+async function getDrive() {
+  if (driveClient) return driveClient;
+  const auth = await getGoogleAuth();
+  driveClient = google.drive({ version: "v3", auth: await auth.getClient() });
+  return driveClient;
+}
+
+// Extract a Drive file ID from any Drive link.
+function driveFileId(link) {
+  if (!link) return null;
+  const m = link.match(/\/d\/([a-zA-Z0-9_-]+)/) || link.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  return m ? m[1] : null;
 }
 
 // Simple cache so we don't hit the Sheet on every single message
@@ -245,54 +267,24 @@ function mimeFromName(name) {
   return EXT_MIME[ext] || "application/octet-stream";
 }
 
-// Robustly download a file from a Google Drive link.
-// fileLink has already been normalized to the usercontent download host
-// (with confirm=t), which serves the real bytes without the warning page.
+// Download a file. For Google Drive links, download via the Drive API using
+// the service account (reliable, no virus-scan page, any size). For other
+// links (e.g. GitHub raw), download directly over HTTP.
 async function downloadDriveFile(fileLink) {
-  const resp = await axios.get(fileLink, {
-    responseType: "arraybuffer",
-    maxRedirects: 5,
-    validateStatus: () => true,
-    headers: {
-      // a browser-like UA avoids Drive serving a stripped-down page
-      "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 " +
-        "(KHTML, like Gecko) Chrome/120.0 Safari/537.36",
-    },
-  });
+  const fileId = driveFileId(fileLink);
 
-  let buffer = Buffer.from(resp.data);
-
-  // If we still somehow got an HTML interstitial, parse a confirm token and retry.
-  const head = buffer.slice(0, 200).toString("utf8").toLowerCase();
-  const isHtml =
-    head.includes("<!doctype html") ||
-    head.includes("<html") ||
-    (resp.headers["content-type"] || "").includes("text/html");
-
-  if (isHtml) {
-    const html = buffer.toString("utf8");
-    const idMatch = fileLink.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-    const fileId = idMatch ? idMatch[1] : null;
-    const confirm = html.match(/name="confirm"\s+value="([^"]+)"/) ||
-                    html.match(/confirm=([0-9A-Za-z_-]+)/);
-    const uuid = html.match(/name="uuid"\s+value="([^"]+)"/);
-    if (fileId && confirm) {
-      const params = new URLSearchParams({
-        id: fileId,
-        export: "download",
-        confirm: confirm[1],
-      });
-      if (uuid) params.append("uuid", uuid[1]);
-      const r2 = await axios.get(
-        `https://drive.usercontent.google.com/download?${params.toString()}`,
-        { responseType: "arraybuffer", maxRedirects: 5 }
-      );
-      buffer = Buffer.from(r2.data);
-    }
+  if (fileId && fileLink.includes("drive")) {
+    const drive = await getDrive();
+    const res = await drive.files.get(
+      { fileId, alt: "media", supportsAllDrives: true },
+      { responseType: "arraybuffer" }
+    );
+    return Buffer.from(res.data);
   }
 
-  return buffer;
+  // Non-Drive link: direct HTTP download.
+  const r = await axios.get(fileLink, { responseType: "arraybuffer", maxRedirects: 5 });
+  return Buffer.from(r.data);
 }
 
 async function uploadMedia(fileLink, filename) {
