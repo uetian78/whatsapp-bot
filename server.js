@@ -9,6 +9,7 @@ const express = require("express");
 const axios = require("axios");
 const { google } = require("googleapis");
 const Anthropic = require("@anthropic-ai/sdk");
+const FormData = require("form-data");
 require("dotenv").config();
 
 const app = express();
@@ -158,22 +159,87 @@ async function sendText(to, body) {
   });
 }
 
+// Download a file (e.g. from Google Drive) and re-upload it to WhatsApp's
+// media endpoint with the correct content-type. WhatsApp then labels it
+// correctly (e.g. .pdf) instead of a generic .bin. Returns a media ID.
+const MEDIA_URL = `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/media`;
+
+const EXT_MIME = {
+  pdf: "application/pdf",
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+};
+
+function mimeFromName(name) {
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  return EXT_MIME[ext] || "application/octet-stream";
+}
+
+async function uploadMedia(fileLink, filename) {
+  // 1) download the raw bytes from the link (follows Drive redirects)
+  const fileResp = await axios.get(fileLink, {
+    responseType: "arraybuffer",
+    maxRedirects: 5,
+  });
+  const buffer = Buffer.from(fileResp.data);
+  const mime = mimeFromName(filename);
+
+  // 2) upload to WhatsApp media with the correct content-type
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("file", buffer, { filename, contentType: mime });
+  form.append("type", mime);
+
+  const up = await axios.post(MEDIA_URL, form, {
+    headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, ...form.getHeaders() },
+  });
+  return up.data.id; // media ID
+}
+
 async function sendRule(to, rule) {
   if (rule.type === "document") {
-    return send(to, {
-      messaging_product: "whatsapp",
-      to,
-      type: "document",
-      document: { link: rule.fileLink, filename: rule.filename, caption: rule.caption },
-    });
+    try {
+      const mediaId = await uploadMedia(rule.fileLink, rule.filename);
+      return send(to, {
+        messaging_product: "whatsapp",
+        to,
+        type: "document",
+        document: { id: mediaId, filename: rule.filename, caption: rule.caption },
+      });
+    } catch (err) {
+      console.error("❌ Document upload error:", err.response?.data || err.message);
+      // fallback: try the old link method so the user still gets the file
+      return send(to, {
+        messaging_product: "whatsapp",
+        to,
+        type: "document",
+        document: { link: rule.fileLink, filename: rule.filename, caption: rule.caption },
+      });
+    }
   }
   if (rule.type === "image") {
-    return send(to, {
-      messaging_product: "whatsapp",
-      to,
-      type: "image",
-      image: { link: rule.fileLink, caption: rule.caption },
-    });
+    try {
+      const mediaId = await uploadMedia(rule.fileLink, rule.filename || "image.jpg");
+      return send(to, {
+        messaging_product: "whatsapp",
+        to,
+        type: "image",
+        image: { id: mediaId, caption: rule.caption },
+      });
+    } catch (err) {
+      console.error("❌ Image upload error:", err.response?.data || err.message);
+      return send(to, {
+        messaging_product: "whatsapp",
+        to,
+        type: "image",
+        image: { link: rule.fileLink, caption: rule.caption },
+      });
+    }
   }
   return sendText(to, rule.caption);
 }

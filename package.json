@@ -12,6 +12,7 @@
     "axios": "^1.7.2",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "form-data": "^4.0.5",
     "googleapis": "^144.0.0"
   }
 }
