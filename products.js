@@ -71,6 +71,31 @@ const PRODUCTS = {
       { code: "52340", cfm: 10500, t1_kw: 98.9, t3_kw: 87.6 },
     ],
   },
+
+  // PAC4A 100% Fresh Air (DOAS) units (R-410A) — single condition (46.1C).
+  // capacity = "Actual Capacity" at 46.1C entering/ambient. No T1/T3 split.
+  "pac4a": {
+    label: "PAC4A 100% Fresh Air Unit",
+    refrigerant: "R-410A",
+    fileKeyword: "pac4a",
+    namePrefix: "PAC4A ",
+    selectBy: "fresh", // single-condition capacity
+    models: [
+      { code: "51006", cfm: 600, cap_kw: 16.1 },
+      { code: "52008", cfm: 1200, cap_kw: 27.4 },
+      { code: "52010", cfm: 1200, cap_kw: 31.7 },
+      { code: "52011", cfm: 1600, cap_kw: 36.5 },
+      { code: "52013", cfm: 1800, cap_kw: 43.4 },
+      { code: "52015", cfm: 2200, cap_kw: 55.5 },
+      { code: "52018", cfm: 2600, cap_kw: 63.0 },
+      { code: "52020", cfm: 3200, cap_kw: 71.3 },
+      { code: "52023", cfm: 3200, cap_kw: 77.1 },
+      { code: "52025", cfm: 3400, cap_kw: 86.1 },
+      { code: "52030", cfm: 4400, cap_kw: 108.5 },
+      { code: "52035", cfm: 4400, cap_kw: 116.9 },
+      { code: "52040", cfm: 5400, cap_kw: 136.4 },
+    ],
+  },
 };
 
 // compute TR for each model once
@@ -78,8 +103,13 @@ for (const key of Object.keys(PRODUCTS)) {
   const prefix = PRODUCTS[key].namePrefix || "APMR ";
   const suffix = key === "apmr-a" ? "A" : "";
   for (const m of PRODUCTS[key].models) {
-    m.t1_tr = Math.round((m.t1_kw / TR_KW) * 10) / 10;
-    m.t3_tr = Math.round((m.t3_kw / TR_KW) * 10) / 10;
+    if (m.cap_kw !== undefined) {
+      // single-condition product (PAC4A)
+      m.cap_tr = Math.round((m.cap_kw / TR_KW) * 10) / 10;
+    } else {
+      m.t1_tr = Math.round((m.t1_kw / TR_KW) * 10) / 10;
+      m.t3_tr = Math.round((m.t3_kw / TR_KW) * 10) / 10;
+    }
     m.fullModel = `${prefix}${m.code}${suffix}`;
   }
 }
@@ -90,19 +120,22 @@ for (const key of Object.keys(PRODUCTS)) {
 function parseSelectionRequest(text) {
   const t = text.toLowerCase();
 
-  // Fresh-air / DOAS requests belong to PAC4A, not the standard packaged lines.
+  // CFM and tonnage extraction (shared)
+  const cfmMatch = t.match(/(\d{3,6})\s*cfm\b/);
+  const trMatch = t.match(/(\d+(?:\.\d+)?)\s*(?:tr|ton|tons)\b/);
+
+  // Fresh-air / DOAS requests -> PAC4A (single condition, no T1/T3).
   const isFreshAir = /\bfresh air\b|\bdoas\b|\bpac4a\b|outside air|100% fresh/.test(t);
-  if (isFreshAir) return null; // let folder/AI handle PAC4A for now
+  if (isFreshAir) {
+    if (cfmMatch) return { mode: "fresh-cfm", product: "pac4a", cfm: parseInt(cfmMatch[1], 10) };
+    if (trMatch) return { mode: "fresh-tr", product: "pac4a", tr: parseFloat(trMatch[1]) };
+    return null; // fresh air mentioned but no number -> let folder/AI handle
+  }
 
   // must look like a packaged-unit request
   const isPackaged =
     /\bapmr\b|\bapmr-?a\b|packaged|package unit|package ac/.test(t);
   if (!isPackaged) return null;
-
-  // CFM: "5000 cfm", "5000cfm"
-  const cfmMatch = t.match(/(\d{3,6})\s*cfm\b/);
-  // tonnage: "20 tr", "20 ton", "20 tons", "20tr"
-  const trMatch = t.match(/(\d+(?:\.\d+)?)\s*(?:tr|ton|tons)\b/);
 
   // condition: t1 or t3 (default null = unspecified)
   let condition = null;
@@ -189,7 +222,38 @@ function selectByCfm(product, cfm) {
   return { kind: "models", product: p, cfm, models: chosen };
 }
 
-// Build the WhatsApp reply text for a selection result.
+// PAC4A single-condition selection by capacity (TR). Size up; 5% show-both.
+function selectFreshByTr(tr) {
+  const p = PRODUCTS["pac4a"];
+  const ordered = [...p.models].sort((a, b) => a.cap_tr - b.cap_tr);
+  const safe = ordered.find((m) => m.cap_tr >= tr);
+  if (!safe) return { kind: "toolarge", product: p, max: ordered[ordered.length - 1] };
+  const idx = ordered.indexOf(safe);
+  const lower = idx > 0 ? ordered[idx - 1] : null;
+  if (lower && lower.cap_tr >= tr * 0.95) {
+    return { kind: "both", product: p, lower, upper: safe };
+  }
+  return { kind: "one", product: p, model: safe };
+}
+
+// PAC4A single-condition selection by CFM. Size up; show all at matching CFM; 5%.
+function selectFreshByCfm(cfm) {
+  const p = PRODUCTS["pac4a"];
+  const cfms = [...new Set(p.models.map((m) => m.cfm))].sort((a, b) => a - b);
+  const safeCfm = cfms.find((c) => c >= cfm);
+  if (safeCfm === undefined) {
+    const maxCfm = cfms[cfms.length - 1];
+    return { kind: "toolarge", product: p, max: p.models.filter((m) => m.cfm === maxCfm) };
+  }
+  let chosen = p.models.filter((m) => m.cfm === safeCfm);
+  const idx = cfms.indexOf(safeCfm);
+  if (idx > 0 && cfms[idx - 1] >= cfm * 0.95) {
+    chosen = chosen.concat(p.models.filter((m) => m.cfm === cfms[idx - 1]));
+  }
+  return { kind: "models", product: p, cfm, models: chosen };
+}
+
+// Build the WhatsApp reply text for a selection result (legacy text fallback).
 function buildSelectionReply(text) {
   const req = parseSelectionRequest(text);
   if (!req || req.mode !== "tr") return null;
@@ -263,7 +327,75 @@ function buildSelectionInteractive(text) {
   const req = parseSelectionRequest(text);
   if (!req) return null;
   if (req.mode === "cfm") return interactiveForCfm(req.product, req.cfm);
+  if (req.mode === "fresh-cfm") return interactiveForFreshCfm(req.cfm);
+  if (req.mode === "fresh-tr") return interactiveForFreshTr(req.tr);
   return interactiveFor(req.product, req.tr, req.condition);
+}
+
+// PAC4A fresh-air selection by capacity (TR) -> buttons.
+function interactiveForFreshTr(tr) {
+  const res = selectFreshByTr(tr);
+  if (res.kind === "toolarge") {
+    const m = res.max;
+    return {
+      text:
+        `For ${tr} TR fresh air, that's above the largest PAC4A model.\n` +
+        `Biggest: ${m.fullModel} → ${m.cap_tr} TR (${m.cap_kw} kW) at 46°C.`,
+      buttons: [{ id: `sheet|${m.fullModel}`, title: `${m.code} sheet` }],
+    };
+  }
+  if (res.kind === "both") {
+    const lo = res.lower, hi = res.upper;
+    const loShort = Math.round((1 - lo.cap_tr / tr) * 1000) / 10;
+    return {
+      text:
+        `For ${tr} TR fresh air (at 46°C), two close options:\n\n` +
+        `• ${lo.fullModel} → ${lo.cap_tr} TR (${lo.cap_kw} kW) — ${loShort}% under\n` +
+        `• ${hi.fullModel} → ${hi.cap_tr} TR (${hi.cap_kw} kW) — meets ${tr} TR\n\n` +
+        `Tap a model for its data sheet:`,
+      buttons: [
+        { id: `sheet|${lo.fullModel}`, title: `${lo.code} (${lo.cap_tr}TR)` },
+        { id: `sheet|${hi.fullModel}`, title: `${hi.code} (${hi.cap_tr}TR)` },
+      ],
+    };
+  }
+  const m = res.model;
+  return {
+    text:
+      `For ${tr} TR fresh air: ${m.fullModel}\n` +
+      `• Capacity at 46°C: ${m.cap_tr} TR (${m.cap_kw} kW) ✓\n` +
+      `• Airflow: ${m.cfm} CFM`,
+    buttons: [{ id: `sheet|${m.fullModel}`, title: `${m.code} data sheet` }],
+  };
+}
+
+// PAC4A fresh-air selection by CFM -> buttons.
+function interactiveForFreshCfm(cfm) {
+  const res = selectFreshByCfm(cfm);
+  if (res.kind === "toolarge") {
+    const big = res.max[0];
+    return {
+      text:
+        `${cfm} CFM is above the largest PAC4A model (${big.cfm} CFM).\n` +
+        `For higher fresh-air volumes, consider multiple units.`,
+      buttons: [{ id: `sheet|${big.fullModel}`, title: `${big.code} sheet` }],
+    };
+  }
+  const models = res.models;
+  const lines = models
+    .map((m) => `• ${m.fullModel} → ${m.cfm} CFM, ${m.cap_tr} TR (${m.cap_kw} kW)`)
+    .join("\n");
+  const header =
+    models.length === 1
+      ? `For ${cfm} CFM fresh air: ${models[0].fullModel}`
+      : `For ${cfm} CFM fresh air, ${models.length} options:`;
+  return {
+    text: `${header}\n${lines}\n\nTap a model for its data sheet:`,
+    buttons: models.slice(0, 3).map((m) => ({
+      id: `sheet|${m.fullModel}`,
+      title: `${m.code} (${m.cfm}cfm)`,
+    })),
+  };
 }
 
 // CFM selection -> buttons (one per matching model, max 3).
