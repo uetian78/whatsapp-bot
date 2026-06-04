@@ -14,8 +14,9 @@ const PRODUCTS = {
   // APMR-A Packaged Air Conditioners (R-410A)
   "apmr-a": {
     label: "APMR-A Packaged Air Conditioner",
-    fileKeyword: "apmr-a", // how the catalogue/data sheet is requested
-    selectBy: "tr",         // selection is by tonnage with T1/T3
+    refrigerant: "R-410A",
+    fileKeyword: "apmr-a",
+    selectBy: "tr",
     models: [
       { code: "51004", cfm: 1670, t1_kw: 15.2, t3_kw: 13.6 },
       { code: "51005", cfm: 2000, t1_kw: 17.1, t3_kw: 15.1 },
@@ -44,14 +45,42 @@ const PRODUCTS = {
       { code: "52095", cfm: 33500, t1_kw: 315.7, t3_kw: 282.2 },
     ],
   },
+
+  // APMR Packaged Air Conditioners (R-410A) — 5 to 28 TR
+  "apmr": {
+    label: "APMR Packaged Air Conditioner",
+    refrigerant: "R-410A",
+    fileKeyword: "apmr",
+    namePrefix: "APMR ",
+    selectBy: "tr",
+    models: [
+      { code: "51050", cfm: 1670, t1_kw: 15.6, t3_kw: 13.9 },
+      { code: "51060", cfm: 2000, t1_kw: 17.3, t3_kw: 15.4 },
+      { code: "51075", cfm: 2400, t1_kw: 21.8, t3_kw: 19.5 },
+      { code: "51080", cfm: 2900, t1_kw: 23.6, t3_kw: 20.7 },
+      { code: "51100", cfm: 3220, t1_kw: 28.9, t3_kw: 25.7 },
+      { code: "52115", cfm: 4000, t1_kw: 33.3, t3_kw: 29.3 },
+      { code: "52125", cfm: 4000, t1_kw: 35.2, t3_kw: 31.3 },
+      { code: "52150", cfm: 5000, t1_kw: 44.1, t3_kw: 39.4 },
+      { code: "52170", cfm: 6000, t1_kw: 49.3, t3_kw: 43.8 },
+      { code: "52200", cfm: 7000, t1_kw: 57.0, t3_kw: 50.7 },
+      { code: "52230", cfm: 7000, t1_kw: 66.6, t3_kw: 58.1 },
+      { code: "52240", cfm: 8000, t1_kw: 68.5, t3_kw: 60.6 },
+      { code: "52270", cfm: 8000, t1_kw: 77.5, t3_kw: 67.1 },
+      { code: "52300", cfm: 9100, t1_kw: 87.8, t3_kw: 76.2 },
+      { code: "52340", cfm: 10500, t1_kw: 98.9, t3_kw: 87.6 },
+    ],
+  },
 };
 
 // compute TR for each model once
 for (const key of Object.keys(PRODUCTS)) {
+  const prefix = PRODUCTS[key].namePrefix || "APMR ";
+  const suffix = key === "apmr-a" ? "A" : "";
   for (const m of PRODUCTS[key].models) {
     m.t1_tr = Math.round((m.t1_kw / TR_KW) * 10) / 10;
     m.t3_tr = Math.round((m.t3_kw / TR_KW) * 10) / 10;
-    m.fullModel = `APMR ${m.code}A`;
+    m.fullModel = `${prefix}${m.code}${suffix}`;
   }
 }
 
@@ -61,12 +90,11 @@ for (const key of Object.keys(PRODUCTS)) {
 function parseSelectionRequest(text) {
   const t = text.toLowerCase();
 
-  // Fresh-air / DOAS requests belong to PAC4A, not APMR-A.
-  // (PAC4A selection-by-tonnage will be added when its data PDF is in Drive.)
+  // Fresh-air / DOAS requests belong to PAC4A, not the standard packaged lines.
   const isFreshAir = /\bfresh air\b|\bdoas\b|\bpac4a\b|outside air|100% fresh/.test(t);
   if (isFreshAir) return null; // let folder/AI handle PAC4A for now
 
-  // must look like a standard packaged-unit / APMR request
+  // must look like a packaged-unit request
   const isPackaged =
     /\bapmr\b|\bapmr-?a\b|packaged|package unit|package ac/.test(t);
   if (!isPackaged) return null;
@@ -81,8 +109,23 @@ function parseSelectionRequest(text) {
   if (/\bt3\b|46\s*c|46°/.test(t)) condition = "t3";
   else if (/\bt1\b|35\s*c|35°/.test(t)) condition = "t1";
 
-  // default to APMR-A (the registered packaged line with T1/T3 data)
-  return { product: "apmr-a", tr, condition };
+  // Which packaged line?
+  //  - "apmr-a" / "apmra" -> APMR-A only
+  //  - "apmr" alone        -> APMR only
+  //  - just "package unit" -> APMR if within range, else APMR-A
+  let product;
+  if (/\bapmr-?a\b|\bapmra\b/.test(t)) {
+    product = "apmr-a";
+  } else if (/\bapmr\b/.test(t)) {
+    product = "apmr";
+  } else {
+    // plain packaged request: prefer APMR, fall back to APMR-A if out of range
+    const condKey = condition === "t3" ? "t3_tr" : "t1_tr";
+    const apmrMax = Math.max(...PRODUCTS["apmr"].models.map((m) => m[condKey]));
+    product = tr <= apmrMax ? "apmr" : "apmr-a";
+  }
+
+  return { product, tr, condition };
 }
 
 // Apply selection: size up to >= tr, but if the next size down is within 5%
@@ -113,6 +156,7 @@ function buildSelectionReply(text) {
 
   const { product, tr, condition } = req;
   const p = PRODUCTS[product];
+  const cat = product === "apmr-a" ? "APMR-A" : "APMR"; // catalogue keyword to reply with
 
   // No condition stated -> show nearest model with BOTH T1 and T3, ask condition.
   if (!condition) {
@@ -125,7 +169,7 @@ function buildSelectionReply(text) {
       `• T3 (46°C): ${m.t3_tr} TR (${m.t3_kw} kW)\n` +
       `• Airflow: ${m.cfm} CFM\n\n` +
       `Tell me the condition — reply "${tr} TR at T1" or "${tr} TR at T3" — for the exact selection.\n` +
-      `Reply APMR-A for the full catalogue.`
+      `Reply ${cat} for the full catalogue.`
     );
   }
 
@@ -138,9 +182,9 @@ function buildSelectionReply(text) {
   if (res.kind === "toolarge") {
     const m = res.max;
     return (
-      `For ${tr} TR at ${cond} (${cTemp}), that exceeds the largest APMR-A model.\n` +
+      `For ${tr} TR at ${cond} (${cTemp}), that exceeds the largest ${cat} model.\n` +
       `Biggest: ${m.fullModel} → ${m[tk]} TR (${m[kwk]} kW) at ${cond}.\n` +
-      `For higher loads, consider multiple units or a chiller. Reply APMR-A for the catalogue.`
+      `For higher loads, consider multiple units or a chiller. Reply ${cat} for the catalogue.`
     );
   }
 
@@ -151,7 +195,7 @@ function buildSelectionReply(text) {
       `For ${tr} TR at ${cond} (${cTemp}), two close options:\n\n` +
       `• ${lo.fullModel} → ${lo[tk]} TR (${lo[kwk]} kW) — ${loShort}% under, smaller/lower cost\n` +
       `• ${hi.fullModel} → ${hi[tk]} TR (${hi[kwk]} kW) — meets ${tr} TR fully\n\n` +
-      `Reply APMR-A for the catalogue with full model data.`
+      `Reply ${cat} for the catalogue with full model data.`
     );
   }
 
@@ -165,8 +209,114 @@ function buildSelectionReply(text) {
     `• ${cond} (${cTemp}): ${m[tk]} TR (${m[kwk]} kW) ✓ meets ${tr} TR\n` +
     `• ${other}: ${otherTr} TR (${otherKw} kW)\n` +
     `• Airflow: ${m.cfm} CFM\n\n` +
-    `Reply APMR-A for the data sheet.`
+    `Reply ${cat} for the data sheet.`
   );
+}
+
+// Build an INTERACTIVE WhatsApp response (text + reply buttons) for a
+// selection request. Returns { text, buttons: [{id,title}] } or null.
+// Button IDs encode the action:
+//   "cond|<product>|<tr>|t1"  -> re-run selection at T1
+//   "cond|<product>|<tr>|t3"  -> re-run selection at T3
+//   "sheet|<fullModel>"        -> send that model's data sheet PDF
+function buildSelectionInteractive(text) {
+  const req = parseSelectionRequest(text);
+  if (!req) return null;
+  return interactiveFor(req.product, req.tr, req.condition);
+}
+
+// Core builder reused by both text requests and button taps.
+function interactiveFor(product, tr, condition) {
+  const p = PRODUCTS[product];
+  if (!p) return null;
+  const cat = product === "apmr-a" ? "APMR-A" : "APMR";
+
+  // No condition -> offer T1 / T3 buttons.
+  if (!condition) {
+    const ordered = [...p.models].sort((a, b) => a.t1_tr - b.t1_tr);
+    const m = ordered.find((x) => x.t1_tr >= tr) || ordered[ordered.length - 1];
+    return {
+      text:
+        `${p.label} around ${tr} TR.\n` +
+        `Which design condition?\n\n` +
+        `• T1 = 35°C ambient\n` +
+        `• T3 = 46°C ambient`,
+      buttons: [
+        { id: `cond|${product}|${tr}|t1`, title: "T1 (35°C)" },
+        { id: `cond|${product}|${tr}|t3`, title: "T3 (46°C)" },
+      ],
+    };
+  }
+
+  const res = selectModel(product, tr, condition);
+  const cond = condition.toUpperCase();
+  const cTemp = condition === "t3" ? "46°C" : "35°C";
+  const tk = condition === "t3" ? "t3_tr" : "t1_tr";
+  const kwk = condition === "t3" ? "t3_kw" : "t1_kw";
+
+  if (res.kind === "toolarge") {
+    const m = res.max;
+    return {
+      text:
+        `For ${tr} TR at ${cond} (${cTemp}), that's above the largest ${cat} model.\n` +
+        `Biggest: ${m.fullModel} → ${m[tk]} TR (${m[kwk]} kW).\n` +
+        `For higher loads, consider multiple units or a chiller.`,
+      buttons: [{ id: `sheet|${m.fullModel}`, title: `${m.code} sheet` }],
+    };
+  }
+
+  if (res.kind === "both") {
+    const lo = res.lower, hi = res.upper;
+    const loShort = Math.round((1 - lo[tk] / tr) * 1000) / 10;
+    return {
+      text:
+        `For ${tr} TR at ${cond} (${cTemp}), two close options:\n\n` +
+        `• ${lo.fullModel} → ${lo[tk]} TR (${lo[kwk]} kW) — ${loShort}% under\n` +
+        `• ${hi.fullModel} → ${hi[tk]} TR (${hi[kwk]} kW) — meets ${tr} TR\n\n` +
+        `Tap a model for its data sheet:`,
+      buttons: [
+        { id: `sheet|${lo.fullModel}`, title: `${lo.code} (${lo[tk]}TR)` },
+        { id: `sheet|${hi.fullModel}`, title: `${hi.code} (${hi[tk]}TR)` },
+      ],
+    };
+  }
+
+  // one
+  const m = res.model;
+  const other = condition === "t3" ? "T1 (35°C)" : "T3 (46°C)";
+  const otherTr = condition === "t3" ? m.t1_tr : m.t3_tr;
+  const otherKw = condition === "t3" ? m.t1_kw : m.t3_kw;
+  return {
+    text:
+      `For ${tr} TR at ${cond} (${cTemp}): ${m.fullModel}\n` +
+      `• ${cond} (${cTemp}): ${m[tk]} TR (${m[kwk]} kW) ✓\n` +
+      `• ${other}: ${otherTr} TR (${otherKw} kW)\n` +
+      `• Airflow: ${m.cfm} CFM`,
+    buttons: [{ id: `sheet|${m.fullModel}`, title: `${m.code} data sheet` }],
+  };
+}
+
+// Handle a button tap. Returns either:
+//   { type: "interactive", text, buttons }  -> another button message
+//   { type: "sheet", fileName }             -> fetch this PDF from Drive
+//   null                                     -> not one of our buttons
+function handleButtonTap(buttonId) {
+  if (!buttonId) return null;
+  const parts = buttonId.split("|");
+
+  if (parts[0] === "cond") {
+    const [, product, trStr, condition] = parts;
+    const tr = parseFloat(trStr);
+    const out = interactiveFor(product, tr, condition);
+    return out ? { type: "interactive", ...out } : null;
+  }
+
+  if (parts[0] === "sheet") {
+    const fullModel = parts.slice(1).join("|"); // e.g. "APMR-A 52025"
+    return { type: "sheet", fileName: fullModel };
+  }
+
+  return null;
 }
 
 // Interpret a bare numeric code (e.g. "52015") and report everything it
@@ -217,5 +367,7 @@ module.exports = {
   parseSelectionRequest,
   selectModel,
   buildSelectionReply,
+  buildSelectionInteractive,
+  handleButtonTap,
   interpretCode,
 };

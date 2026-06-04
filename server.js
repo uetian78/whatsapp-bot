@@ -10,7 +10,7 @@ const axios = require("axios");
 const { google } = require("googleapis");
 const Anthropic = require("@anthropic-ai/sdk");
 const FormData = require("form-data");
-const { buildSelectionReply, interpretCode } = require("./products.js");
+const { buildSelectionReply, buildSelectionInteractive, handleButtonTap, interpretCode } = require("./products.js");
 require("dotenv").config();
 
 const app = express();
@@ -370,6 +370,25 @@ async function sendText(to, body) {
   });
 }
 
+// Send up to 3 tappable reply buttons. buttons = [{id, title}, ...].
+// Titles are capped at 20 chars (WhatsApp limit).
+async function sendButtons(to, bodyText, buttons) {
+  const trimmed = buttons.slice(0, 3).map((b) => ({
+    type: "reply",
+    reply: { id: b.id, title: b.title.slice(0, 20) },
+  }));
+  return send(to, {
+    messaging_product: "whatsapp",
+    to,
+    type: "interactive",
+    interactive: {
+      type: "button",
+      body: { text: bodyText.slice(0, 1024) },
+      action: { buttons: trimmed },
+    },
+  });
+}
+
 // Download a file (e.g. from Google Drive) and re-upload it to WhatsApp's
 // media endpoint with the correct content-type. WhatsApp then labels it
 // correctly (e.g. .pdf) instead of a generic .bin. Returns a media ID.
@@ -523,9 +542,33 @@ app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
   try {
     const message = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
-    if (!message || message.type !== "text") return;
+    if (!message) return;
 
     const from = message.from;
+
+    // --- Button tap? (interactive reply) ---
+    if (message.type === "interactive" && message.interactive?.type === "button_reply") {
+      const btnId = message.interactive.button_reply.id;
+      console.log(`🔘 ${from} tapped: ${btnId}`);
+
+      const action = handleButtonTap(btnId);
+      if (action?.type === "interactive") {
+        return await sendButtons(from, action.text, action.buttons);
+      }
+      if (action?.type === "sheet") {
+        // fetch the model data sheet PDF from the Drive folder by name
+        const files = await listFolderFiles();
+        const hits = findFilesByName(action.fileName, files);
+        if (hits.length >= 1) return await sendDriveFile(from, hits[0]);
+        return await sendText(
+          from,
+          `The ${action.fileName} data sheet isn't available yet. Please check back soon or contact us.`
+        );
+      }
+      return; // unknown button
+    }
+
+    if (message.type !== "text") return;
     const text = message.text.body;
 
     const { rules, knowledge, allowed } = await loadSheet();
@@ -542,12 +585,11 @@ app.post("/webhook", async (req, res) => {
     if (rule) return await sendRule(from, rule);
 
     // 1b) Product selection by tonnage (e.g. "package unit 20 tr t3").
-    //     Returns a model recommendation; user can then reply with the code
-    //     to get the data sheet (handled by the folder search below).
-    const selectionReply = buildSelectionReply(text);
-    if (selectionReply) {
+    //     Returns interactive buttons (T1/T3 choice, or model data sheets).
+    const selection = buildSelectionInteractive(text);
+    if (selection) {
       console.log(`📐 Selection request: "${text}"`);
-      return await sendText(from, selectionReply);
+      return await sendButtons(from, selection.text, selection.buttons);
     }
 
     const files = await listFolderFiles();
