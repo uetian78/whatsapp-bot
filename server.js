@@ -10,7 +10,7 @@ const axios = require("axios");
 const { google } = require("googleapis");
 const Anthropic = require("@anthropic-ai/sdk");
 const FormData = require("form-data");
-const { buildSelectionReply, buildSelectionInteractive, handleButtonTap, interpretCode } = require("./products.js");
+const { buildSelectionReply, buildSelectionInteractive, handleButtonTap, interpretCode, parseSeriesRequest, seriesMenu } = require("./products.js");
 require("dotenv").config();
 
 const app = express();
@@ -86,6 +86,10 @@ async function listFolderFiles() {
 
   const drive = await getDrive();
   const collected = [];
+  // Track each folder's name so we know which folder a file lives in
+  // (e.g. "Catalogue", "IOM", "Datasheets"). The parent folder itself
+  // is recorded under its own name too.
+  const folderNames = { [DRIVE_FOLDER_ID]: "(root)" };
   const toVisit = [DRIVE_FOLDER_ID];
   let foldersVisited = 0;
 
@@ -105,9 +109,10 @@ async function listFolderFiles() {
       for (const f of res.data.files || []) {
         if (f.mimeType === "application/vnd.google-apps.folder") {
           console.log(`   ↳ subfolder found: ${f.name} (${f.id})`);
+          folderNames[f.id] = f.name; // remember its name
           toVisit.push(f.id); // recurse into subfolders
         } else if (f.mimeType === "application/pdf" || /\.(pdf|png|jpe?g)$/i.test(f.name)) {
-          collected.push({ id: f.id, name: f.name });
+          collected.push({ id: f.id, name: f.name, folder: folderNames[folderId] || "(root)" });
         }
       }
       pageToken = res.data.nextPageToken;
@@ -117,9 +122,18 @@ async function listFolderFiles() {
   fileIndex = { files: collected, ts: Date.now() };
   console.log(
     `🗂️  Indexed ${collected.length} files across ${foldersVisited} folder(s): ` +
-    collected.map((f) => f.name).join(", ")
+    collected.map((f) => `${f.folder}/${f.name}`).join(", ")
   );
   return collected;
+}
+
+// Find files by name, but only within a specific folder (case-insensitive
+// folder-name match). Used for the Catalogue-only / IOM-only fetches.
+function findFilesInFolder(text, files, folderName) {
+  const inFolder = files.filter(
+    (f) => (f.folder || "").toLowerCase() === folderName.toLowerCase()
+  );
+  return findFilesByName(text, inFolder);
 }
 
 // Find files whose name matches the user's text.
@@ -555,6 +569,16 @@ app.post("/webhook", async (req, res) => {
       if (action?.type === "interactive") {
         return await sendButtons(from, action.text, action.buttons);
       }
+      // Catalogue / IOM choice -> fetch from that folder ONLY
+      if (action?.type === "folderFile") {
+        const files = await listFolderFiles();
+        const hits = findFilesInFolder(action.fileName, files, action.folder);
+        if (hits.length >= 1) return await sendDriveFile(from, hits[0]);
+        return await sendText(
+          from,
+          `The ${action.series} ${action.docType} isn't available yet. Please check back soon or contact us.`
+        );
+      }
       if (action?.type === "sheet") {
         // fetch the model data sheet PDF from the Drive folder by name
         const files = await listFolderFiles();
@@ -580,17 +604,39 @@ app.post("/webhook", async (req, res) => {
 
     console.log(`📩 ${from}: "${text}"`);
 
-    // 1) Sheet keyword rules first (custom overrides / captions)
-    const rule = matchRule(text, rules);
-    if (rule) return await sendRule(from, rule);
-
-    // 1b) Product selection by tonnage (e.g. "package unit 20 tr t3").
-    //     Returns interactive buttons (T1/T3 choice, or model data sheets).
+    // 1) Product selection by tonnage or CFM (e.g. "package unit 20 tr t3",
+    //    "5000 cfm package unit"). This must run BEFORE generic sheet keyword
+    //    rules, otherwise a broad keyword like "packaged" would intercept it.
     const selection = buildSelectionInteractive(text);
     if (selection) {
       console.log(`📐 Selection request: "${text}"`);
       return await sendButtons(from, selection.text, selection.buttons);
     }
+
+    // 1b) Series request (no number): "APMR" -> ask Catalogue or IOM;
+    //     "APMR IOM" / "apmra catalogue" -> fetch directly from that folder.
+    const seriesReq = parseSeriesRequest(text);
+    if (seriesReq) {
+      if (seriesReq.mode === "menu") {
+        console.log(`📚 Series menu: ${seriesReq.series}`);
+        const menu = seriesMenu(seriesReq.series);
+        return await sendButtons(from, menu.text, menu.buttons);
+      }
+      // direct: user named both series and doc type
+      console.log(`📚 Series direct: ${seriesReq.series} ${seriesReq.docType}`);
+      const files = await listFolderFiles();
+      const wanted = `${seriesReq.series} ${seriesReq.docType}`;
+      const hits = findFilesInFolder(wanted, files, seriesReq.docType);
+      if (hits.length >= 1) return await sendDriveFile(from, hits[0]);
+      return await sendText(
+        from,
+        `The ${seriesReq.series} ${seriesReq.docType} isn't available yet. Please check back soon or contact us.`
+      );
+    }
+
+    // 2) Sheet keyword rules (custom overrides / captions)
+    const rule = matchRule(text, rules);
+    if (rule) return await sendRule(from, rule);
 
     const files = await listFolderFiles();
 

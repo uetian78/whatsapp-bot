@@ -525,7 +525,117 @@ function handleButtonTap(buttonId) {
     return { type: "sheet", fileName: fullModel };
   }
 
+  // Catalogue / IOM choice for a series: "doc|<series>|<docType>"
+  if (parts[0] === "doc") {
+    const series = parts[1];
+    const docType = parts[2]; // "Catalogue" or "IOM"
+    return {
+      type: "folderFile",
+      folder: docType,             // search ONLY this folder
+      fileName: `${series} ${docType}`, // e.g. "APMR Catalogue"
+      series,
+      docType,
+    };
+  }
+
   return null;
+}
+
+// ============================================================
+//  SERIES -> CATALOGUE / IOM  FLOW
+//  When a user types a product SERIES name (e.g. "APMR", "APCY-P"),
+//  the bot asks whether they want the Catalogue or the IOM, then
+//  fetches the PDF from the matching folder ONLY.
+//
+//  If the user already says the type too (e.g. "APMR IOM",
+//  "apmra catalogue"), we skip the menu and fetch directly.
+//
+//  Files are expected to be named, inside their folder, as:
+//     Catalogue folder:  "<SERIES> Catalogue.pdf"   e.g. "APMR Catalogue.pdf"
+//     IOM folder:        "<SERIES> IOM.pdf"          e.g. "APMR-A IOM.pdf"
+// ============================================================
+
+// Canonical series the bot knows about. `aliases` are everything a user
+// might type; `name` is the canonical label used to build the filename.
+// Order matters: longer / more specific names first so "apmr-a" is tested
+// before "apmr" and "apcy-p" before a hypothetical bare "apcy".
+const SERIES = [
+  { name: "APMR-A", aliases: ["apmr-a", "apmra", "apmr a"] },
+  { name: "APMR",   aliases: ["apmr"] },
+  { name: "AUMR-A", aliases: ["aumr-a", "aumra", "aumr a", "aumr"] },
+  { name: "PAC4A",  aliases: ["pac4a", "pac 4a", "pac-4a"] },
+  { name: "APCY-P", aliases: ["apcy-p", "apcyp", "apcy p"] },
+  { name: "APCY-H", aliases: ["apcy-h", "apcyh", "apcy h"] },
+  { name: "APCY-E", aliases: ["apcy-e", "apcye", "apcy e"] },
+  { name: "ACMR",   aliases: ["acmr"] },
+  { name: "CAH",    aliases: ["cah"] },
+  { name: "MAH",    aliases: ["mah"] },
+  { name: "SKM FCU", aliases: ["skm fcu", "fcu", "fan coil", "fan coil unit"] },
+];
+
+// Detect whether the text asks for a specific document type.
+// Returns "Catalogue", "IOM", or null.
+function detectDocType(text) {
+  const t = text.toLowerCase();
+  if (/\biom\b|installation|operation|maintenance|o&m|o & m|manual/.test(t)) return "IOM";
+  if (/\bcatalogue\b|\bcatalog\b|\bcatalouge\b|\bbrochure\b/.test(t)) return "Catalogue";
+  return null;
+}
+
+// Find which series (if any) the text names. Returns the canonical series
+// name (e.g. "APMR-A") or null. Matches whole-word aliases so "apmr" inside
+// "apmra" doesn't false-trigger (longer aliases are tested first).
+function detectSeries(text) {
+  const t = ` ${text.toLowerCase().trim()} `;
+  for (const s of SERIES) {
+    for (const a of s.aliases) {
+      // word-boundary-ish match: surrounded by start/space/punct
+      const re = new RegExp(`(^|[\\s,.])${a.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}([\\s,.]|$)`);
+      if (re.test(t)) return s.name;
+    }
+  }
+  return null;
+}
+
+// Main entry for the series flow. Given the user's raw text, decide:
+//   - { mode: "direct", series, docType }  -> fetch "<series> <docType>.pdf"
+//        (user typed both, e.g. "APMR IOM")
+//   - { mode: "menu", series }             -> ask Catalogue or IOM
+//        (user typed just the series, e.g. "APMR")
+//   - null                                 -> not a series request
+//
+// Guard: if the text also contains a capacity/CFM/model number, this is a
+// SELECTION request, not a plain catalogue/IOM request, so we return null and
+// let the selection logic handle it.
+function parseSeriesRequest(text) {
+  const t = text.toLowerCase();
+
+  // If there's a tonnage, CFM, or a 5-digit model code, it's a selection
+  // request (handled elsewhere), not a catalogue/IOM request.
+  if (/\d{3,6}\s*cfm\b/.test(t)) return null;
+  if (/\d+(?:\.\d+)?\s*(?:tr|ton|tons)\b/.test(t)) return null;
+  if (/\b\d{5}\b/.test(t)) return null;
+
+  const series = detectSeries(text);
+  if (!series) return null;
+
+  const docType = detectDocType(text);
+  if (docType) return { mode: "direct", series, docType };
+  return { mode: "menu", series };
+}
+
+// Build the interactive Catalogue / IOM button message for a series.
+function seriesMenu(series) {
+  return {
+    text:
+      `${series} — which document would you like?\n\n` +
+      `• Catalogue (technical data, model range)\n` +
+      `• IOM (installation, operation & maintenance)`,
+    buttons: [
+      { id: `doc|${series}|Catalogue`, title: "Catalogue" },
+      { id: `doc|${series}|IOM`, title: "IOM" },
+    ],
+  };
 }
 
 // Interpret a bare numeric code (e.g. "52015") and report everything it
@@ -579,4 +689,8 @@ module.exports = {
   buildSelectionInteractive,
   handleButtonTap,
   interpretCode,
+  parseSeriesRequest,
+  seriesMenu,
+  detectSeries,
+  detectDocType,
 };
