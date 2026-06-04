@@ -129,11 +129,45 @@ async function listFolderFiles() {
 
 // Find files by name, but only within a specific folder (case-insensitive
 // folder-name match). Used for the Catalogue-only / IOM-only fetches.
+//
+// Matching is tolerant: a file matches when its normalized name CONTAINS
+// both the series token and the doc-type token, in order. This way real
+// filenames like "APMRA 2025 IOM.pdf", "APMR-A IOM.pdf", "APMR_A_IOM_v2.pdf"
+// all match the request for series "APMR-A" + docType "IOM", even with a
+// year or version sitting in the middle.
 function findFilesInFolder(text, files, folderName) {
   const inFolder = files.filter(
     (f) => (f.folder || "").toLowerCase() === folderName.toLowerCase()
   );
-  return findFilesByName(text, inFolder);
+
+  const norm = (s) => s.toLowerCase().replace(/[\s\-_.]/g, "");
+
+  // text comes in as "<SERIES> <DocType>", e.g. "APMR-A IOM".
+  const parts = text.trim().split(/\s+/);
+  const docToken = norm(parts[parts.length - 1]);        // last word = doc type
+  const seriesToken = norm(parts.slice(0, -1).join(""));  // everything before
+
+  const scored = [];
+  for (const f of inFolder) {
+    const base = norm(f.name.replace(/\.[^.]+$/, ""));
+    if (!base.startsWith(seriesToken)) continue; // series must be at the front
+    if (!base.includes(docToken)) continue;      // doc type must appear
+
+    // Prevent a shorter series from matching a longer one (APMR vs APMR-A):
+    // the char immediately after the series prefix must NOT be a letter,
+    // UNLESS those following letters are the doc token itself.
+    const after = base.slice(seriesToken.length); // e.g. "2025iom", "iom", "a2025iom"
+    const startsWithDoc = after.startsWith(docToken);
+    const startsWithNonLetter = !/^[a-z]/.test(after);
+    if (!startsWithDoc && !startsWithNonLetter) continue; // e.g. "a2025iom" -> reject for APMR
+
+    const rank = base === seriesToken + docToken ? 0 : 1;
+    scored.push({ f, rank });
+  }
+
+  if (!scored.length) return [];
+  const best = Math.min(...scored.map((s) => s.rank));
+  return scored.filter((s) => s.rank === best).map((s) => s.f);
 }
 
 // Find files whose name matches the user's text.
