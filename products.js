@@ -578,7 +578,7 @@ const SERIES = [
   { name: "CRAC",   aliases: ["crac"] },
   { name: "CAH",    aliases: ["cah"] },
   { name: "MAH",    aliases: ["mah"] },
-  { name: "SKM FCU", aliases: ["skm fcu", "fcu", "fan coil", "fan coil unit"] },
+  { name: "FCU",    aliases: ["skm fcu", "skmfcu", "fcu", "fan coil", "fan coil unit"] },
 ];
 
 // Detect whether the text asks for a specific document type.
