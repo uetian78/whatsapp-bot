@@ -22,6 +22,7 @@ const {
   ANTHROPIC_API_KEY,
   GOOGLE_SHEET_ID,
   GOOGLE_SERVICE_ACCOUNT_JSON, // full service-account JSON as one env var
+  DRIVE_FOLDER_ID,             // parent folder the bot searches (recursively)
   PORT = 3000,
 } = process.env;
 
@@ -68,6 +69,72 @@ function driveFileId(link) {
   if (!link) return null;
   const m = link.match(/\/d\/([a-zA-Z0-9_-]+)/) || link.match(/[?&]id=([a-zA-Z0-9_-]+)/);
   return m ? m[1] : null;
+}
+
+// ---- Recursive listing of all PDFs under the parent folder (cached) ----
+// Lets the bot find files by name without any sheet entry. Drop a PDF in the
+// folder (or any subfolder) and it becomes requestable automatically.
+let fileIndex = { files: [], ts: 0 };
+const FILE_CACHE_MS = 2 * 60 * 1000; // refresh at most every 2 minutes
+
+async function listFolderFiles() {
+  if (!DRIVE_FOLDER_ID) return [];
+  if (Date.now() - fileIndex.ts < FILE_CACHE_MS && fileIndex.files.length) {
+    return fileIndex.files;
+  }
+
+  const drive = await getDrive();
+  const collected = [];
+  const toVisit = [DRIVE_FOLDER_ID];
+
+  while (toVisit.length) {
+    const folderId = toVisit.shift();
+    let pageToken;
+    do {
+      const res = await drive.files.list({
+        q: `'${folderId}' in parents and trashed = false`,
+        fields: "nextPageToken, files(id, name, mimeType)",
+        pageSize: 100,
+        pageToken,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      });
+      for (const f of res.data.files || []) {
+        if (f.mimeType === "application/vnd.google-apps.folder") {
+          toVisit.push(f.id); // recurse into subfolders
+        } else if (f.mimeType === "application/pdf" || /\.(pdf|png|jpe?g)$/i.test(f.name)) {
+          collected.push({ id: f.id, name: f.name });
+        }
+      }
+      pageToken = res.data.nextPageToken;
+    } while (pageToken);
+  }
+
+  fileIndex = { files: collected, ts: Date.now() };
+  console.log(`🗂️  Indexed ${collected.length} files from Drive folder`);
+  return collected;
+}
+
+// Find files whose name matches the user's text.
+// Normalizes by removing spaces/dashes so "52015", "PAC4A 52015", "pac4a52015" all match.
+// Prefers exact base-name matches over partial ones.
+function findFilesByName(text, files) {
+  const norm = (s) => s.toLowerCase().replace(/[\s\-_.]/g, "");
+  const q = norm(text.trim());
+  if (!q) return [];
+
+  const scored = [];
+  for (const f of files) {
+    const base = norm(f.name.replace(/\.[^.]+$/, ""));
+    if (base === q) scored.push({ f, rank: 0 });          // exact
+    else if (base.includes(q)) scored.push({ f, rank: 1 }); // query inside name
+    else if (q.includes(base)) scored.push({ f, rank: 2 }); // name inside query
+  }
+  if (!scored.length) return [];
+
+  // If any exact matches exist, return only those.
+  const best = Math.min(...scored.map((s) => s.rank));
+  return scored.filter((s) => s.rank === best).map((s) => s.f);
 }
 
 // Simple cache so we don't hit the Sheet on every single message
@@ -267,48 +334,44 @@ function mimeFromName(name) {
   return EXT_MIME[ext] || "application/octet-stream";
 }
 
-// Download a file. For Google Drive links, download via the Drive API using
-// the service account (reliable, no virus-scan page, any size). For other
-// links (e.g. GitHub raw), download directly over HTTP.
-async function downloadDriveFile(fileLink) {
-  const fileId = driveFileId(fileLink);
+// Download a file. Accepts either {link} or {fileId}. For Drive, downloads
+// via the Drive API using the service account (reliable, no virus-scan page).
+async function downloadBytes({ link, fileId }) {
+  const id = fileId || (link ? driveFileId(link) : null);
 
-  if (fileId && fileLink.includes("drive")) {
+  if (id) {
     const drive = await getDrive();
     const res = await drive.files.get(
-      { fileId, alt: "media", supportsAllDrives: true },
+      { fileId: id, alt: "media", supportsAllDrives: true },
       { responseType: "arraybuffer" }
     );
     return Buffer.from(res.data);
   }
 
   // Non-Drive link: direct HTTP download.
-  const r = await axios.get(fileLink, { responseType: "arraybuffer", maxRedirects: 5 });
+  const r = await axios.get(link, { responseType: "arraybuffer", maxRedirects: 5 });
   return Buffer.from(r.data);
 }
 
-async function uploadMedia(fileLink, filename) {
-  // 1) download the real file bytes (handles Drive's virus-scan page)
-  const buffer = await downloadDriveFile(fileLink);
+async function uploadMedia({ link, fileId, filename }) {
+  const buffer = await downloadBytes({ link, fileId });
   const mime = mimeFromName(filename);
 
-  // 2) sanity check: a real PDF starts with "%PDF". If we still got HTML, bail.
+  // sanity check: a real PDF starts with "%PDF"
   if (mime === "application/pdf") {
     const sig = buffer.slice(0, 5).toString("utf8");
     if (!sig.startsWith("%PDF")) {
       throw new Error(
         `Downloaded file is not a valid PDF (got ${buffer.length} bytes starting "${sig}"). ` +
-        `The Drive link may not be public or is returning a warning page.`
+        `Check the bot's access to this file.`
       );
     }
   }
 
-  // 3) upload to WhatsApp media with the correct content-type
   const form = new FormData();
   form.append("messaging_product", "whatsapp");
   form.append("file", buffer, { filename, contentType: mime });
   form.append("type", mime);
-
 
   const up = await axios.post(MEDIA_URL, form, {
     headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, ...form.getHeaders() },
@@ -316,10 +379,33 @@ async function uploadMedia(fileLink, filename) {
   return up.data.id; // media ID
 }
 
+// Send a file found in the Drive folder, by its Drive ID.
+async function sendDriveFile(to, file) {
+  const isImage = /\.(png|jpe?g)$/i.test(file.name);
+  const niceName = file.name.replace(/\.[^.]+$/, "");
+  const caption = `Here is ${niceName} 📄`;
+  try {
+    const mediaId = await uploadMedia({ fileId: file.id, filename: file.name });
+    if (isImage) {
+      return send(to, {
+        messaging_product: "whatsapp", to, type: "image",
+        image: { id: mediaId, caption },
+      });
+    }
+    return send(to, {
+      messaging_product: "whatsapp", to, type: "document",
+      document: { id: mediaId, filename: file.name, caption },
+    });
+  } catch (err) {
+    console.error("❌ Drive file send error:", err.response?.data || err.message);
+    return sendText(to, `Sorry, I couldn't fetch ${niceName} right now. Please try again or contact us.`);
+  }
+}
+
 async function sendRule(to, rule) {
   if (rule.type === "document") {
     try {
-      const mediaId = await uploadMedia(rule.fileLink, rule.filename);
+      const mediaId = await uploadMedia({ link: rule.fileLink, filename: rule.filename });
       return send(to, {
         messaging_product: "whatsapp",
         to,
@@ -328,17 +414,15 @@ async function sendRule(to, rule) {
       });
     } catch (err) {
       console.error("❌ Document upload error:", err.response?.data || err.message);
-      // Don't fall back to the raw link — that re-sends Drive's warning page
-      // as a corrupted file. Tell the user instead.
       return sendText(
         to,
-        `Sorry, I couldn't fetch that file right now. Please make sure it's shared "Anyone with the link," or contact us directly.`
+        `Sorry, I couldn't fetch that file right now. Please contact us directly.`
       );
     }
   }
   if (rule.type === "image") {
     try {
-      const mediaId = await uploadMedia(rule.fileLink, rule.filename || "image.jpg");
+      const mediaId = await uploadMedia({ link: rule.fileLink, filename: rule.filename || "image.jpg" });
       return send(to, {
         messaging_product: "whatsapp",
         to,
@@ -347,12 +431,7 @@ async function sendRule(to, rule) {
       });
     } catch (err) {
       console.error("❌ Image upload error:", err.response?.data || err.message);
-      return send(to, {
-        messaging_product: "whatsapp",
-        to,
-        type: "image",
-        image: { link: rule.fileLink, caption: rule.caption },
-      });
+      return sendText(to, `Sorry, I couldn't fetch that image right now.`);
     }
   }
   return sendText(to, rule.caption);
@@ -401,31 +480,51 @@ app.post("/webhook", async (req, res) => {
 
     console.log(`📩 ${from}: "${text}"`);
 
-    // 1) Keyword rules first (free + instant)
+    // 1) Sheet keyword rules first (custom overrides / captions)
     const rule = matchRule(text, rules);
     if (rule) return await sendRule(from, rule);
 
-    // Decide: is this a QUESTION/sentence, or a short product-code attempt?
+    // Is this a question, or a short product-code/file request?
     const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
     const looksLikeQuestion =
       /[?]/.test(text) ||
       /\b(what|how|when|where|why|who|which|can|do|does|is|are|hours|open|deliver|price|cost|warranty|install|contact|help)\b/i.test(text) ||
       wordCount >= 4;
 
-    // 2) If it's a real question -> answer from the Knowledge tab via Claude Haiku
+    // 2) Folder search by filename (the zero-maintenance path).
+    //    Skip for obvious questions so "what do you do" doesn't match a file.
+    if (!looksLikeQuestion) {
+      const files = await listFolderFiles();
+      const hits = findFilesByName(text, files);
+
+      if (hits.length === 1) {
+        return await sendDriveFile(from, hits[0]);
+      }
+      if (hits.length > 1 && hits.length <= 8) {
+        const list = hits
+          .map((f) => `• ${f.name.replace(/\.[^.]+$/, "")}`)
+          .join("\n");
+        return await sendText(
+          from,
+          `I found a few matches — reply with the exact one:\n${list}`
+        );
+      }
+      // many hits: too broad, fall through to suggestion menu
+    }
+
+    // 3) Real question -> answer from the Knowledge tab via Claude Haiku
     if (looksLikeQuestion) {
       const aiReply = await askClaude(text, knowledge);
       if (aiReply) return await sendText(from, aiReply);
     }
 
-    // 3) Otherwise (short, code-like input) -> suggest the closest catalogue codes
+    // 4) Short code-like input with no file match -> suggest closest sheet codes
     const near = closestKeywords(text, rules);
     if (near.length) {
       return await sendText(from, suggestionMessage(text, rules));
     }
 
-    // 4) Last resort: if a question slipped through with no AI answer, try Claude;
-    //    else show the catalogue menu.
+    // 5) Last resort
     if (!looksLikeQuestion) {
       const aiReply = await askClaude(text, knowledge);
       if (aiReply) return await sendText(from, aiReply);
