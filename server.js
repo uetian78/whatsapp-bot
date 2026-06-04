@@ -307,6 +307,56 @@ ${knowledgeText}
   }
 }
 
+// Use Claude to match a user's request to the best file when filename search
+// misses (handles synonyms, e.g. "AHU" / "air handling unit" -> MAH.pdf).
+// Returns the matching file object, or null if none fits.
+async function aiMatchFile(text, files) {
+  if (!ANTHROPIC_API_KEY || !files.length) return null;
+
+  // Give Claude the list of filenames (without extension) to choose from.
+  const list = files.map((f, i) => `${i + 1}. ${f.name.replace(/\.[^.]+$/, "")}`).join("\n");
+
+  const system = `You match a customer's request to ONE product catalogue file from a list.
+These are SKM HVAC catalogues. Use your knowledge of HVAC abbreviations:
+- MAH = Modular Air Handling Unit (AHU)
+- CAH = Comfort Air Handling Unit (AHU)
+- FCU = Fan Coil Unit
+- APMR-A = Packaged Air Conditioner
+- AUMR-A = Air-Cooled Condensing Unit
+- APCY-P / APCY-H / APCY-E = Air-Cooled Screw Chillers
+- ACMR = Air-Cooled Scroll Chiller
+- PAC4A = 100% Fresh Air Packaged Unit (DOAS)
+- PAC4A 5xxxx = a specific PAC4A unit selection sheet
+
+Reply with ONLY the number of the single best matching file.
+If several are equally valid (e.g. user said "chiller" and there are several), reply with their numbers separated by commas.
+If nothing matches, reply with "0".
+No other text.
+
+FILES:
+${list}`;
+
+  try {
+    const msg = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 30,
+      system,
+      messages: [{ role: "user", content: text }],
+    });
+    const out = (msg.content?.[0]?.text || "").trim();
+    const nums = out.match(/\d+/g);
+    if (!nums) return null;
+    const picked = nums
+      .map((n) => parseInt(n, 10))
+      .filter((n) => n >= 1 && n <= files.length)
+      .map((n) => files[n - 1]);
+    return picked.length ? picked : null; // array of matches
+  } catch (err) {
+    console.error("AI match error:", err.message);
+    return null;
+  }
+}
+
 // ============================================================
 //  SENDING
 // ============================================================
@@ -490,52 +540,42 @@ app.post("/webhook", async (req, res) => {
     const rule = matchRule(text, rules);
     if (rule) return await sendRule(from, rule);
 
-    // Is this a question, or a short product-code/file request?
-    const wordCount = text.trim().split(/\s+/).filter(Boolean).length;
-    const looksLikeQuestion =
-      /[?]/.test(text) ||
-      /\b(what|how|when|where|why|who|which|can|do|does|is|are|hours|open|deliver|price|cost|warranty|install|contact|help)\b/i.test(text) ||
-      wordCount >= 4;
+    const files = await listFolderFiles();
 
-    // 2) Folder search by filename (the zero-maintenance path).
-    //    Skip for obvious questions so "what do you do" doesn't match a file.
-    if (!looksLikeQuestion) {
-      const files = await listFolderFiles();
-      const hits = findFilesByName(text, files);
-      console.log(`🔎 Folder search "${text}": ${hits.length} hit(s) of ${files.length} indexed`);
+    // 2) Exact filename search (fast, free) — works for codes & names.
+    const hits = findFilesByName(text, files);
+    console.log(`🔎 Folder search "${text}": ${hits.length} hit(s) of ${files.length} indexed`);
+    if (hits.length === 1) return await sendDriveFile(from, hits[0]);
+    if (hits.length > 1 && hits.length <= 8) {
+      const list = hits.map((f) => `• ${f.name.replace(/\.[^.]+$/, "")}`).join("\n");
+      return await sendText(from, `I found a few matches — reply with the exact one:\n${list}`);
+    }
 
-      if (hits.length === 1) {
-        return await sendDriveFile(from, hits[0]);
+    // Classify the message: is it asking for a PRODUCT, or a general QUESTION?
+    const isKnowledgeQuestion =
+      /\b(hours|open|close|deliver|delivery|price|cost|warranty|install|contact|email|phone|location|address|about|who are you|what do you)\b/i.test(text);
+
+    // 3) Product-ish request that filename search missed -> AI matches by meaning
+    //    (e.g. "AHU" / "air handling unit" / "do you have the fresh air unit").
+    if (!isKnowledgeQuestion) {
+      const aiHits = await aiMatchFile(text, files);
+      if (aiHits && aiHits.length === 1) {
+        console.log(`🤖 AI matched "${text}" -> ${aiHits[0].name}`);
+        return await sendDriveFile(from, aiHits[0]);
       }
-      if (hits.length > 1 && hits.length <= 8) {
-        const list = hits
-          .map((f) => `• ${f.name.replace(/\.[^.]+$/, "")}`)
-          .join("\n");
-        return await sendText(
-          from,
-          `I found a few matches — reply with the exact one:\n${list}`
-        );
+      if (aiHits && aiHits.length > 1 && aiHits.length <= 8) {
+        const list = aiHits.map((f) => `• ${f.name.replace(/\.[^.]+$/, "")}`).join("\n");
+        return await sendText(from, `Did you mean one of these? Reply with the exact one:\n${list}`);
       }
-      // many hits: too broad, fall through to suggestion menu
     }
 
-    // 3) Real question -> answer from the Knowledge tab via Claude Haiku
-    if (looksLikeQuestion) {
-      const aiReply = await askClaude(text, knowledge);
-      if (aiReply) return await sendText(from, aiReply);
+    // 4) General question -> answer from the Knowledge tab via Claude Haiku
+    const aiReply = await askClaude(text, knowledge);
+    if (aiReply && !/connect you with a team member/i.test(aiReply)) {
+      return await sendText(from, aiReply);
     }
 
-    // 4) Short code-like input with no file match -> suggest closest sheet codes
-    const near = closestKeywords(text, rules);
-    if (near.length) {
-      return await sendText(from, suggestionMessage(text, rules));
-    }
-
-    // 5) Last resort
-    if (!looksLikeQuestion) {
-      const aiReply = await askClaude(text, knowledge);
-      if (aiReply) return await sendText(from, aiReply);
-    }
+    // 5) Nothing matched -> suggestion menu
     await sendText(from, suggestionMessage(text, rules));
   } catch (err) {
     console.error("Handler error:", err.message);
