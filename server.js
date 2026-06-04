@@ -10,6 +10,7 @@ const axios = require("axios");
 const { google } = require("googleapis");
 const Anthropic = require("@anthropic-ai/sdk");
 const FormData = require("form-data");
+const { buildSelectionReply, interpretCode } = require("./products.js");
 require("dotenv").config();
 
 const app = express();
@@ -540,7 +541,60 @@ app.post("/webhook", async (req, res) => {
     const rule = matchRule(text, rules);
     if (rule) return await sendRule(from, rule);
 
+    // 1b) Product selection by tonnage (e.g. "package unit 20 tr t3").
+    //     Returns a model recommendation; user can then reply with the code
+    //     to get the data sheet (handled by the folder search below).
+    const selectionReply = buildSelectionReply(text);
+    if (selectionReply) {
+      console.log(`📐 Selection request: "${text}"`);
+      return await sendText(from, selectionReply);
+    }
+
     const files = await listFolderFiles();
+
+    // 1c) Bare product code (e.g. "52015"). A code can mean more than one thing
+    //     (a PAC4A fresh-air selection PDF, and/or an APMR-A packaged model).
+    //     If the user added context words, use them; otherwise disambiguate.
+    const codeInfo = interpretCode(text);
+    if (codeInfo) {
+      const t = text.toLowerCase();
+      const wantsFresh = /fresh air|doas|pac4a|outside air/.test(t);
+      const wantsPackaged = /packaged|package unit|apmr|standard/.test(t);
+
+      let chosen = null;
+      if (codeInfo.meanings.length === 1) {
+        chosen = codeInfo.meanings[0];
+      } else if (wantsFresh) {
+        chosen = codeInfo.meanings.find((m) => m.type === "pac4a_selection");
+      } else if (wantsPackaged) {
+        chosen = codeInfo.meanings.find((m) => m.type === "apmr_model");
+      }
+
+      if (chosen) {
+        if (chosen.type === "pac4a_selection") {
+          const hit = findFilesByName(chosen.fetch, files);
+          if (hit.length === 1) return await sendDriveFile(from, hit[0]);
+        } else if (chosen.type === "apmr_model") {
+          const hit = findFilesByName("apmr-a", files);
+          if (hit.length >= 1) return await sendDriveFile(from, hit[0]);
+        }
+      }
+
+      // Ambiguous: ask the user which one.
+      if (codeInfo.meanings.length > 1 && !chosen) {
+        const opts = codeInfo.meanings
+          .map((m) =>
+            m.type === "pac4a_selection"
+              ? `• Reply "${codeInfo.code} fresh air" — ${m.label}`
+              : `• Reply "${codeInfo.code} packaged" — ${m.label}`
+          )
+          .join("\n");
+        return await sendText(
+          from,
+          `"${codeInfo.code}" matches more than one product. Which do you want?\n${opts}`
+        );
+      }
+    }
 
     // 2) Exact filename search (fast, free) — works for codes & names.
     const hits = findFilesByName(text, files);
