@@ -127,41 +127,52 @@ async function listFolderFiles() {
   return collected;
 }
 
-// Find files by name, but only within a specific folder (case-insensitive
-// folder-name match). Used for the Catalogue-only / IOM-only fetches.
+// Find the right file for a series + doc type.
 //
-// Matching is tolerant: a file matches when its normalized name CONTAINS
-// both the series token and the doc-type token, in order. This way real
-// filenames like "APMRA 2025 IOM.pdf", "APMR-A IOM.pdf", "APMR_A_IOM_v2.pdf"
-// all match the request for series "APMR-A" + docType "IOM", even with a
-// year or version sitting in the middle.
-function findFilesInFolder(text, files, folderName) {
-  const inFolder = files.filter(
-    (f) => (f.folder || "").toLowerCase() === folderName.toLowerCase()
-  );
+// IMPORTANT design facts (from the real Drive layout):
+//   - The DOC TYPE is decided by the FOLDER, not the filename:
+//       * Catalogue files live in a folder named "Catalogue(s)" and are named
+//         just by series, e.g. "APMR-A.pdf", "APCY-H.pdf", "ACMR.pdf".
+//         (No word "Catalogue" in the filename.)
+//       * IOM files live in a folder named "IOM(s)" and DO carry "IOM" in the
+//         name, e.g. "ACMR IOM.pdf", "APMRA 2025 IOM.pdf".
+//   - So we match the FOLDER for the doc type, then match only the SERIES
+//     prefix within the filename. Any extra tokens (year, version, stray
+//     dots like "APMR-A. 2025.pdf") are ignored.
+//
+// docType is "Catalogue" or "IOM". We accept common folder-name variants.
+function folderMatchesDocType(folderName, docType) {
+  const f = (folderName || "").toLowerCase().trim();
+  if (docType === "Catalogue") return /^catalogues?$/.test(f) || /^catalog$/.test(f);
+  if (docType === "IOM") return /^ioms?$/.test(f);
+  return false;
+}
+
+function findFilesInFolder(seriesName, files, docType) {
+  const inFolder = files.filter((f) => folderMatchesDocType(f.folder, docType));
 
   const norm = (s) => s.toLowerCase().replace(/[\s\-_.]/g, "");
-
-  // text comes in as "<SERIES> <DocType>", e.g. "APMR-A IOM".
-  const parts = text.trim().split(/\s+/);
-  const docToken = norm(parts[parts.length - 1]);        // last word = doc type
-  const seriesToken = norm(parts.slice(0, -1).join(""));  // everything before
+  const seriesToken = norm(seriesName); // e.g. "apmra" for "APMR-A"
+  const docWord = docType.toLowerCase(); // "catalogue" or "iom"
 
   const scored = [];
   for (const f of inFolder) {
-    const base = norm(f.name.replace(/\.[^.]+$/, ""));
-    if (!base.startsWith(seriesToken)) continue; // series must be at the front
-    if (!base.includes(docToken)) continue;      // doc type must appear
+    const base = norm(f.name.replace(/\.[^.]+$/, "")); // e.g. "apmra2025", "acmriom"
+    if (!base.startsWith(seriesToken)) continue; // series must lead the name
 
-    // Prevent a shorter series from matching a longer one (APMR vs APMR-A):
-    // the char immediately after the series prefix must NOT be a letter,
-    // UNLESS those following letters are the doc token itself.
-    const after = base.slice(seriesToken.length); // e.g. "2025iom", "iom", "a2025iom"
-    const startsWithDoc = after.startsWith(docToken);
-    const startsWithNonLetter = !/^[a-z]/.test(after);
-    if (!startsWithDoc && !startsWithNonLetter) continue; // e.g. "a2025iom" -> reject for APMR
+    // Prevent a shorter series matching a longer one (APMR vs APMR-A).
+    // The char right after the series prefix must NOT be a letter — UNLESS
+    // those letters are the doc-type word itself (e.g. "acmr" + "iom" ->
+    // "acmriom" is valid; "apmr" + "a..." is NOT valid for series APMR).
+    const after = base.slice(seriesToken.length); // e.g. "2025", "iom", "a2025iom"
+    if (/^[a-z]/.test(after) && !after.startsWith(docWord)) continue;
 
-    const rank = base === seriesToken + docToken ? 0 : 1;
+    // Rank: exact series name first (e.g. "apmra"), then series + doc word
+    // (e.g. "acmriom"), then series + other extras (e.g. "apmra2025"). This
+    // makes "APMR-A.pdf" win over "APMR-A. 2025.pdf" when both exist.
+    let rank = 2;
+    if (base === seriesToken) rank = 0;
+    else if (after.startsWith(docWord)) rank = 1;
     scored.push({ f, rank });
   }
 
@@ -606,7 +617,7 @@ app.post("/webhook", async (req, res) => {
       // Catalogue / IOM choice -> fetch from that folder ONLY
       if (action?.type === "folderFile") {
         const files = await listFolderFiles();
-        const hits = findFilesInFolder(action.fileName, files, action.folder);
+        const hits = findFilesInFolder(action.series, files, action.docType);
         if (hits.length >= 1) return await sendDriveFile(from, hits[0]);
         return await sendText(
           from,
@@ -659,8 +670,7 @@ app.post("/webhook", async (req, res) => {
       // direct: user named both series and doc type
       console.log(`📚 Series direct: ${seriesReq.series} ${seriesReq.docType}`);
       const files = await listFolderFiles();
-      const wanted = `${seriesReq.series} ${seriesReq.docType}`;
-      const hits = findFilesInFolder(wanted, files, seriesReq.docType);
+      const hits = findFilesInFolder(seriesReq.series, files, seriesReq.docType);
       if (hits.length >= 1) return await sendDriveFile(from, hits[0]);
       return await sendText(
         from,
