@@ -99,33 +99,45 @@ function parseSelectionRequest(text) {
     /\bapmr\b|\bapmr-?a\b|packaged|package unit|package ac/.test(t);
   if (!isPackaged) return null;
 
+  // CFM: "5000 cfm", "5000cfm"
+  const cfmMatch = t.match(/(\d{3,6})\s*cfm\b/);
   // tonnage: "20 tr", "20 ton", "20 tons", "20tr"
   const trMatch = t.match(/(\d+(?:\.\d+)?)\s*(?:tr|ton|tons)\b/);
-  if (!trMatch) return null;
-  const tr = parseFloat(trMatch[1]);
 
   // condition: t1 or t3 (default null = unspecified)
   let condition = null;
   if (/\bt3\b|46\s*c|46°/.test(t)) condition = "t3";
   else if (/\bt1\b|35\s*c|35°/.test(t)) condition = "t1";
 
-  // Which packaged line?
-  //  - "apmr-a" / "apmra" -> APMR-A only
-  //  - "apmr" alone        -> APMR only
-  //  - just "package unit" -> APMR if within range, else APMR-A
-  let product;
-  if (/\bapmr-?a\b|\bapmra\b/.test(t)) {
-    product = "apmr-a";
-  } else if (/\bapmr\b/.test(t)) {
-    product = "apmr";
-  } else {
-    // plain packaged request: prefer APMR, fall back to APMR-A if out of range
+  // Determine which packaged line is named (if any)
+  let named = null;
+  if (/\bapmr-?a\b|\bapmra\b/.test(t)) named = "apmr-a";
+  else if (/\bapmr\b/.test(t)) named = "apmr";
+
+  // CFM request takes priority if present (airflow selection, no T1/T3 needed)
+  if (cfmMatch) {
+    const cfm = parseInt(cfmMatch[1], 10);
+    let product = named;
+    if (!product) {
+      // plain: prefer APMR if CFM within its range, else APMR-A
+      const apmrMaxCfm = Math.max(...PRODUCTS["apmr"].models.map((m) => m.cfm));
+      product = cfm <= apmrMaxCfm ? "apmr" : "apmr-a";
+    }
+    return { mode: "cfm", product, cfm };
+  }
+
+  // Otherwise tonnage request
+  if (!trMatch) return null;
+  const tr = parseFloat(trMatch[1]);
+
+  let product = named;
+  if (!product) {
     const condKey = condition === "t3" ? "t3_tr" : "t1_tr";
     const apmrMax = Math.max(...PRODUCTS["apmr"].models.map((m) => m[condKey]));
     product = tr <= apmrMax ? "apmr" : "apmr-a";
   }
 
-  return { product, tr, condition };
+  return { mode: "tr", product, tr, condition };
 }
 
 // Apply selection: size up to >= tr, but if the next size down is within 5%
@@ -149,10 +161,38 @@ function selectModel(product, tr, condition) {
   return { kind: "one", product: p, model: safe, condition };
 }
 
+// CFM selection: smallest CFM >= requested. If multiple models share that CFM,
+// return all of them. If the next CFM down is within 5%, include those too.
+function selectByCfm(product, cfm) {
+  const p = PRODUCTS[product];
+  if (!p) return null;
+  const cfms = [...new Set(p.models.map((m) => m.cfm))].sort((a, b) => a - b);
+
+  const safeCfm = cfms.find((c) => c >= cfm);
+  if (safeCfm === undefined) {
+    const maxCfm = cfms[cfms.length - 1];
+    const max = p.models.filter((m) => m.cfm === maxCfm);
+    return { kind: "toolarge", product: p, max };
+  }
+
+  // models at the chosen CFM
+  let chosen = p.models.filter((m) => m.cfm === safeCfm);
+
+  // include next CFM down if within 5%
+  const idx = cfms.indexOf(safeCfm);
+  if (idx > 0) {
+    const lowerCfm = cfms[idx - 1];
+    if (lowerCfm >= cfm * 0.95) {
+      chosen = chosen.concat(p.models.filter((m) => m.cfm === lowerCfm));
+    }
+  }
+  return { kind: "models", product: p, cfm, models: chosen };
+}
+
 // Build the WhatsApp reply text for a selection result.
 function buildSelectionReply(text) {
   const req = parseSelectionRequest(text);
-  if (!req) return null;
+  if (!req || req.mode !== "tr") return null;
 
   const { product, tr, condition } = req;
   const p = PRODUCTS[product];
@@ -222,7 +262,44 @@ function buildSelectionReply(text) {
 function buildSelectionInteractive(text) {
   const req = parseSelectionRequest(text);
   if (!req) return null;
+  if (req.mode === "cfm") return interactiveForCfm(req.product, req.cfm);
   return interactiveFor(req.product, req.tr, req.condition);
+}
+
+// CFM selection -> buttons (one per matching model, max 3).
+function interactiveForCfm(product, cfm) {
+  const p = PRODUCTS[product];
+  if (!p) return null;
+  const cat = product === "apmr-a" ? "APMR-A" : "APMR";
+
+  const res = selectByCfm(product, cfm);
+  if (!res) return null;
+
+  if (res.kind === "toolarge") {
+    const big = res.max[0];
+    return {
+      text:
+        `${cfm} CFM is above the largest ${cat} model (${big.cfm} CFM).\n` +
+        `For higher airflow, consider a larger unit or an AHU.`,
+      buttons: [{ id: `sheet|${big.fullModel}`, title: `${big.code} sheet` }],
+    };
+  }
+
+  const models = res.models;
+  const lines = models
+    .map((m) => `• ${m.fullModel} → ${m.cfm} CFM, ${m.t1_tr} TR (T1) / ${m.t3_tr} TR (T3)`)
+    .join("\n");
+  const header =
+    models.length === 1
+      ? `For ${cfm} CFM: ${models[0].fullModel}`
+      : `For ${cfm} CFM, ${models.length} options:`;
+  return {
+    text: `${header}\n${lines}\n\nTap a model for its data sheet:`,
+    buttons: models.slice(0, 3).map((m) => ({
+      id: `sheet|${m.fullModel}`,
+      title: `${m.code} (${m.cfm}cfm)`,
+    })),
+  };
 }
 
 // Core builder reused by both text requests and button taps.
