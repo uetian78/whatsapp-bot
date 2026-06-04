@@ -1,0 +1,17 @@
+{
+  "name": "whatsapp-ai-responder",
+  "version": "2.0.0",
+  "description": "WhatsApp auto-responder with keyword rules + Claude Haiku AI fallback, controlled by a Google Sheet",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.32.1",
+    "axios": "^1.7.2",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "googleapis": "^144.0.0"
+  }
+}
