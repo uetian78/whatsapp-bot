@@ -113,6 +113,69 @@ function matchRule(text, rules) {
   return null;
 }
 
+// Levenshtein distance between two strings (for fuzzy "did you mean")
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  const d = Array.from({ length: m + 1 }, (_, i) => [i, ...Array(n).fill(0)]);
+  for (let j = 0; j <= n; j++) d[0][j] = j;
+  for (let i = 1; i <= m; i++)
+    for (let j = 1; j <= n; j++)
+      d[i][j] = Math.min(
+        d[i - 1][j] + 1,
+        d[i][j - 1] + 1,
+        d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1)
+      );
+  return d[m][n];
+}
+
+// Find keywords closest to the user's text, to suggest when nothing matched.
+// Returns up to `limit` suggestion keywords (first keyword of each near rule).
+function closestKeywords(text, rules, limit = 5) {
+  const full = text.trim().toLowerCase();
+  const words = full.split(/\s+/).filter(Boolean);
+  const scored = [];
+  for (const rule of rules) {
+    if (rule.matchType === "exact") continue; // skip the greeting/menu rule
+    let best = Infinity;
+    for (const kw of rule.keywords) {
+      const kwWords = kw.split(/\s+/);
+      for (const w of words) {
+        // direct containment either way counts as very close
+        if (kw.includes(w) || w.includes(kw)) best = Math.min(best, 0.1);
+        if (kwWords.some((kwW) => kwW === w)) best = Math.min(best, 0.0);
+        const norm = levenshtein(w, kw) / Math.max(w.length, kw.length);
+        if (norm < best) best = norm;
+      }
+      const d2 = levenshtein(full, kw) / Math.max(full.length, kw.length);
+      if (d2 < best) best = d2;
+    }
+    if (best <= 0.5) scored.push({ kw: rule.keywords[0], score: best });
+  }
+  scored.sort((a, b) => a.score - b.score);
+  const seen = new Set();
+  const out = [];
+  for (const s of scored) {
+    if (!seen.has(s.kw)) { seen.add(s.kw); out.push(s.kw); }
+    if (out.length >= limit) break;
+  }
+  return out;
+}
+
+// Build a friendly "did you mean" message, or a full menu if nothing is close.
+function suggestionMessage(text, rules) {
+  const near = closestKeywords(text, rules);
+  if (near.length) {
+    const list = near.map((k) => `• ${k.toUpperCase()}`).join("\n");
+    return `I didn't find an exact match for "${text}". Did you mean one of these? Reply with the code:\n${list}`;
+  }
+  // nothing close: list all document keywords as a menu
+  const all = rules
+    .filter((r) => r.matchType !== "exact" && r.type === "document")
+    .map((r) => `• ${r.keywords[0].toUpperCase()}`)
+    .join("\n");
+  return `I couldn't match that. Here are the catalogues you can request — reply with a code:\n${all}`;
+}
+
 // ============================================================
 //  CLAUDE HAIKU FALLBACK
 //  Answers ONLY from the Knowledge tab. Refuses to invent.
@@ -291,12 +354,18 @@ app.post("/webhook", async (req, res) => {
     const rule = matchRule(text, rules);
     if (rule) return await sendRule(from, rule);
 
-    // 2) Claude Haiku fallback (answers from Knowledge tab)
+    // 2) Are there near-miss keywords? (likely a product-code typo) -> suggest them
+    const near = closestKeywords(text, rules);
+    if (near.length) {
+      return await sendText(from, suggestionMessage(text, rules));
+    }
+
+    // 3) Claude Haiku fallback for genuine questions (answers from Knowledge tab)
     const aiReply = await askClaude(text, knowledge);
     if (aiReply) return await sendText(from, aiReply);
 
-    // 3) Final fallback
-    await sendText(from, "Thanks for your message! A team member will reply shortly.");
+    // 4) Final fallback: show the catalogue menu
+    await sendText(from, suggestionMessage(text, rules));
   } catch (err) {
     console.error("Handler error:", err.message);
   }
