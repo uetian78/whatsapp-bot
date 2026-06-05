@@ -73,101 +73,101 @@ const CATALOGUE_MAP = [
   {
     name: "APMR-A",
     aliases: ["apmr-a", "apmra", "apmr a"],
-    catalogue: "APMR-A.pdf",          // NOTE: also "APMR-A. 2025.pdf" exists; we use the clean one
-    iom: "APMRA 2025 IOM.pdf",
+    catalogue: "APMR-A_catalogue.pdf",
+    iom: "APMRA 2025 IOM_IOM.pdf",
   },
   {
     name: "APMR-V",
     aliases: ["apmr-v", "apmrv", "apmr v"],
-    catalogue: "APMR-V.pdf",          // NOTE: "APMR-V KU.pdf" also exists; we use the plain one
-    iom: "APMR-V.pdf",
+    catalogue: "APMR-V_catalogue.pdf",
+    iom: "APMR-V_IOM.pdf",
   },
   {
     name: "APMR",
     aliases: ["apmr"],
-    catalogue: "APMR.pdf",
-    iom: "APMR I.O.M.pdf",            // dotted spelling in Drive
+    catalogue: "APMR_catalogue.pdf",
+    iom: "APMR I.O.M_IOM.pdf",
   },
   {
     name: "AUMR-A",
     aliases: ["aumr-a", "aumra", "aumr a", "aumr"],
-    catalogue: "AUMR-A 2025.pdf",
-    iom: "AUMR-A IOM 2025.pdf",
+    catalogue: "AUMR-A 2025_catalogue.pdf",
+    iom: "AUMR-A IOM 2025_IOM.pdf",
   },
 
   // ---- Fresh air / DOAS / specialty packaged ----
   {
     name: "PAC4A",
     aliases: ["pac4a", "pac 4a", "pac-4a"],
-    catalogue: "PAC4A.pdf",
-    iom: "PAC4A.pdf",
+    catalogue: "PAC4A_catalogue.pdf",
+    iom: "PAC4A_IOM.pdf",
   },
   {
     name: "PAC9A",
     aliases: ["pac9a", "pac 9a", "pac-9a"],
-    catalogue: "PAC9A.pdf",
+    catalogue: "PAC9A_catalogue.pdf",
     iom: null,
   },
   {
     name: "PACF",
     aliases: ["pacf"],
     catalogue: null,
-    iom: "PACF.pdf",
+    iom: "PACF_IOM.pdf",
   },
   {
     name: "PACS-CS",
     aliases: ["pacs-cs", "pacscs", "pacs cs"],
     catalogue: null,
-    iom: "PACS-CS.pdf",
+    iom: "PACS-CS_IOM.pdf",
   },
   {
     name: "PACS C",
     aliases: ["pacs c", "pacsc", "pacs c 60hz", "pacs"],
-    catalogue: "PACS C 60Hz.pdf",
+    catalogue: "PACS C 60Hz_catalogue.pdf",
     iom: null,
   },
   {
     name: "PACV-D",
     aliases: ["pacv-d", "pacvd", "pacv d"],
-    catalogue: "PACV DEXM.pdf",
-    iom: "PACV-D.pdf",
+    catalogue: "PACV DEXM_catalogue.pdf",
+    iom: "PACV-D_IOM.pdf",
   },
   {
     name: "PACV-S",
     aliases: ["pacv-s", "pacvs", "pacv s"],
     catalogue: null,
-    iom: "PACV-S.pdf",
+    iom: "PACV-S_IOM.pdf",
   },
 
   // ---- Chillers ----
   {
     name: "APCY-P",
     aliases: ["apcy-p", "apcyp", "apcy p"],
-    catalogue: "APCY-P.pdf",
-    iom: "APCY-P.pdf",
+    catalogue: "APCY-P_catalogue.pdf",
+    iom: "APCY-P_IOM.pdf",
   },
   {
     name: "APCY-H",
     aliases: ["apcy-h", "apcyh", "apcy h"],
-    catalogue: "APCY-H.pdf",
-    iom: "APCY-H IOM.pdf",
+    catalogue: "APCY-H_catalogue.pdf",
+    iom: "APCY-H IOM_IOM.pdf",
   },
   {
     name: "APCY-E",
     aliases: ["apcy-e", "apcye", "apcy e"],
-    catalogue: "APCY-E.pdf",
-    iom: "APCY-E.pdf",
+    catalogue: "APCY-E_catalogue.pdf",
+    iom: "APCY-E_IOM.pdf",
   },
   {
     name: "ACMR",
     aliases: ["acmr"],
-    catalogue: "ACMR.pdf",
-    iom: "ACMR IOM.pdf",
+    catalogue: "ACMR_catalogue.pdf",
+    iom: "ACMR IOM_IOM.pdf",
   },
   {
     name: "WPCY",
     aliases: ["wpcy"],
-    catalogue: "WPCY.pdf",
+    catalogue: "WPCY_catalogue.pdf",
     iom: null,
   },
 
@@ -175,19 +175,19 @@ const CATALOGUE_MAP = [
   {
     name: "APCN-S",
     aliases: ["apcn-s", "apcns", "apcn s"],
-    catalogue: "APCN-S.pdf",
-    iom: "APCN-S.pdf",
+    catalogue: "APCN-S_catalogue.pdf",
+    iom: "APCN-S_IOM.pdf",
   },
   {
     name: "APCN-VVH",
     aliases: ["apcn-vvh", "apcnvvh", "apcn vvh"],
-    catalogue: "APCN-VVH.pdf",
-    iom: "APCNVVH .pdf",             // trailing space in Drive filename
+    catalogue: "APCN-VVH_catalogue.pdf",
+    iom: "APCNVVH_IOM.pdf",
   },
   {
     name: "APCNVZ",
     aliases: ["apcnvz", "apcn-vz", "apcn vz"],
-    catalogue: "APCNVZ 2025.pdf",
+    catalogue: "APCNVZ 2025_catalogue.pdf",
     iom: null,
   },
 
@@ -196,66 +196,66 @@ const CATALOGUE_MAP = [
     name: "ACUV-D",
     aliases: ["acuv-d", "acuvd", "acuv d"],
     catalogue: null,
-    iom: "ACUV-D.pdf",
+    iom: "ACUV-D_IOM.pdf",
   },
   {
     name: "ACUV-S",
     aliases: ["acuv-s", "acuvs", "acuv s"],
     catalogue: null,
-    iom: "ACUV-S.pdf",
+    iom: "ACUV-S_IOM.pdf",
   },
   {
     name: "ACUS",
     aliases: ["acus"],
     catalogue: null,
-    iom: "ACUS.pdf",
+    iom: "ACUS_IOM.pdf",
   },
 
   // ---- Computer room / precision ----
   {
     name: "CRAC",
     aliases: ["crac"],
-    catalogue: "CRAC.pdf",
-    iom: "CRAC.pdf",
+    catalogue: "CRAC_catalogue.pdf",
+    iom: "CRAC_IOM.pdf",
   },
 
   // ---- Air handling units ----
   {
     name: "MAH",
     aliases: ["mah", "modular ahu"],
-    catalogue: "MAH.pdf",
-    iom: "MAH.pdf",
+    catalogue: "MAH_catalogue.pdf",
+    iom: "MAH_IOM.pdf",
   },
   {
     name: "HMAH",
     aliases: ["hmah"],
-    catalogue: "HMAH.pdf",
-    iom: "HMAH.pdf",
+    catalogue: "HMAH_catalogue.pdf",
+    iom: "HMAH_IOM.pdf",
   },
   {
     name: "CAH",
     aliases: ["cah", "comfort ahu"],
-    catalogue: "CAH.pdf",
-    iom: "CAH.pdf",
+    catalogue: "CAH_catalogue.pdf",
+    iom: "CAH_IOM.pdf",
   },
 
   // ---- Fan coil units ----
   {
     name: "FCU",
     aliases: ["fcu", "skm fcu", "skmfcu", "fan coil", "fan coil unit"],
-    catalogue: "FCU Catalogue.pdf",
-    iom: "FCU.pdf",
+    catalogue: "FCU Catalogue_catalogue.pdf",
+    iom: "FCU_IOM.pdf",
   },
   {
     name: "FCU Hi-Static",
     aliases: ["fcu hi-static", "fcu hi static", "hi-static fcu", "hi static fcu", "high static fcu"],
-    catalogue: "FCU_Hi-Static.pdf",
+    catalogue: "FCU_Hi-Static_catalogue.pdf",
     iom: null,
   },
   {
     name: "FCU Hi-Static EC",
     aliases: ["fcu hi-static ec", "fcu hi static ec", "hi-static ec", "ec fcu"],
-    catalogue: "FCU_Hi-Static EC.pdf",
+    catalogue: "FCU_Hi-Static EC_catalogue.pdf",
     iom: null,
   },
 
@@ -263,13 +263,13 @@ const CATALOGUE_MAP = [
   {
     name: "DFC Cassette",
     aliases: ["dfc cassette", "dfc chilled water cassette", "chilled water cassette", "cassette"],
-    catalogue: "DFC Chilled Water Cassette Type.pdf",
+    catalogue: "DFC Chilled Water Cassette Type_catalogue.pdf",
     iom: null,
   },
   {
     name: "DFC Ceiling-Floor",
     aliases: ["dfc ceiling", "dfc floor", "dfc ceiling-floor", "chilled water ceiling", "ceiling floor mounted"],
-    catalogue: "DFC Chilled Water Ceiling-Floor Mounted.pdf",
+    catalogue: "DFC Chilled Water Ceiling-Floor Mounted_catalogue.pdf",
     iom: null,
   },
 
@@ -277,13 +277,13 @@ const CATALOGUE_MAP = [
   {
     name: "Dehumidification Unit",
     aliases: ["dehumidification", "dehumidifier", "swimpool", "swimming pool", "pool unit"],
-    catalogue: "Dehumidification Unit-Swimpool.pdf",
+    catalogue: "Dehumidification Unit-Swimpool_catalogue.pdf",
     iom: null,
   },
   {
     name: "Ecology Unit",
     aliases: ["ecology unit", "ecology", "seu", "skm ecology"],
-    catalogue: "SKM Ecology Unit -SEU.pdf",
+    catalogue: "SKM Ecology Unit -SEU_catalogue.pdf",
     iom: null,
   },
 ];

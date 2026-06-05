@@ -141,7 +141,16 @@ async function listFolderFiles() {
 //     prefix within the filename. Any extra tokens (year, version, stray
 //     dots like "APMR-A. 2025.pdf") are ignored.
 //
-// docType is "Catalogue" or "IOM". We accept common folder-name variants.
+// Detect doc type from filename suffix — _IOM.pdf or _catalogue.pdf.
+// This is the primary signal now that all files are renamed consistently.
+function docTypeFromFilename(filename) {
+  const n = (filename || "").toLowerCase();
+  if (n.endsWith("_iom.pdf")) return "IOM";
+  if (n.endsWith("_catalogue.pdf")) return "Catalogue";
+  return null;
+}
+
+// docType is "Catalogue" or "IOM". Match by folder name OR filename suffix.
 function folderMatchesDocType(folderName, docType) {
   const f = (folderName || "").toLowerCase().trim();
   if (docType === "Catalogue") return /^catalogues?$/.test(f) || /^catalog$/.test(f);
@@ -149,8 +158,12 @@ function folderMatchesDocType(folderName, docType) {
   return false;
 }
 
+function fileMatchesDocType(file, docType) {
+  return folderMatchesDocType(file.folder, docType) || docTypeFromFilename(file.name) === docType;
+}
+
 function findFilesInFolder(seriesName, files, docType) {
-  const inFolder = files.filter((f) => folderMatchesDocType(f.folder, docType));
+  const inFolder = files.filter((f) => fileMatchesDocType(f, docType));
 
   const norm = (s) => s.toLowerCase().replace(/[\s\-_.]/g, "");
   const seriesToken = norm(seriesName); // e.g. "apmra" for "APMR-A"
@@ -470,8 +483,8 @@ function findExactFileInDoc(exactName, docType, files) {
   if (!exactName) return null;
   const want = exactName.trim().toLowerCase();
   for (const f of files) {
-    if (folderToDocType(f.folder) !== docType) continue;
-    if (f.name.trim().toLowerCase() === want) return f;
+    if (f.name.trim().toLowerCase() !== want) continue;
+    if (folderToDocType(f.folder) === docType || docTypeFromFilename(f.name) === docType) return f;
   }
   return null;
 }
