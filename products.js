@@ -72,6 +72,58 @@ const PRODUCTS = {
     ],
   },
 
+  // FCU DMP Standard chilled water fan coil units.
+  // Rated at: 76°F/63°F entering air, 45°F (7.2°C) EWT, 4-row coil, 50 Hz, high speed, 0.10 inwg ESP.
+  "fcu-dmp": {
+    label: "FCU DMP Standard Chilled Water Fan Coil",
+    namePrefix: "DMP-",
+    selectBy: "fcu",
+    models: [
+      { code: "02",  nomCfm: 200,  cfm: 286,  cap_kw: 2.38,  cap_tr: 0.68 },
+      { code: "03",  nomCfm: 300,  cfm: 304,  cap_kw: 2.63,  cap_tr: 0.75 },
+      { code: "04",  nomCfm: 400,  cfm: 422,  cap_kw: 3.08,  cap_tr: 0.88 },
+      { code: "04R", nomCfm: 400,  cfm: 442,  cap_kw: 3.18,  cap_tr: 0.90 },
+      { code: "04S", nomCfm: 400,  cfm: 471,  cap_kw: 3.34,  cap_tr: 0.95 },
+      { code: "05",  nomCfm: 500,  cfm: 615,  cap_kw: 4.51,  cap_tr: 1.28 },
+      { code: "05R", nomCfm: 500,  cfm: 659,  cap_kw: 4.71,  cap_tr: 1.34 },
+      { code: "06",  nomCfm: 600,  cfm: 705,  cap_kw: 5.46,  cap_tr: 1.55 },
+      { code: "07",  nomCfm: 700,  cfm: 785,  cap_kw: 6.19,  cap_tr: 1.76 },
+      { code: "08",  nomCfm: 800,  cfm: 877,  cap_kw: 6.64,  cap_tr: 1.89 },
+      { code: "10",  nomCfm: 1000, cfm: 1029, cap_kw: 7.97,  cap_tr: 2.27 },
+      { code: "12",  nomCfm: 1200, cfm: 1097, cap_kw: 8.30,  cap_tr: 2.36 },
+      { code: "14",  nomCfm: 1400, cfm: 1264, cap_kw: 8.80,  cap_tr: 2.50 },
+      { code: "16",  nomCfm: 1600, cfm: 1349, cap_kw: 9.97,  cap_tr: 2.83 },
+      { code: "18",  nomCfm: 1800, cfm: 1824, cap_kw: 13.30, cap_tr: 3.78 },
+      { code: "20",  nomCfm: 2000, cfm: 2035, cap_kw: 15.24, cap_tr: 4.33 },
+    ],
+  },
+
+  // FCU DCMP District Cooling chilled water fan coil units.
+  // Rated at: 76°F/63°F entering air, 42°F (5.55°C) EWT, 4-row coil, 50 Hz, high speed, 0.10 inwg ESP.
+  "fcu-dcmp": {
+    label: "FCU DCMP District Cooling Fan Coil",
+    namePrefix: "DCMP-",
+    selectBy: "fcu",
+    models: [
+      { code: "02",  nomCfm: 200,  cfm: 286,  cap_kw: 2.22,  cap_tr: 0.63 },
+      { code: "03",  nomCfm: 300,  cfm: 304,  cap_kw: 2.51,  cap_tr: 0.71 },
+      { code: "04",  nomCfm: 400,  cfm: 422,  cap_kw: 3.43,  cap_tr: 0.98 },
+      { code: "04R", nomCfm: 400,  cfm: 442,  cap_kw: 3.53,  cap_tr: 1.01 },
+      { code: "04S", nomCfm: 400,  cfm: 471,  cap_kw: 3.68,  cap_tr: 1.05 },
+      { code: "05",  nomCfm: 500,  cfm: 595,  cap_kw: 4.40,  cap_tr: 1.25 },
+      { code: "05R", nomCfm: 500,  cfm: 659,  cap_kw: 4.68,  cap_tr: 1.33 },
+      { code: "06",  nomCfm: 600,  cfm: 705,  cap_kw: 5.02,  cap_tr: 1.43 },
+      { code: "07",  nomCfm: 700,  cfm: 785,  cap_kw: 5.96,  cap_tr: 1.70 },
+      { code: "08",  nomCfm: 800,  cfm: 810,  cap_kw: 6.08,  cap_tr: 1.73 },
+      { code: "10",  nomCfm: 1000, cfm: 1029, cap_kw: 7.17,  cap_tr: 2.04 },
+      { code: "12",  nomCfm: 1200, cfm: 1097, cap_kw: 8.39,  cap_tr: 2.39 },
+      { code: "14",  nomCfm: 1400, cfm: 1222, cap_kw: 8.88,  cap_tr: 2.53 },
+      { code: "16",  nomCfm: 1600, cfm: 1349, cap_kw: 10.30, cap_tr: 2.93 },
+      { code: "18",  nomCfm: 1800, cfm: 1774, cap_kw: 13.78, cap_tr: 3.92 },
+      { code: "20",  nomCfm: 2000, cfm: 2064, cap_kw: 16.25, cap_tr: 4.62 },
+    ],
+  },
+
   // PAC4A 100% Fresh Air (DOAS) units (R-410A) — single condition (46.1C).
   // capacity = "Actual Capacity" at 46.1C entering/ambient. No T1/T3 split.
   "pac4a": {
@@ -130,6 +182,17 @@ function parseSelectionRequest(text) {
     if (cfmMatch) return { mode: "fresh-cfm", product: "pac4a", cfm: parseInt(cfmMatch[1], 10) };
     if (trMatch) return { mode: "fresh-tr", product: "pac4a", tr: parseFloat(trMatch[1]) };
     return null; // fresh air mentioned but no number -> let folder/AI handle
+  }
+
+  // FCU / fan coil requests -> DMP or DCMP selection.
+  const isFcu = /\bfcu\b|\bfan coil\b|\bfan-coil\b|\bdmp\b|\bdcmp\b/.test(t);
+  if (isFcu) {
+    const wantsDcmp = /\bdcmp\b|\bdistrict cooling\b|\bdc series\b/.test(t);
+    const wantsDmp  = /\bdmp\b/.test(t) && !wantsDcmp;
+    const fcuProduct = wantsDcmp ? "fcu-dcmp" : wantsDmp ? "fcu-dmp" : null; // null = show both
+    if (cfmMatch) return { mode: "fcu-cfm", product: fcuProduct, cfm: parseInt(cfmMatch[1], 10) };
+    if (trMatch)  return { mode: "fcu-tr",  product: fcuProduct, tr: parseFloat(trMatch[1]) };
+    return null; // fcu mentioned but no number -> let folder/AI handle
   }
 
   // must look like a packaged-unit request
@@ -329,6 +392,8 @@ function buildSelectionInteractive(text) {
   if (req.mode === "cfm") return interactiveForCfm(req.product, req.cfm);
   if (req.mode === "fresh-cfm") return interactiveForFreshCfm(req.cfm);
   if (req.mode === "fresh-tr") return interactiveForFreshTr(req.tr);
+  if (req.mode === "fcu-cfm") return interactiveForFcuCfm(req.product, req.cfm);
+  if (req.mode === "fcu-tr")  return interactiveForFcuTr(req.product, req.tr);
   return interactiveFor(req.product, req.tr, req.condition);
 }
 
@@ -395,6 +460,126 @@ function interactiveForFreshCfm(cfm) {
       id: `sheet|${m.fullModel}`,
       title: `${m.code} (${m.cfm}cfm)`,
     })),
+  };
+}
+
+// ---- FCU helpers ----
+
+// Select the smallest FCU model whose cap_tr >= requested TR. 5% show-both rule.
+function selectFcuByTr(product, tr) {
+  const p = PRODUCTS[product];
+  const ordered = [...p.models].sort((a, b) => a.cap_tr - b.cap_tr);
+  const safe = ordered.find((m) => m.cap_tr >= tr);
+  if (!safe) return { kind: "toolarge", product: p, max: ordered[ordered.length - 1] };
+  const idx = ordered.indexOf(safe);
+  const lower = idx > 0 ? ordered[idx - 1] : null;
+  if (lower && lower.cap_tr >= tr * 0.95) return { kind: "both", product: p, lower, upper: safe };
+  return { kind: "one", product: p, model: safe };
+}
+
+// Select FCU models by nominal CFM. Returns all variants at the matching nomCfm.
+function selectFcuByCfm(product, cfm) {
+  const p = PRODUCTS[product];
+  const nomCfms = [...new Set(p.models.map((m) => m.nomCfm))].sort((a, b) => a - b);
+  const safeCfm = nomCfms.find((c) => c >= cfm);
+  if (safeCfm === undefined) {
+    const maxCfm = nomCfms[nomCfms.length - 1];
+    return { kind: "toolarge", product: p, max: p.models.filter((m) => m.nomCfm === maxCfm) };
+  }
+  let chosen = p.models.filter((m) => m.nomCfm === safeCfm);
+  const idx = nomCfms.indexOf(safeCfm);
+  if (idx > 0 && nomCfms[idx - 1] >= cfm * 0.95) {
+    chosen = chosen.concat(p.models.filter((m) => m.nomCfm === nomCfms[idx - 1]));
+  }
+  return { kind: "models", product: p, cfm, models: chosen };
+}
+
+// FCU selection by TR. If product=null show DMP vs DCMP comparison.
+function interactiveForFcuTr(product, tr) {
+  // If no specific type given, show both DMP and DCMP recommendations side by side.
+  if (!product) {
+    const dmp  = selectFcuByTr("fcu-dmp",  tr);
+    const dcmp = selectFcuByTr("fcu-dcmp", tr);
+    const dmpModel  = dmp.kind === "toolarge"  ? dmp.max  : dmp.kind === "both"  ? dmp.upper  : dmp.model;
+    const dcmpModel = dcmp.kind === "toolarge" ? dcmp.max : dcmp.kind === "both" ? dcmp.upper : dcmp.model;
+    return {
+      text:
+        `Fan Coil for ${tr} TR:\n\n` +
+        `• Standard (DMP): ${dmpModel.fullModel} — ${dmpModel.cap_tr} TR (${dmpModel.cap_kw} kW), ${dmpModel.nomCfm} CFM nom.\n` +
+        `  Rated at 45°F (7.2°C) EWT\n\n` +
+        `• District Cooling (DCMP): ${dcmpModel.fullModel} — ${dcmpModel.cap_tr} TR (${dcmpModel.cap_kw} kW), ${dcmpModel.nomCfm} CFM nom.\n` +
+        `  Rated at 42°F (5.55°C) EWT\n\n` +
+        `Tap to get the FCU catalogue:`,
+      buttons: [
+        { id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" },
+      ],
+    };
+  }
+
+  const res = selectFcuByTr(product, tr);
+  const p = res.product;
+  const label = product === "fcu-dcmp" ? "DCMP (District Cooling)" : "DMP (Standard)";
+  const ewt   = product === "fcu-dcmp" ? "42°F (5.55°C)" : "45°F (7.2°C)";
+
+  if (res.kind === "toolarge") {
+    const m = res.max;
+    return {
+      text:
+        `${tr} TR exceeds the largest ${label} model.\n` +
+        `Biggest: ${m.fullModel} → ${m.cap_tr} TR (${m.cap_kw} kW), ${m.nomCfm} CFM nom.`,
+      buttons: [{ id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" }],
+    };
+  }
+
+  if (res.kind === "both") {
+    const lo = res.lower, hi = res.upper;
+    const loShort = Math.round((1 - lo.cap_tr / tr) * 1000) / 10;
+    return {
+      text:
+        `For ${tr} TR — ${label} (EWT ${ewt}), two close options:\n\n` +
+        `• ${lo.fullModel} → ${lo.cap_tr} TR (${lo.cap_kw} kW), ${lo.nomCfm} CFM — ${loShort}% under\n` +
+        `• ${hi.fullModel} → ${hi.cap_tr} TR (${hi.cap_kw} kW), ${hi.nomCfm} CFM — meets ${tr} TR\n\n` +
+        `Tap for the catalogue:`,
+      buttons: [{ id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" }],
+    };
+  }
+
+  const m = res.model;
+  return {
+    text:
+      `For ${tr} TR — ${label} (EWT ${ewt}):\n\n` +
+      `✅ ${m.fullModel}\n` +
+      `• Capacity: ${m.cap_tr} TR (${m.cap_kw} kW)\n` +
+      `• Nominal airflow: ${m.nomCfm} CFM  |  Actual @ high: ${m.cfm} CFM`,
+    buttons: [{ id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" }],
+  };
+}
+
+// FCU selection by CFM. If product=null show both DMP and DCMP at that size.
+function interactiveForFcuCfm(product, cfm) {
+  const products = product ? [product] : ["fcu-dmp", "fcu-dcmp"];
+  const lines = [];
+  let firstModel = null;
+
+  for (const pk of products) {
+    const res = selectFcuByCfm(pk, cfm);
+    const label = pk === "fcu-dcmp" ? "DCMP (District Cooling)" : "DMP (Standard)";
+    const ewt   = pk === "fcu-dcmp" ? "42°F EWT" : "45°F EWT";
+    if (res.kind === "toolarge") {
+      const big = res.max[0];
+      lines.push(`• ${label}: largest is ${big.fullModel} (${big.nomCfm} CFM nom.)`);
+      if (!firstModel) firstModel = big;
+    } else {
+      for (const m of res.models) {
+        lines.push(`• ${label} — ${m.fullModel}: ${m.nomCfm} CFM nom. | ${m.cap_tr} TR (${m.cap_kw} kW) @ ${ewt}`);
+        if (!firstModel) firstModel = m;
+      }
+    }
+  }
+
+  return {
+    text: `Fan Coil for ${cfm} CFM:\n\n${lines.join("\n")}\n\nTap for the full catalogue:`,
+    buttons: [{ id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" }],
   };
 }
 
