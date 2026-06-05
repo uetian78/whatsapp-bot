@@ -11,6 +11,7 @@ const { google } = require("googleapis");
 const Anthropic = require("@anthropic-ai/sdk");
 const FormData = require("form-data");
 const { buildSelectionReply, buildSelectionInteractive, handleButtonTap, interpretCode, parseSeriesRequest, seriesMenu } = require("./products.js");
+const { detectSeriesEntry, filenameFor, folderToDocType } = require("./catalogue-map.js");
 require("dotenv").config();
 
 const app = express();
@@ -461,18 +462,53 @@ ${list}`;
   }
 }
 
-// Resolve a series + docType to a file: try the fast deterministic matcher
-// first, then fall back to AI matching for inconsistently-named files.
-async function resolveSeriesFile(series, docType, files) {
-  // 1) deterministic prefix match (free, instant)
-  const hits = findFilesInFolder(series, files, docType);
+// Find an indexed file by its EXACT name within a given doc-type folder.
+// Folder is matched via the catalogue-map's folderToDocType (handles
+// "Catalogues"/"Catalogue" and "IOM"/"IOMs"). Filename match is exact, but
+// tolerant of a stray trailing space (Drive has "APCNVVH .pdf").
+function findExactFileInDoc(exactName, docType, files) {
+  if (!exactName) return null;
+  const want = exactName.trim().toLowerCase();
+  for (const f of files) {
+    if (folderToDocType(f.folder) !== docType) continue;
+    if (f.name.trim().toLowerCase() === want) return f;
+  }
+  return null;
+}
+
+// Resolve a series + docType to a file.
+//   1) DETERMINISTIC MAP (catalogue-map.js): exact filename lookup — instant,
+//      free, no guessing. This is the primary path now that we have the full
+//      Drive file list mapped.
+//   2) Old prefix matcher, then AI — only as a safety net for a series that
+//      isn't in the map yet, or a file that was renamed in Drive.
+async function resolveSeriesFile(seriesNameOrText, docType, files) {
+  // 1) Deterministic map by exact filename.
+  const entry = detectSeriesEntry(seriesNameOrText);
+  if (entry) {
+    const exact = filenameFor(entry, docType); // exact filename or null
+    if (exact) {
+      const hit = findExactFileInDoc(exact, docType, files);
+      if (hit) {
+        console.log(`📖 Map: ${entry.name} ${docType} -> ${hit.name}`);
+        return hit;
+      }
+      console.log(`⚠️  Map expected "${exact}" in ${docType} but it wasn't indexed (cache/rename?). Falling back.`);
+    } else {
+      // The map KNOWS this series has no file of this type. Be honest.
+      console.log(`ℹ️  ${entry.name} has no ${docType} on file.`);
+      return null;
+    }
+  }
+
+  // 2) Safety net: old prefix matcher, then AI (for unmapped series).
+  const hits = findFilesInFolder(seriesNameOrText, files, docType);
   if (hits.length >= 1) return hits[0];
 
-  // 2) AI fallback over just this folder's files
   const folderFiles = files.filter((f) => folderMatchesDocType(f.folder, docType));
   if (!folderFiles.length) return null;
-  const ai = await aiMatchSeriesFile(series, docType, folderFiles);
-  if (ai) console.log(`🤖 AI matched ${series} ${docType} -> ${ai.name}`);
+  const ai = await aiMatchSeriesFile(seriesNameOrText, docType, folderFiles);
+  if (ai) console.log(`🤖 AI matched ${seriesNameOrText} ${docType} -> ${ai.name}`);
   return ai;
 }
 
@@ -722,8 +758,23 @@ app.post("/webhook", async (req, res) => {
     const seriesReq = parseSeriesRequest(text);
     if (seriesReq) {
       if (seriesReq.mode === "menu") {
-        console.log(`📚 Series menu: ${seriesReq.series}`);
         const menu = seriesMenu(seriesReq.series);
+        // Only one document type exists -> send it directly, no extra tap.
+        if (menu.only) {
+          console.log(`📚 Series single-doc: ${menu.only.series} ${menu.only.docType}`);
+          const files = await listFolderFiles();
+          const file = await resolveSeriesFile(menu.only.series, menu.only.docType, files);
+          if (file) return await sendDriveFile(from, file);
+          return await sendText(
+            from,
+            `The ${menu.only.series} ${menu.only.docType} isn't available yet. Please check back soon or contact us.`
+          );
+        }
+        // No buttons (nothing on file) -> just send the text.
+        if (!menu.buttons || !menu.buttons.length) {
+          return await sendText(from, menu.text);
+        }
+        console.log(`📚 Series menu: ${seriesReq.series}`);
         return await sendButtons(from, menu.text, menu.buttons);
       }
       // direct: user named both series and doc type

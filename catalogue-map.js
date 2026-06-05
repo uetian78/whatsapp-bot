@@ -1,0 +1,297 @@
+// ============================================================
+//  DETERMINISTIC CATALOGUE / IOM MAP
+//  Exact filename lookup — no fuzzy matching, no AI.
+//
+//  Built from the real Drive layout:
+//     Catalogue/Catalogues/   -> product catalogues
+//     Catalogue/IOM/          -> installation/operation/maintenance manuals
+//
+//  Each entry maps a product SERIES to:
+//     name      : canonical label shown to the user / used on buttons
+//     aliases   : everything a user might type (lowercase, normalized-friendly)
+//     catalogue : EXACT filename in the Catalogues folder (or null if none)
+//     iom       : EXACT filename in the IOM folder (or null if none)
+//
+//  To add/fix a file: edit the exact filename string here. That's it.
+//  Filenames must match Drive EXACTLY (including spaces, dots, the .pdf ext).
+// ============================================================
+
+// Folder-name variants we accept for each document type (case-insensitive).
+const FOLDER_NAMES = {
+  Catalogue: ["catalogues", "catalogue", "catalog"],
+  IOM: ["iom", "ioms"],
+};
+
+// SERIES TABLE
+// Order matters for alias detection: longer / more specific series first
+// (so "apmr-a" is detected before "apmr", "apcy-p" before a bare "apcy", etc.).
+const CATALOGUE_MAP = [
+  // ---- Packaged units ----
+  {
+    name: "APMR-A",
+    aliases: ["apmr-a", "apmra", "apmr a"],
+    catalogue: "APMR-A.pdf",          // NOTE: also "APMR-A. 2025.pdf" exists; we use the clean one
+    iom: "APMRA 2025 IOM.pdf",
+  },
+  {
+    name: "APMR-V",
+    aliases: ["apmr-v", "apmrv", "apmr v"],
+    catalogue: "APMR-V.pdf",          // NOTE: "APMR-V KU.pdf" also exists; we use the plain one
+    iom: "APMR-V.pdf",
+  },
+  {
+    name: "APMR",
+    aliases: ["apmr"],
+    catalogue: "APMR.pdf",
+    iom: "APMR I.O.M.pdf",            // dotted spelling in Drive
+  },
+  {
+    name: "AUMR-A",
+    aliases: ["aumr-a", "aumra", "aumr a", "aumr"],
+    catalogue: "AUMR-A 2025.pdf",
+    iom: "AUMR-A IOM 2025.pdf",
+  },
+
+  // ---- Fresh air / DOAS / specialty packaged ----
+  {
+    name: "PAC4A",
+    aliases: ["pac4a", "pac 4a", "pac-4a"],
+    catalogue: "PAC4A.pdf",
+    iom: "PAC4A.pdf",
+  },
+  {
+    name: "PAC9A",
+    aliases: ["pac9a", "pac 9a", "pac-9a"],
+    catalogue: "PAC9A.pdf",
+    iom: null,
+  },
+  {
+    name: "PACF",
+    aliases: ["pacf"],
+    catalogue: null,
+    iom: "PACF.pdf",
+  },
+  {
+    name: "PACS-CS",
+    aliases: ["pacs-cs", "pacscs", "pacs cs"],
+    catalogue: null,
+    iom: "PACS-CS.pdf",
+  },
+  {
+    name: "PACS C",
+    aliases: ["pacs c", "pacsc", "pacs c 60hz", "pacs"],
+    catalogue: "PACS C 60Hz.pdf",
+    iom: null,
+  },
+  {
+    name: "PACV-D",
+    aliases: ["pacv-d", "pacvd", "pacv d"],
+    catalogue: "PACV DEXM.pdf",
+    iom: "PACV-D.pdf",
+  },
+  {
+    name: "PACV-S",
+    aliases: ["pacv-s", "pacvs", "pacv s"],
+    catalogue: null,
+    iom: "PACV-S.pdf",
+  },
+
+  // ---- Chillers ----
+  {
+    name: "APCY-P",
+    aliases: ["apcy-p", "apcyp", "apcy p"],
+    catalogue: "APCY-P.pdf",
+    iom: "APCY-P.pdf",
+  },
+  {
+    name: "APCY-H",
+    aliases: ["apcy-h", "apcyh", "apcy h"],
+    catalogue: "APCY-H.pdf",
+    iom: "APCY-H IOM.pdf",
+  },
+  {
+    name: "APCY-E",
+    aliases: ["apcy-e", "apcye", "apcy e"],
+    catalogue: "APCY-E.pdf",
+    iom: "APCY-E.pdf",
+  },
+  {
+    name: "ACMR",
+    aliases: ["acmr"],
+    catalogue: "ACMR.pdf",
+    iom: "ACMR IOM.pdf",
+  },
+  {
+    name: "WPCY",
+    aliases: ["wpcy"],
+    catalogue: "WPCY.pdf",
+    iom: null,
+  },
+
+  // ---- Condensing units ----
+  {
+    name: "APCN-S",
+    aliases: ["apcn-s", "apcns", "apcn s"],
+    catalogue: "APCN-S.pdf",
+    iom: "APCN-S.pdf",
+  },
+  {
+    name: "APCN-VVH",
+    aliases: ["apcn-vvh", "apcnvvh", "apcn vvh"],
+    catalogue: "APCN-VVH.pdf",
+    iom: "APCNVVH .pdf",             // trailing space in Drive filename
+  },
+  {
+    name: "APCNVZ",
+    aliases: ["apcnvz", "apcn-vz", "apcn vz"],
+    catalogue: "APCNVZ 2025.pdf",
+    iom: null,
+  },
+
+  // ---- Condensing / outdoor (ACUV / ACUS) ----
+  {
+    name: "ACUV-D",
+    aliases: ["acuv-d", "acuvd", "acuv d"],
+    catalogue: null,
+    iom: "ACUV-D.pdf",
+  },
+  {
+    name: "ACUV-S",
+    aliases: ["acuv-s", "acuvs", "acuv s"],
+    catalogue: null,
+    iom: "ACUV-S.pdf",
+  },
+  {
+    name: "ACUS",
+    aliases: ["acus"],
+    catalogue: null,
+    iom: "ACUS.pdf",
+  },
+
+  // ---- Computer room / precision ----
+  {
+    name: "CRAC",
+    aliases: ["crac"],
+    catalogue: "CRAC.pdf",
+    iom: "CRAC.pdf",
+  },
+
+  // ---- Air handling units ----
+  {
+    name: "MAH",
+    aliases: ["mah", "modular ahu"],
+    catalogue: "MAH.pdf",
+    iom: "MAH.pdf",
+  },
+  {
+    name: "HMAH",
+    aliases: ["hmah"],
+    catalogue: "HMAH.pdf",
+    iom: "HMAH.pdf",
+  },
+  {
+    name: "CAH",
+    aliases: ["cah", "comfort ahu"],
+    catalogue: "CAH.pdf",
+    iom: "CAH.pdf",
+  },
+
+  // ---- Fan coil units ----
+  {
+    name: "FCU",
+    aliases: ["fcu", "skm fcu", "skmfcu", "fan coil", "fan coil unit"],
+    catalogue: "FCU Catalogue.pdf",
+    iom: "FCU.pdf",
+  },
+  {
+    name: "FCU Hi-Static",
+    aliases: ["fcu hi-static", "fcu hi static", "hi-static fcu", "hi static fcu", "high static fcu"],
+    catalogue: "FCU_Hi-Static.pdf",
+    iom: null,
+  },
+  {
+    name: "FCU Hi-Static EC",
+    aliases: ["fcu hi-static ec", "fcu hi static ec", "hi-static ec", "ec fcu"],
+    catalogue: "FCU_Hi-Static EC.pdf",
+    iom: null,
+  },
+
+  // ---- Chilled water terminal units (DFC) ----
+  {
+    name: "DFC Cassette",
+    aliases: ["dfc cassette", "dfc chilled water cassette", "chilled water cassette", "cassette"],
+    catalogue: "DFC Chilled Water Cassette Type.pdf",
+    iom: null,
+  },
+  {
+    name: "DFC Ceiling-Floor",
+    aliases: ["dfc ceiling", "dfc floor", "dfc ceiling-floor", "chilled water ceiling", "ceiling floor mounted"],
+    catalogue: "DFC Chilled Water Ceiling-Floor Mounted.pdf",
+    iom: null,
+  },
+
+  // ---- Specialty ----
+  {
+    name: "Dehumidification Unit",
+    aliases: ["dehumidification", "dehumidifier", "swimpool", "swimming pool", "pool unit"],
+    catalogue: "Dehumidification Unit-Swimpool.pdf",
+    iom: null,
+  },
+  {
+    name: "Ecology Unit",
+    aliases: ["ecology unit", "ecology", "seu", "skm ecology"],
+    catalogue: "SKM Ecology Unit -SEU.pdf",
+    iom: null,
+  },
+];
+
+// ------- lookup helpers -------
+
+// Normalize for alias comparison: lowercase, collapse separators.
+function normLoose(s) {
+  return (s || "").toLowerCase().replace(/[\s\-_.]/g, "").trim();
+}
+
+// Detect which document type a folder name represents.
+// Returns "Catalogue", "IOM", or null.
+function folderToDocType(folderName) {
+  const f = (folderName || "").toLowerCase().trim();
+  if (FOLDER_NAMES.Catalogue.includes(f)) return "Catalogue";
+  if (FOLDER_NAMES.IOM.includes(f)) return "IOM";
+  return null;
+}
+
+// Detect the series a user's text refers to. Returns the series ENTRY
+// (object) or null. Longer aliases are tested first because the table is
+// ordered specific -> general, and we also sort matches by alias length.
+function detectSeriesEntry(text) {
+  const t = ` ${(text || "").toLowerCase().trim()} `;
+  let best = null;
+  let bestLen = 0;
+  for (const entry of CATALOGUE_MAP) {
+    for (const a of entry.aliases) {
+      const safe = a.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+      const re = new RegExp(`(^|[\\s,.])${safe}([\\s,.]|$)`);
+      if (re.test(t) && a.length > bestLen) {
+        best = entry;
+        bestLen = a.length;
+      }
+    }
+  }
+  return best;
+}
+
+// Given a series entry + docType, return the EXACT filename (or null).
+function filenameFor(entry, docType) {
+  if (!entry) return null;
+  return docType === "IOM" ? entry.iom : entry.catalogue;
+}
+
+module.exports = {
+  CATALOGUE_MAP,
+  FOLDER_NAMES,
+  normLoose,
+  folderToDocType,
+  detectSeriesEntry,
+  filenameFor,
+};

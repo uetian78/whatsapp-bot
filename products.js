@@ -555,31 +555,11 @@ function handleButtonTap(buttonId) {
 //     IOM folder:        "<SERIES> IOM.pdf"          e.g. "APMR-A IOM.pdf"
 // ============================================================
 
-// Canonical series the bot knows about. `aliases` are everything a user
-// might type; `name` is the canonical label used to build the filename.
-// Order matters: longer / more specific names first so "apmr-a" is tested
-// before "apmr" and "apcy-p" before a hypothetical bare "apcy".
-const SERIES = [
-  { name: "APMR-A", aliases: ["apmr-a", "apmra", "apmr a"] },
-  { name: "APMR-V", aliases: ["apmr-v", "apmrv", "apmr v"] },
-  { name: "APMR",   aliases: ["apmr"] },
-  { name: "AUMR-A", aliases: ["aumr-a", "aumra", "aumr a", "aumr"] },
-  { name: "PAC4A",  aliases: ["pac4a", "pac 4a", "pac-4a"] },
-  { name: "APCY-P", aliases: ["apcy-p", "apcyp", "apcy p"] },
-  { name: "APCY-H", aliases: ["apcy-h", "apcyh", "apcy h"] },
-  { name: "APCY-E", aliases: ["apcy-e", "apcye", "apcy e"] },
-  { name: "APCN-S", aliases: ["apcn-s", "apcns", "apcn s"] },
-  { name: "APCN-VVH", aliases: ["apcn-vvh", "apcnvvh", "apcn vvh"] },
-  { name: "APCNVZ", aliases: ["apcnvz", "apcn-vz", "apcn vz"] },
-  { name: "ACMR",   aliases: ["acmr"] },
-  { name: "ACUV-D", aliases: ["acuv-d", "acuvd", "acuv d"] },
-  { name: "ACUV-S", aliases: ["acuv-s", "acuvs", "acuv s"] },
-  { name: "ACUS",   aliases: ["acus"] },
-  { name: "CRAC",   aliases: ["crac"] },
-  { name: "CAH",    aliases: ["cah"] },
-  { name: "MAH",    aliases: ["mah"] },
-  { name: "FCU",    aliases: ["skm fcu", "skmfcu", "fcu", "fan coil", "fan coil unit"] },
-];
+// Canonical series the bot knows about. This now comes from the
+// deterministic CATALOGUE_MAP (catalogue-map.js) so there is ONE source of
+// truth for series names + aliases. The map also holds the exact filenames.
+const { CATALOGUE_MAP, detectSeriesEntry } = require("./catalogue-map.js");
+const SERIES = CATALOGUE_MAP.map((e) => ({ name: e.name, aliases: e.aliases }));
 
 // Detect whether the text asks for a specific document type.
 // Returns "Catalogue", "IOM", or null.
@@ -591,18 +571,11 @@ function detectDocType(text) {
 }
 
 // Find which series (if any) the text names. Returns the canonical series
-// name (e.g. "APMR-A") or null. Matches whole-word aliases so "apmr" inside
-// "apmra" doesn't false-trigger (longer aliases are tested first).
+// name (e.g. "APMR-A") or null. Delegates to the map's detector, which picks
+// the LONGEST matching alias so "apmr-a" wins over "apmr".
 function detectSeries(text) {
-  const t = ` ${text.toLowerCase().trim()} `;
-  for (const s of SERIES) {
-    for (const a of s.aliases) {
-      // word-boundary-ish match: surrounded by start/space/punct
-      const re = new RegExp(`(^|[\\s,.])${a.replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&")}([\\s,.]|$)`);
-      if (re.test(t)) return s.name;
-    }
-  }
-  return null;
+  const e = detectSeriesEntry(text);
+  return e ? e.name : null;
 }
 
 // Main entry for the series flow. Given the user's raw text, decide:
@@ -633,7 +606,28 @@ function parseSeriesRequest(text) {
 }
 
 // Build the interactive Catalogue / IOM button message for a series.
+// Only offers buttons for documents that ACTUALLY exist (per the map), so a
+// series with only an IOM won't show a dead "Catalogue" button. If only one
+// document exists, returns { only: { series, docType } } so the caller can
+// send it straight away without an extra tap.
 function seriesMenu(series) {
+  const entry = detectSeriesEntry(series);
+  const hasCat = !!(entry && entry.catalogue);
+  const hasIom = !!(entry && entry.iom);
+
+  // Only one document type available -> tell caller to send it directly.
+  if (hasCat && !hasIom) return { only: { series, docType: "Catalogue" } };
+  if (hasIom && !hasCat) return { only: { series, docType: "IOM" } };
+
+  // Neither (shouldn't normally happen, but be safe).
+  if (!hasCat && !hasIom) {
+    return {
+      text: `Sorry, no Catalogue or IOM is on file for ${series} yet. Please contact us.`,
+      buttons: [],
+    };
+  }
+
+  // Both available -> show the choice.
   return {
     text:
       `${series} — which document would you like?\n\n` +
