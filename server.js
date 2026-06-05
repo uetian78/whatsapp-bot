@@ -417,6 +417,65 @@ ${list}`;
   }
 }
 
+// AI-pick the single file in a folder that matches a requested SERIES.
+// Used as a fallback for the Catalogue/IOM flow when the deterministic
+// prefix matcher misses because files are named inconsistently
+// (e.g. "FCU Catalogue.pdf", "APMR-A. 2025.pdf", "APMRA 2025 IOM.pdf").
+// `folderFiles` are already filtered to the right folder.
+// Returns one file object, or null.
+async function aiMatchSeriesFile(series, docType, folderFiles) {
+  if (!ANTHROPIC_API_KEY || !folderFiles.length) return null;
+
+  const list = folderFiles
+    .map((f, i) => `${i + 1}. ${f.name.replace(/\.[^.]+$/, "")}`)
+    .join("\n");
+
+  const system = `You match a requested SKM HVAC product SERIES to ONE file from a list of ${docType} files.
+The customer wants the ${docType} for series: "${series}".
+
+Rules:
+- Pick the file whose name refers to the SAME product series, ignoring extra tokens like a year (2025), version, brand word ("SKM"), the word "${docType}", spaces, dots and dashes.
+- Be STRICT about the series identity. "APMR", "APMR-A" and "APMR-V" are DIFFERENT series — do not confuse them. "APCY-P", "APCY-H", "APCY-E" are different. "ACUV-D" vs "ACUV-S" are different.
+- If two files fit equally (e.g. "APMR-A.pdf" and "APMR-A. 2025.pdf"), pick the one WITHOUT a year/version (the generic latest).
+- If NO file matches the series, reply "0".
+
+Reply with ONLY the number of the single best file, or "0". No other text.
+
+FILES:
+${list}`;
+
+  try {
+    const msg = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 10,
+      system,
+      messages: [{ role: "user", content: `${series} ${docType}` }],
+    });
+    const out = (msg.content?.[0]?.text || "").trim();
+    const n = parseInt((out.match(/\d+/) || [])[0], 10);
+    if (!n || n < 1 || n > folderFiles.length) return null;
+    return folderFiles[n - 1];
+  } catch (err) {
+    console.error("AI series-match error:", err.message);
+    return null;
+  }
+}
+
+// Resolve a series + docType to a file: try the fast deterministic matcher
+// first, then fall back to AI matching for inconsistently-named files.
+async function resolveSeriesFile(series, docType, files) {
+  // 1) deterministic prefix match (free, instant)
+  const hits = findFilesInFolder(series, files, docType);
+  if (hits.length >= 1) return hits[0];
+
+  // 2) AI fallback over just this folder's files
+  const folderFiles = files.filter((f) => folderMatchesDocType(f.folder, docType));
+  if (!folderFiles.length) return null;
+  const ai = await aiMatchSeriesFile(series, docType, folderFiles);
+  if (ai) console.log(`🤖 AI matched ${series} ${docType} -> ${ai.name}`);
+  return ai;
+}
+
 // ============================================================
 //  SENDING
 // ============================================================
@@ -617,8 +676,8 @@ app.post("/webhook", async (req, res) => {
       // Catalogue / IOM choice -> fetch from that folder ONLY
       if (action?.type === "folderFile") {
         const files = await listFolderFiles();
-        const hits = findFilesInFolder(action.series, files, action.docType);
-        if (hits.length >= 1) return await sendDriveFile(from, hits[0]);
+        const file = await resolveSeriesFile(action.series, action.docType, files);
+        if (file) return await sendDriveFile(from, file);
         return await sendText(
           from,
           `The ${action.series} ${action.docType} isn't available yet. Please check back soon or contact us.`
@@ -670,8 +729,8 @@ app.post("/webhook", async (req, res) => {
       // direct: user named both series and doc type
       console.log(`📚 Series direct: ${seriesReq.series} ${seriesReq.docType}`);
       const files = await listFolderFiles();
-      const hits = findFilesInFolder(seriesReq.series, files, seriesReq.docType);
-      if (hits.length >= 1) return await sendDriveFile(from, hits[0]);
+      const file = await resolveSeriesFile(seriesReq.series, seriesReq.docType, files);
+      if (file) return await sendDriveFile(from, file);
       return await sendText(
         from,
         `The ${seriesReq.series} ${seriesReq.docType} isn't available yet. Please check back soon or contact us.`
