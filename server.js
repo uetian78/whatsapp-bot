@@ -10,7 +10,7 @@ const axios = require("axios");
 const { google } = require("googleapis");
 const Anthropic = require("@anthropic-ai/sdk");
 const FormData = require("form-data");
-const { buildSelectionReply, buildSelectionInteractive, handleButtonTap, interpretCode, parseSeriesRequest, seriesMenu, parseDatasheetRequest, datasheetMenu } = require("./products.js");
+const { buildSelectionReply, buildSelectionInteractive, handleButtonTap, interpretCode, parseSeriesRequest, seriesMenu, parseDatasheetRequest, datasheetMenu, detectDocType } = require("./products.js");
 const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSeries, datasheetCondition } = require("./catalogue-map.js");
 require("dotenv").config();
 
@@ -912,9 +912,16 @@ app.post("/webhook", async (req, res) => {
       }
     }
 
+    // If the user's message mentions a doc type (IOM / catalogue), restrict search
+    // to only files of that type so "AHU IOM" never lists catalogue files.
+    const mentionedDocType = detectDocType(text); // "IOM", "Catalogue", or null
+    const searchFiles = mentionedDocType
+      ? files.filter((f) => fileMatchesDocType(f, mentionedDocType))
+      : files;
+
     // 2) Exact filename search (fast, free) — works for codes & names.
-    const hits = findFilesByName(text, files);
-    console.log(`🔎 Folder search "${text}": ${hits.length} hit(s) of ${files.length} indexed`);
+    const hits = findFilesByName(text, searchFiles);
+    console.log(`🔎 Folder search "${text}" [${mentionedDocType || "all"}]: ${hits.length} hit(s)`);
     if (hits.length === 1) return await sendDriveFile(from, hits[0]);
     if (hits.length > 1 && hits.length <= 8) {
       const list = hits.map((f) => `• ${f.name.replace(/\.[^.]+$/, "")}`).join("\n");
@@ -926,9 +933,10 @@ app.post("/webhook", async (req, res) => {
       /\b(hours|open|close|deliver|delivery|price|cost|warranty|install|contact|email|phone|location|address|about|who are you|what do you)\b/i.test(text);
 
     // 3) Product-ish request that filename search missed -> AI matches by meaning
-    //    (e.g. "AHU" / "air handling unit" / "do you have the fresh air unit").
+    //    (e.g. "AHU IOM" / "air handling unit" / "do you have the fresh air unit").
+    //    Pass only the doc-type-filtered file list so AI never suggests wrong type.
     if (!isKnowledgeQuestion) {
-      const aiHits = await aiMatchFile(text, files);
+      const aiHits = await aiMatchFile(text, searchFiles);
       if (aiHits && aiHits.length === 1) {
         console.log(`🤖 AI matched "${text}" -> ${aiHits[0].name}`);
         return await sendDriveFile(from, aiHits[0]);
