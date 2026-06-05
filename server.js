@@ -799,6 +799,16 @@ app.post("/webhook", async (req, res) => {
           `The ${action.fileName} data sheet isn't available yet. Please check back soon or contact us.`
         );
       }
+      // Doc-type choice button: "doctype|IOM|<query>" or "doctype|Catalogue|<query>"
+      if (btnId.startsWith("doctype|")) {
+        const [, docType, ...queryParts] = btnId.split("|");
+        const query = queryParts.join("|");
+        const files = await listFolderFiles();
+        const filtered = files.filter((f) => fileMatchesDocType(f, docType));
+        const aiHits = await aiMatchFile(query, filtered);
+        if (aiHits && aiHits.length >= 1) return await sendFileOptions(from, aiHits, `${docType} — which product?`);
+        return await sendText(from, `Sorry, no ${docType} found for "${query}". Please contact us.`);
+      }
       // Direct file by Drive ID (used by sendFileOptions buttons)
       if (btnId.startsWith("fileid|")) {
         const fileId = btnId.slice(7);
@@ -988,6 +998,22 @@ app.post("/webhook", async (req, res) => {
       const aiHits = await aiMatchFile(text, searchFiles);
       if (aiHits && aiHits.length >= 1) {
         console.log(`🤖 AI matched "${text}" -> ${aiHits.map(f => f.name).join(", ")}`);
+
+        // If no doc type was specified and results include both types, ask first
+        if (!mentionedDocType) {
+          const hasIOM = aiHits.some((f) => fileMatchesDocType(f, "IOM"));
+          const hasCat = aiHits.some((f) => fileMatchesDocType(f, "Catalogue"));
+          if (hasIOM && hasCat) {
+            return await sendButtons(from,
+              `Which document type would you like for "${text}"?`,
+              [
+                { id: `doctype|Catalogue|${text}`, title: "Catalogue" },
+                { id: `doctype|IOM|${text}`, title: "IOM" },
+              ]
+            );
+          }
+        }
+
         return await sendFileOptions(from, aiHits, "Did you mean one of these?");
       }
     }
