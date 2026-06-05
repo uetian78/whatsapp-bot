@@ -73,56 +73,94 @@ const PRODUCTS = {
   },
 
   // FCU DMP Standard chilled water fan coil units.
-  // Rated at: 76°F/63°F entering air, 45°F (7.2°C) EWT, 4-row coil, 50 Hz, high speed, 0.10 inwg ESP.
+  // Source: FCUs DMP datasheets.pdf pages 1-2 (summary table).
+  // Conditions: 26.67°C DB / 19.44°C WB entering air, 7.22°C (45°F) EWT, medium speed, 50 Pa ESP.
+  // Each model has rows=3 (3-row coil) and rows=4 (4-row coil) variants.
+  // nomCfm = nominal size × 100. cfm = actual at rated conditions (l/s × 2.119).
   "fcu-dmp": {
     label: "FCU DMP Standard Chilled Water Fan Coil",
     namePrefix: "DMP-",
     selectBy: "fcu",
     models: [
-      { code: "02",  nomCfm: 200,  cfm: 286,  cap_kw: 2.38,  cap_tr: 0.68 },
-      { code: "03",  nomCfm: 300,  cfm: 304,  cap_kw: 2.63,  cap_tr: 0.75 },
-      { code: "04",  nomCfm: 400,  cfm: 422,  cap_kw: 3.08,  cap_tr: 0.88 },
-      { code: "04R", nomCfm: 400,  cfm: 442,  cap_kw: 3.18,  cap_tr: 0.90 },
-      { code: "04S", nomCfm: 400,  cfm: 471,  cap_kw: 3.34,  cap_tr: 0.95 },
-      { code: "05",  nomCfm: 500,  cfm: 615,  cap_kw: 4.51,  cap_tr: 1.28 },
-      { code: "05R", nomCfm: 500,  cfm: 659,  cap_kw: 4.71,  cap_tr: 1.34 },
-      { code: "06",  nomCfm: 600,  cfm: 705,  cap_kw: 5.46,  cap_tr: 1.55 },
-      { code: "07",  nomCfm: 700,  cfm: 785,  cap_kw: 6.19,  cap_tr: 1.76 },
-      { code: "08",  nomCfm: 800,  cfm: 877,  cap_kw: 6.64,  cap_tr: 1.89 },
-      { code: "10",  nomCfm: 1000, cfm: 1029, cap_kw: 7.97,  cap_tr: 2.27 },
-      { code: "11",  nomCfm: 1100, cfm:  945, cap_kw: 9.91,  cap_tr: 2.82 },
-      { code: "12",  nomCfm: 1200, cfm: 1097, cap_kw: 8.30,  cap_tr: 2.36 },
-      { code: "14",  nomCfm: 1400, cfm: 1264, cap_kw: 8.80,  cap_tr: 2.50 },
-      { code: "16",  nomCfm: 1600, cfm: 1349, cap_kw: 9.97,  cap_tr: 2.83 },
-      { code: "18",  nomCfm: 1800, cfm: 1824, cap_kw: 13.30, cap_tr: 3.78 },
-      { code: "20",  nomCfm: 2000, cfm: 2035, cap_kw: 15.24, cap_tr: 4.33 },
+      { code: "02",  rows: 3, nomCfm: 200,  cfm:  225, cap_kw:  2.27 },
+      { code: "02",  rows: 4, nomCfm: 200,  cfm:  220, cap_kw:  2.68 },
+      { code: "03",  rows: 3, nomCfm: 300,  cfm:  237, cap_kw:  2.50 },
+      { code: "03",  rows: 4, nomCfm: 300,  cfm:  233, cap_kw:  2.92 },
+      { code: "04",  rows: 3, nomCfm: 400,  cfm:  369, cap_kw:  3.61 },
+      { code: "04",  rows: 4, nomCfm: 400,  cfm:  362, cap_kw:  3.82 },
+      { code: "04R", rows: 3, nomCfm: 400,  cfm:  394, cap_kw:  3.72 },
+      { code: "04R", rows: 4, nomCfm: 400,  cfm:  384, cap_kw:  3.95 },
+      { code: "04S", rows: 3, nomCfm: 400,  cfm:  415, cap_kw:  3.83 },
+      { code: "04S", rows: 4, nomCfm: 400,  cfm:  405, cap_kw:  4.08 },
+      { code: "05",  rows: 3, nomCfm: 500,  cfm:  511, cap_kw:  4.33 },
+      { code: "05",  rows: 4, nomCfm: 500,  cfm:  494, cap_kw:  5.25 },
+      { code: "05R", rows: 3, nomCfm: 500,  cfm:  559, cap_kw:  4.55 },
+      { code: "05R", rows: 4, nomCfm: 500,  cfm:  540, cap_kw:  5.55 },
+      { code: "06",  rows: 3, nomCfm: 600,  cfm:  610, cap_kw:  5.40 },
+      { code: "06",  rows: 4, nomCfm: 600,  cfm:  589, cap_kw:  6.49 },
+      { code: "07",  rows: 3, nomCfm: 700,  cfm:  678, cap_kw:  6.13 },
+      { code: "07",  rows: 4, nomCfm: 700,  cfm:  653, cap_kw:  7.29 },
+      { code: "08",  rows: 3, nomCfm: 800,  cfm:  761, cap_kw:  6.56 },
+      { code: "08",  rows: 4, nomCfm: 800,  cfm:  723, cap_kw:  7.73 },
+      { code: "10",  rows: 3, nomCfm: 1000, cfm:  890, cap_kw:  7.89 },
+      { code: "10",  rows: 4, nomCfm: 1000, cfm:  860, cap_kw:  9.40 },
+      { code: "11",  rows: 3, nomCfm: 1100, cfm:  975, cap_kw:  8.33 },
+      { code: "11",  rows: 4, nomCfm: 1100, cfm:  945, cap_kw:  9.91 },
+      { code: "12",  rows: 3, nomCfm: 1200, cfm: 1089, cap_kw:  9.17 },
+      { code: "12",  rows: 4, nomCfm: 1200, cfm: 1060, cap_kw: 10.57 },
+      { code: "14",  rows: 3, nomCfm: 1400, cfm: 1161, cap_kw: 10.61 },
+      { code: "14",  rows: 4, nomCfm: 1400, cfm: 1125, cap_kw: 11.89 },
+      { code: "16",  rows: 3, nomCfm: 1600, cfm: 1615, cap_kw: 13.98 },
+      { code: "16",  rows: 4, nomCfm: 1600, cfm: 1566, cap_kw: 16.08 },
+      { code: "18",  rows: 3, nomCfm: 1800, cfm: 1736, cap_kw: 15.81 },
+      { code: "18",  rows: 4, nomCfm: 1800, cfm: 1691, cap_kw: 18.03 },
+      { code: "20",  rows: 3, nomCfm: 2000, cfm: 1935, cap_kw: 16.69 },
+      { code: "20",  rows: 4, nomCfm: 2000, cfm: 1877, cap_kw: 19.29 },
     ],
   },
 
   // FCU DCMP District Cooling chilled water fan coil units.
-  // Rated at: 76°F/63°F entering air, 42°F (5.55°C) EWT, 4-row coil, 50 Hz, high speed, 0.10 inwg ESP.
+  // Source: FCUs DCMP datasheets.pdf pages 1-2 (summary table).
+  // Conditions: 26.67°C DB / 19.44°C WB entering air, 6.00°C (43°F) EWT, medium speed, 50 Pa ESP.
   "fcu-dcmp": {
     label: "FCU DCMP District Cooling Fan Coil",
     namePrefix: "DCMP-",
     selectBy: "fcu",
     models: [
-      { code: "02",  nomCfm: 200,  cfm: 286,  cap_kw: 2.22,  cap_tr: 0.63 },
-      { code: "03",  nomCfm: 300,  cfm: 304,  cap_kw: 2.51,  cap_tr: 0.71 },
-      { code: "04",  nomCfm: 400,  cfm: 422,  cap_kw: 3.43,  cap_tr: 0.98 },
-      { code: "04R", nomCfm: 400,  cfm: 442,  cap_kw: 3.53,  cap_tr: 1.01 },
-      { code: "04S", nomCfm: 400,  cfm: 471,  cap_kw: 3.68,  cap_tr: 1.05 },
-      { code: "05",  nomCfm: 500,  cfm: 595,  cap_kw: 4.40,  cap_tr: 1.25 },
-      { code: "05R", nomCfm: 500,  cfm: 659,  cap_kw: 4.68,  cap_tr: 1.33 },
-      { code: "06",  nomCfm: 600,  cfm: 705,  cap_kw: 5.02,  cap_tr: 1.43 },
-      { code: "07",  nomCfm: 700,  cfm: 785,  cap_kw: 5.96,  cap_tr: 1.70 },
-      { code: "08",  nomCfm: 800,  cfm: 810,  cap_kw: 6.08,  cap_tr: 1.73 },
-      { code: "10",  nomCfm: 1000, cfm: 1029, cap_kw: 7.17,  cap_tr: 2.04 },
-      { code: "11",  nomCfm: 1100, cfm:  957, cap_kw: 9.76,  cap_tr: 2.78 },
-      { code: "12",  nomCfm: 1200, cfm: 1097, cap_kw: 8.39,  cap_tr: 2.39 },
-      { code: "14",  nomCfm: 1400, cfm: 1222, cap_kw: 8.88,  cap_tr: 2.53 },
-      { code: "16",  nomCfm: 1600, cfm: 1349, cap_kw: 10.30, cap_tr: 2.93 },
-      { code: "18",  nomCfm: 1800, cfm: 1774, cap_kw: 13.78, cap_tr: 3.92 },
-      { code: "20",  nomCfm: 2000, cfm: 2064, cap_kw: 16.25, cap_tr: 4.62 },
+      { code: "02",  rows: 3, nomCfm: 200,  cfm:  227, cap_kw:  1.94 },
+      { code: "02",  rows: 4, nomCfm: 200,  cfm:  223, cap_kw:  2.47 },
+      { code: "03",  rows: 3, nomCfm: 300,  cfm:  239, cap_kw:  2.20 },
+      { code: "03",  rows: 4, nomCfm: 300,  cfm:  235, cap_kw:  2.77 },
+      { code: "04",  rows: 3, nomCfm: 400,  cfm:  373, cap_kw:  3.25 },
+      { code: "04",  rows: 4, nomCfm: 400,  cfm:  365, cap_kw:  3.98 },
+      { code: "04R", rows: 3, nomCfm: 400,  cfm:  396, cap_kw:  3.37 },
+      { code: "04R", rows: 4, nomCfm: 400,  cfm:  388, cap_kw:  4.14 },
+      { code: "04S", rows: 3, nomCfm: 400,  cfm:  420, cap_kw:  3.47 },
+      { code: "04S", rows: 4, nomCfm: 400,  cfm:  409, cap_kw:  4.28 },
+      { code: "05",  rows: 3, nomCfm: 500,  cfm:  502, cap_kw:  4.05 },
+      { code: "05",  rows: 4, nomCfm: 500,  cfm:  487, cap_kw:  4.93 },
+      { code: "05R", rows: 3, nomCfm: 500,  cfm:  564, cap_kw:  4.33 },
+      { code: "05R", rows: 4, nomCfm: 500,  cfm:  547, cap_kw:  5.27 },
+      { code: "06",  rows: 3, nomCfm: 600,  cfm:  619, cap_kw:  4.79 },
+      { code: "06",  rows: 4, nomCfm: 600,  cfm:  598, cap_kw:  5.66 },
+      { code: "07",  rows: 3, nomCfm: 700,  cfm:  684, cap_kw:  5.67 },
+      { code: "07",  rows: 4, nomCfm: 700,  cfm:  663, cap_kw:  6.70 },
+      { code: "08",  rows: 3, nomCfm: 800,  cfm:  725, cap_kw:  5.84 },
+      { code: "08",  rows: 4, nomCfm: 800,  cfm:  691, cap_kw:  6.86 },
+      { code: "10",  rows: 3, nomCfm: 1000, cfm:  896, cap_kw:  6.34 },
+      { code: "10",  rows: 4, nomCfm: 1000, cfm:  873, cap_kw:  8.20 },
+      { code: "11",  rows: 3, nomCfm: 1100, cfm:  985, cap_kw:  7.48 },
+      { code: "11",  rows: 4, nomCfm: 1100, cfm:  958, cap_kw:  9.76 },
+      { code: "12",  rows: 3, nomCfm: 1200, cfm: 1064, cap_kw:  8.28 },
+      { code: "12",  rows: 4, nomCfm: 1200, cfm: 1036, cap_kw: 10.18 },
+      { code: "14",  rows: 3, nomCfm: 1400, cfm: 1174, cap_kw:  9.63 },
+      { code: "14",  rows: 4, nomCfm: 1400, cfm: 1140, cap_kw: 11.75 },
+      { code: "16",  rows: 3, nomCfm: 1600, cfm: 1585, cap_kw: 13.15 },
+      { code: "16",  rows: 4, nomCfm: 1600, cfm: 1543, cap_kw: 15.77 },
+      { code: "18",  rows: 3, nomCfm: 1800, cfm: 1750, cap_kw: 15.05 },
+      { code: "18",  rows: 4, nomCfm: 1800, cfm: 1710, cap_kw: 18.10 },
+      { code: "20",  rows: 3, nomCfm: 2000, cfm: 1888, cap_kw: 15.71 },
+      { code: "20",  rows: 4, nomCfm: 2000, cfm: 1837, cap_kw: 18.84 },
     ],
   },
 
@@ -152,19 +190,25 @@ const PRODUCTS = {
   },
 };
 
-// compute TR for each model once
+// compute TR and fullModel for each model once
 for (const key of Object.keys(PRODUCTS)) {
   const prefix = PRODUCTS[key].namePrefix || "APMR ";
   const suffix = key === "apmr-a" ? "A" : "";
   for (const m of PRODUCTS[key].models) {
     if (m.cap_kw !== undefined) {
-      // single-condition product (PAC4A)
       m.cap_tr = Math.round((m.cap_kw / TR_KW) * 10) / 10;
     } else {
       m.t1_tr = Math.round((m.t1_kw / TR_KW) * 10) / 10;
       m.t3_tr = Math.round((m.t3_kw / TR_KW) * 10) / 10;
     }
-    m.fullModel = `${prefix}${m.code}${suffix}`;
+    if (m.rows !== undefined) {
+      // FCU variants: rows=3 → /30/WG, rows=4 → /40/WG
+      const rowCode = m.rows * 10; // 30 or 40
+      m.fullModel = `${prefix}${m.code}/${rowCode}/WG`;        // e.g. DMP-07/40/WG
+      m.driveFile = `${prefix}${m.code}-${rowCode}-WG`;        // e.g. DMP-07-40-WG  (Drive filename without .pdf)
+    } else {
+      m.fullModel = `${prefix}${m.code}${suffix}`;
+    }
   }
 }
 
@@ -467,148 +511,142 @@ function interactiveForFreshCfm(cfm) {
 
 // ---- FCU helpers ----
 
-// Select the smallest FCU model whose cap_tr >= requested TR. 5% show-both rule.
+// For TR selection: find smallest 4-row AND smallest 3-row model that meets the TR.
+// Returns { kind:"found", row4, row3 } or { kind:"toolarge", max }.
 function selectFcuByTr(product, tr) {
   const p = PRODUCTS[product];
-  const ordered = [...p.models].sort((a, b) => a.cap_tr - b.cap_tr);
-  const safe = ordered.find((m) => m.cap_tr >= tr);
-  if (!safe) return { kind: "toolarge", product: p, max: ordered[ordered.length - 1] };
-  const idx = ordered.indexOf(safe);
-  const lower = idx > 0 ? ordered[idx - 1] : null;
-  if (lower && lower.cap_tr >= tr * 0.95) return { kind: "both", product: p, lower, upper: safe };
-  return { kind: "one", product: p, model: safe };
+  const sorted = [...p.models].sort((a, b) => a.cap_tr - b.cap_tr);
+  const best4 = sorted.find((m) => m.rows === 4 && m.cap_tr >= tr) || null;
+  const best3 = sorted.find((m) => m.rows === 3 && m.cap_tr >= tr) || null;
+  if (!best4 && !best3) {
+    const maxModel = sorted[sorted.length - 1];
+    return { kind: "toolarge", product: p, max: maxModel };
+  }
+  return { kind: "found", product: p, row4: best4, row3: best3 };
 }
 
-// Select FCU models by nominal CFM. Returns all variants at the matching nomCfm.
+// For CFM selection: find smallest nomCfm >= requested, return all variants at that size.
 function selectFcuByCfm(product, cfm) {
   const p = PRODUCTS[product];
   const nomCfms = [...new Set(p.models.map((m) => m.nomCfm))].sort((a, b) => a - b);
-  const safeCfm = nomCfms.find((c) => c >= cfm);
-  if (safeCfm === undefined) {
-    const maxCfm = nomCfms[nomCfms.length - 1];
-    return { kind: "toolarge", product: p, max: p.models.filter((m) => m.nomCfm === maxCfm) };
+  const targetNom = nomCfms.find((c) => c >= cfm);
+  if (targetNom === undefined) {
+    const maxNom = nomCfms[nomCfms.length - 1];
+    return { kind: "toolarge", product: p, max: p.models.filter((m) => m.nomCfm === maxNom) };
   }
-  let chosen = p.models.filter((m) => m.nomCfm === safeCfm);
-  const idx = nomCfms.indexOf(safeCfm);
-  if (idx > 0 && nomCfms[idx - 1] >= cfm * 0.95) {
-    chosen = chosen.concat(p.models.filter((m) => m.nomCfm === nomCfms[idx - 1]));
-  }
-  return { kind: "models", product: p, cfm, models: chosen };
+  return { kind: "found", product: p, nomCfm: targetNom, models: p.models.filter((m) => m.nomCfm === targetNom) };
 }
 
-// FCU selection by TR. If product=null show DMP vs DCMP comparison.
+// FCU TR selection. product=null → show DMP and DCMP side by side.
 function interactiveForFcuTr(product, tr) {
-  // If no specific type given, show both DMP and DCMP recommendations side by side.
+  const FCU_CAT = "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo";
+
   if (!product) {
+    // Show best DMP and DCMP options for the requested TR
     const dmp  = selectFcuByTr("fcu-dmp",  tr);
     const dcmp = selectFcuByTr("fcu-dcmp", tr);
-    const dmpModel  = dmp.kind === "toolarge"  ? dmp.max  : dmp.kind === "both"  ? dmp.upper  : dmp.model;
-    const dcmpModel = dcmp.kind === "toolarge" ? dcmp.max : dcmp.kind === "both" ? dcmp.upper : dcmp.model;
-    return {
-      text:
-        `Fan Coil for ${tr} TR:\n\n` +
-        `• Standard (DMP): ${dmpModel.fullModel} — ${dmpModel.cap_tr} TR (${dmpModel.cap_kw} kW), ${dmpModel.nomCfm} CFM nom.\n` +
-        `  Rated at 45°F (7.2°C) EWT\n\n` +
-        `• District Cooling (DCMP): ${dcmpModel.fullModel} — ${dcmpModel.cap_tr} TR (${dcmpModel.cap_kw} kW), ${dcmpModel.nomCfm} CFM nom.\n` +
-        `  Rated at 42°F (5.55°C) EWT\n\n` +
-        `Tap a model to get its datasheet:`,
-      buttons: [
-        { id: `fcu-sheet|${dmpModel.fullModel}`,  title: `${dmpModel.fullModel} Sheet` },
-        { id: `fcu-sheet|${dcmpModel.fullModel}`, title: `${dcmpModel.fullModel} Sheet` },
-        { id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" },
-      ],
-    };
+
+    let text = `Fan Coil options for ${tr} TR:\n`;
+    const buttons = [];
+
+    // DMP section
+    if (dmp.kind === "toolarge") {
+      text += `\nStandard DMP (45°F EWT): max capacity ${dmp.max.cap_tr} TR — too small`;
+    } else {
+      const { row4, row3 } = dmp;
+      text += `\nStandard DMP (45°F EWT):`;
+      if (row4) text += `\n  • 4-Row: ${row4.fullModel} — ${row4.cap_tr} TR (${row4.cap_kw} kW), ${row4.cfm} CFM`;
+      if (row3) text += `\n  • 3-Row: ${row3.fullModel} — ${row3.cap_tr} TR (${row3.cap_kw} kW), ${row3.cfm} CFM`;
+      const best = row4 || row3;
+      if (best && buttons.length < 2)
+        buttons.push({ id: `fcu-sheet|${best.driveFile}`, title: best.driveFile.slice(0, 20) });
+    }
+
+    // DCMP section
+    if (dcmp.kind === "toolarge") {
+      text += `\n\nDistrict Cooling DCMP (43°F EWT): max ${dcmp.max.cap_tr} TR — too small`;
+    } else {
+      const { row4, row3 } = dcmp;
+      text += `\n\nDistrict Cooling DCMP (43°F EWT):`;
+      if (row4) text += `\n  • 4-Row: ${row4.fullModel} — ${row4.cap_tr} TR (${row4.cap_kw} kW), ${row4.cfm} CFM`;
+      if (row3) text += `\n  • 3-Row: ${row3.fullModel} — ${row3.cap_tr} TR (${row3.cap_kw} kW), ${row3.cfm} CFM`;
+      const best = row4 || row3;
+      if (best && buttons.length < 2)
+        buttons.push({ id: `fcu-sheet|${best.driveFile}`, title: best.driveFile.slice(0, 20) });
+    }
+
+    buttons.push({ id: FCU_CAT, title: "FCU Catalogue" });
+    return { text: text + "\n\nTap a model for its datasheet:", buttons };
   }
 
-  const res = selectFcuByTr(product, tr);
-  const p = res.product;
-  const label = product === "fcu-dcmp" ? "DCMP (District Cooling)" : "DMP (Standard)";
-  const ewt   = product === "fcu-dcmp" ? "42°F (5.55°C)" : "45°F (7.2°C)";
+  // Specific product (DMP or DCMP)
+  const res  = selectFcuByTr(product, tr);
+  const ewt  = product === "fcu-dcmp" ? "43°F (6°C)" : "45°F (7.2°C)";
+  const lbl  = product === "fcu-dcmp" ? "DCMP District Cooling" : "DMP Standard";
 
   if (res.kind === "toolarge") {
     const m = res.max;
     return {
-      text:
-        `${tr} TR exceeds the largest ${label} model.\n` +
-        `Biggest: ${m.fullModel} → ${m.cap_tr} TR (${m.cap_kw} kW), ${m.nomCfm} CFM nom.`,
+      text: `${tr} TR exceeds the largest ${lbl} model.\nBiggest: ${m.fullModel} → ${m.cap_tr} TR (${m.cap_kw} kW), ${m.cfm} CFM actual`,
       buttons: [
-        { id: `fcu-sheet|${m.fullModel}`, title: `${m.fullModel} Sheet` },
-        { id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" },
+        { id: `fcu-sheet|${m.driveFile}`, title: m.driveFile.slice(0, 20) },
+        { id: FCU_CAT, title: "FCU Catalogue" },
       ],
     };
   }
 
-  if (res.kind === "both") {
-    const lo = res.lower, hi = res.upper;
-    const loShort = Math.round((1 - lo.cap_tr / tr) * 1000) / 10;
-    return {
-      text:
-        `For ${tr} TR — ${label} (EWT ${ewt}), two close options:\n\n` +
-        `• ${lo.fullModel} → ${lo.cap_tr} TR (${lo.cap_kw} kW), ${lo.nomCfm} CFM — ${loShort}% under\n` +
-        `• ${hi.fullModel} → ${hi.cap_tr} TR (${hi.cap_kw} kW), ${hi.nomCfm} CFM — meets ${tr} TR\n\n` +
-        `Tap a model for its datasheet:`,
-      buttons: [
-        { id: `fcu-sheet|${lo.fullModel}`, title: `${lo.fullModel} Sheet` },
-        { id: `fcu-sheet|${hi.fullModel}`, title: `${hi.fullModel} Sheet` },
-        { id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" },
-      ],
-    };
+  const { row4, row3 } = res;
+  let text = `Fan Coil for ${tr} TR — ${lbl} (${ewt} EWT):\n`;
+  const buttons = [];
+  if (row4) {
+    text += `\n✅ 4-Row: ${row4.fullModel}\n   ${row4.cap_tr} TR (${row4.cap_kw} kW) | ${row4.cfm} CFM actual`;
+    buttons.push({ id: `fcu-sheet|${row4.driveFile}`, title: row4.driveFile.slice(0, 20) });
   }
-
-  const m = res.model;
-  return {
-    text:
-      `For ${tr} TR — ${label} (EWT ${ewt}):\n\n` +
-      `✅ ${m.fullModel}\n` +
-      `• Capacity: ${m.cap_tr} TR (${m.cap_kw} kW)\n` +
-      `• Nominal airflow: ${m.nomCfm} CFM  |  Actual @ high: ${m.cfm} CFM\n\n` +
-      `Tap to get its datasheet (3-row or 4-row coil):`,
-    buttons: [
-      { id: `fcu-sheet|${m.fullModel}`, title: `${m.fullModel} Sheet` },
-      { id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" },
-    ],
-  };
+  if (row3) {
+    text += `\n✅ 3-Row: ${row3.fullModel}\n   ${row3.cap_tr} TR (${row3.cap_kw} kW) | ${row3.cfm} CFM actual`;
+    if (buttons.length < 2)
+      buttons.push({ id: `fcu-sheet|${row3.driveFile}`, title: row3.driveFile.slice(0, 20) });
+  }
+  buttons.push({ id: FCU_CAT, title: "FCU Catalogue" });
+  return { text: text + "\n\nTap a model for its datasheet:", buttons };
 }
 
-// FCU selection by CFM. If product=null show both DMP and DCMP at that size.
+// FCU CFM selection. product=null → show DMP and DCMP at matching nomCfm.
 function interactiveForFcuCfm(product, cfm) {
+  const FCU_CAT = "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo";
   const products = product ? [product] : ["fcu-dmp", "fcu-dcmp"];
-  const lines = [];
-  const sheetModels = []; // collect models for sheet buttons
+  let text = `Fan Coil for ${cfm} CFM:`;
+  const buttons = [];
 
   for (const pk of products) {
     const res = selectFcuByCfm(pk, cfm);
-    const label = pk === "fcu-dcmp" ? "DCMP (District Cooling)" : "DMP (Standard)";
-    const ewt   = pk === "fcu-dcmp" ? "42°F EWT" : "45°F EWT";
+    const ewt = pk === "fcu-dcmp" ? "43°F EWT" : "45°F EWT";
+    const lbl = pk === "fcu-dcmp" ? "DCMP (District Cooling)" : "DMP (Standard)";
+
     if (res.kind === "toolarge") {
-      const big = res.max[0];
-      lines.push(`• ${label}: largest is ${big.fullModel} (${big.nomCfm} CFM nom.)`);
-      sheetModels.push(big);
+      const big = res.max.sort((a, b) => b.cap_tr - a.cap_tr)[0];
+      text += `\n\n${lbl}: max model is ${big.fullModel} (${big.nomCfm} CFM nom.)`;
+      if (buttons.length < 2)
+        buttons.push({ id: `fcu-sheet|${big.driveFile}`, title: big.driveFile.slice(0, 20) });
     } else {
-      // Group by nomCfm — show one representative per size, list all variants in text
-      const bySize = {};
-      for (const m of res.models) {
-        (bySize[m.nomCfm] = bySize[m.nomCfm] || []).push(m);
-      }
-      for (const [nom, ms] of Object.entries(bySize)) {
-        const codes = ms.map(m => m.fullModel).join(", ");
-        lines.push(`• ${label}: ${codes} — ${nom} CFM nom. | ${ms[0].cap_tr} TR (${ms[0].cap_kw} kW) @ ${ewt}`);
-        sheetModels.push(...ms);
-      }
+      const { nomCfm, models } = res;
+      const row4 = models.find((m) => m.rows === 4 && m.code === [...new Set(models.map(m=>m.code))].sort()[0]);
+      const row3 = models.find((m) => m.rows === 3 && m.code === [...new Set(models.map(m=>m.code))].sort()[0]);
+      const codes = [...new Set(models.map((m) => m.code))].sort();
+
+      text += `\n\n${lbl} — ${nomCfm} CFM nominal (${ewt}):`;
+      if (row4) text += `\n  • 4-Row: ${row4.fullModel} — ${row4.cap_tr} TR (${row4.cap_kw} kW), ${row4.cfm} CFM`;
+      if (row3) text += `\n  • 3-Row: ${row3.fullModel} — ${row3.cap_tr} TR (${row3.cap_kw} kW), ${row3.cfm} CFM`;
+      if (codes.length > 1) text += `\n  Also: ${codes.slice(1).map(c => `${row4 ? row4.fullModel.replace(row4.code,c) : c}`).join(", ")} variants`;
+
+      const best = row4 || row3;
+      if (best && buttons.length < 2)
+        buttons.push({ id: `fcu-sheet|${best.driveFile}`, title: best.driveFile.slice(0, 20) });
     }
   }
 
-  // Build sheet buttons — up to 2 models, leave room for catalogue button
-  const btnModels = sheetModels.slice(0, 2);
-  const buttons = [
-    ...btnModels.map(m => ({ id: `fcu-sheet|${m.fullModel}`, title: `${m.fullModel} Sheet` })),
-    { id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" },
-  ];
-
-  return {
-    text: `Fan Coil for ${cfm} CFM:\n\n${lines.join("\n")}\n\nTap a model for its datasheet:`,
-    buttons,
-  };
+  buttons.push({ id: FCU_CAT, title: "FCU Catalogue" });
+  return { text: text + "\n\nTap a model for its datasheet:", buttons };
 }
 
 // CFM selection -> buttons (one per matching model, max 3).
