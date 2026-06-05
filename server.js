@@ -819,7 +819,7 @@ app.post("/webhook", async (req, res) => {
         const hits = files.filter((f) => {
           const base = norm(f.name.replace(/\.[^.]+$/, ""));
           // Must start with model prefix AND be in a DMP/DCMP selection folder
-          return base.startsWith(q) && /fcu.*(dmp|dcmp).*select/i.test(f.folder || "");
+          return base.startsWith(q) && /fcu.*(dmp|dcmp)/i.test(f.folder || "");
         });
         if (hits.length >= 1) return await sendFileOptions(from, hits, `${model} datasheets (choose coil rows):`);
         // Fallback: search by name anywhere in Drive if folder filter missed
