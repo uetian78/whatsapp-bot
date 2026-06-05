@@ -603,6 +603,9 @@ function parseSeriesRequest(text) {
   if (/\d+(?:\.\d+)?\s*(?:tr|ton|tons)\b/.test(t)) return null;
   if (/\b\d{5}\b/.test(t)) return null;
 
+  // If it looks like a natural-language question, let Claude answer it.
+  if (/\b(what|how|why|when|where|who|which|is|are|does|do|can|range|difference|between|tell me|explain|describe)\b/i.test(t)) return null;
+
   const series = detectSeries(text);
   if (!series) return null;
 
