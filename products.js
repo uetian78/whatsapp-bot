@@ -721,7 +721,7 @@ function interactiveFor(product, tr, condition) {
         `For ${tr} TR at ${cond} (${cTemp}), that's above the largest ${cat} model.\n` +
         `Biggest: ${m.fullModel} → ${m[tk]} TR (${m[kwk]} kW).\n` +
         `For higher loads, consider multiple units or a chiller.`,
-      buttons: [{ id: `sheet|${m.fullModel}`, title: `${m.code} sheet` }],
+      buttons: [{ id: `sheet|${m.fullModel}|${condition}`, title: `${m.code} sheet` }],
     };
   }
 
@@ -735,8 +735,8 @@ function interactiveFor(product, tr, condition) {
         `• ${hi.fullModel} → ${hi[tk]} TR (${hi[kwk]} kW) — meets ${tr} TR\n\n` +
         `Tap a model for its data sheet:`,
       buttons: [
-        { id: `sheet|${lo.fullModel}`, title: `${lo.code} (${lo[tk]}TR)` },
-        { id: `sheet|${hi.fullModel}`, title: `${hi.code} (${hi[tk]}TR)` },
+        { id: `sheet|${lo.fullModel}|${condition}`, title: `${lo.code} (${lo[tk]}TR)` },
+        { id: `sheet|${hi.fullModel}|${condition}`, title: `${hi.code} (${hi[tk]}TR)` },
       ],
     };
   }
@@ -752,7 +752,7 @@ function interactiveFor(product, tr, condition) {
       `• ${cond} (${cTemp}): ${m[tk]} TR (${m[kwk]} kW) ✓\n` +
       `• ${other}: ${otherTr} TR (${otherKw} kW)\n` +
       `• Airflow: ${m.cfm} CFM`,
-    buttons: [{ id: `sheet|${m.fullModel}`, title: `${m.code} data sheet` }],
+    buttons: [{ id: `sheet|${m.fullModel}|${condition}`, title: `${m.code} data sheet` }],
   };
 }
 
@@ -772,8 +772,13 @@ function handleButtonTap(buttonId) {
   }
 
   if (parts[0] === "sheet") {
-    const fullModel = parts.slice(1).join("|"); // e.g. "APMR-A 52025"
-    return { type: "sheet", fileName: fullModel };
+    // Format: "sheet|<fullModel>|<condition>" where condition is optional (t1/t3)
+    // condition is always the LAST part if it matches t1/t3, model name is everything in between
+    const lastPart = parts[parts.length - 1];
+    const hasCondition = lastPart === "t1" || lastPart === "t3";
+    const condition = hasCondition ? lastPart : null;
+    const fullModel = hasCondition ? parts.slice(1, -1).join("|") : parts.slice(1).join("|");
+    return { type: "sheet", fileName: fullModel, condition };
   }
 
   // Catalogue / IOM choice for a series: "doc|<series>|<docType>"

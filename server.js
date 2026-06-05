@@ -792,7 +792,16 @@ app.post("/webhook", async (req, res) => {
       if (action?.type === "sheet") {
         // fetch the model data sheet PDF from the Drive folder by name
         const files = await listFolderFiles();
-        const hits = findFilesByName(action.fileName, files);
+        let hits = findFilesByName(action.fileName, files);
+        // If condition (t1/t3) is known, filter to the matching file
+        if (action.condition && hits.length > 1) {
+          const condUpper = action.condition.toUpperCase(); // "T1" or "T3"
+          const condFiltered = hits.filter((f) => {
+            const n = f.name.toUpperCase();
+            return n.includes(`-${condUpper}`) || n.includes(`_${condUpper}`) || n.includes(` ${condUpper}`);
+          });
+          if (condFiltered.length >= 1) hits = condFiltered;
+        }
         if (hits.length >= 1) return await sendDriveFile(from, hits[0]);
         return await sendText(
           from,
