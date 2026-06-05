@@ -22,6 +22,49 @@ const FOLDER_NAMES = {
   IOM: ["iom", "ioms"],
 };
 
+// ============================================================
+//  DATASHEETS
+//  Live in subfolders under "Datasheets":
+//     Datasheets/APMR Selections/    -> "APMR <code> - T1.pdf" / "- T3.pdf"
+//     Datasheets/APMR-A Selections/  -> "APMRA <code> A - T1.pdf" / "- T3.pdf"
+//     Datasheets/PAC4A selections/   -> "PAC4A <code>.pdf"  (single, no T1/T3)
+//
+//  A datasheet request names a SERIES + a 5-digit CODE, e.g.
+//  "APMR 52300 datasheet". We then find every indexed datasheet file whose
+//  name contains that code AND sits in that series' selection subfolder.
+//  - 2 files (T1 + T3) -> ask the user which condition (buttons)
+//  - 1 file            -> send directly
+// ============================================================
+
+// Which selection subfolder belongs to which series (folder-name match,
+// case-insensitive, space/“selection(s)” tolerant). The KEY is the canonical
+// series name from CATALOGUE_MAP.
+const DATASHEET_FOLDERS = {
+  "APMR-A": ["apmr-a selections", "apmra selections", "apmr-a selection", "apmra selection"],
+  "APMR":   ["apmr selections", "apmr selection"],
+  "PAC4A":  ["pac4a selections", "pac4a selection"],
+};
+
+// Does this folder name belong to the given series' datasheet set?
+function datasheetFolderForSeries(folderName, seriesName) {
+  const f = (folderName || "").toLowerCase().trim();
+  const names = DATASHEET_FOLDERS[seriesName];
+  if (!names) return false;
+  return names.includes(f);
+}
+
+// Series that actually have a datasheet folder.
+function seriesHasDatasheets(seriesName) {
+  return !!DATASHEET_FOLDERS[seriesName];
+}
+
+// Pull the condition (T1 / T3) out of a datasheet filename, or null.
+function datasheetCondition(filename) {
+  const m = (filename || "").match(/\bT\s*([13])\b/i);
+  return m ? "T" + m[1] : null;
+}
+
+
 // SERIES TABLE
 // Order matters for alias detection: longer / more specific series first
 // (so "apmr-a" is detected before "apmr", "apcy-p" before a bare "apcy", etc.).
@@ -290,8 +333,12 @@ function filenameFor(entry, docType) {
 module.exports = {
   CATALOGUE_MAP,
   FOLDER_NAMES,
+  DATASHEET_FOLDERS,
   normLoose,
   folderToDocType,
   detectSeriesEntry,
   filenameFor,
+  datasheetFolderForSeries,
+  seriesHasDatasheets,
+  datasheetCondition,
 };

@@ -538,6 +538,12 @@ function handleButtonTap(buttonId) {
     };
   }
 
+  // Datasheet condition choice: "ds|<driveFileId>" -> fetch that exact file.
+  if (parts[0] === "ds") {
+    const fileId = parts.slice(1).join("|");
+    return { type: "datasheetFile", fileId };
+  }
+
   return null;
 }
 
@@ -558,7 +564,7 @@ function handleButtonTap(buttonId) {
 // Canonical series the bot knows about. This now comes from the
 // deterministic CATALOGUE_MAP (catalogue-map.js) so there is ONE source of
 // truth for series names + aliases. The map also holds the exact filenames.
-const { CATALOGUE_MAP, detectSeriesEntry } = require("./catalogue-map.js");
+const { CATALOGUE_MAP, detectSeriesEntry, seriesHasDatasheets } = require("./catalogue-map.js");
 const SERIES = CATALOGUE_MAP.map((e) => ({ name: e.name, aliases: e.aliases }));
 
 // Detect whether the text asks for a specific document type.
@@ -603,6 +609,53 @@ function parseSeriesRequest(text) {
   const docType = detectDocType(text);
   if (docType) return { mode: "direct", series, docType };
   return { mode: "menu", series };
+}
+
+// Detect a DATASHEET request: needs the word "datasheet"/"data sheet" (or a
+// bare T1/T3 alongside a code) PLUS a series and a 5-digit model code.
+//   "APMR 52300 datasheet"        -> { series:"APMR", code:"52300", condition:null }
+//   "APMR-A 51004 datasheet T3"   -> { ..., condition:"T3" }
+// Returns null if it's not a datasheet request.
+function parseDatasheetRequest(text) {
+  const t = text.toLowerCase();
+
+  const codeMatch = t.match(/\b(\d{5})\b/);
+  if (!codeMatch) return null; // datasheets are per-model; need a code
+
+  const wantsDatasheet = /\bdata\s*sheet\b|\bdatasheet\b|\bspec\b|\bspecs\b/.test(t);
+  // Also treat "APMR 52300 T3" (code + condition, no other intent) as a
+  // datasheet request, since that's a specific model selection.
+  const condition = (t.match(/\bt\s*([13])\b/) || [])[1];
+  const conditionToken = condition ? "T" + condition : null;
+
+  if (!wantsDatasheet && !conditionToken) return null;
+
+  const series = detectSeries(text);
+  if (!series) return null;
+
+  // Only series that actually have datasheet folders qualify.
+  if (!seriesHasDatasheets(series)) return null;
+
+  return { series, code: codeMatch[1], condition: conditionToken };
+}
+
+// Build the T1/T3 selection buttons for a datasheet that has two conditions.
+// `matches` is the array of {name, id, condition} files found for the code.
+function datasheetMenu(series, code, matches) {
+  // sort so T1 comes before T3
+  const ordered = [...matches].sort((a, b) =>
+    (a.condition || "").localeCompare(b.condition || "")
+  );
+  return {
+    text:
+      `${series} ${code} datasheet — which design condition?\n\n` +
+      `• T1 = 35°C ambient\n` +
+      `• T3 = 46°C ambient`,
+    buttons: ordered.map((m) => ({
+      id: `ds|${m.id}`,
+      title: m.condition || code,
+    })),
+  };
 }
 
 // Build the interactive Catalogue / IOM button message for a series.
@@ -695,4 +748,6 @@ module.exports = {
   seriesMenu,
   detectSeries,
   detectDocType,
+  parseDatasheetRequest,
+  datasheetMenu,
 };

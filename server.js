@@ -10,8 +10,8 @@ const axios = require("axios");
 const { google } = require("googleapis");
 const Anthropic = require("@anthropic-ai/sdk");
 const FormData = require("form-data");
-const { buildSelectionReply, buildSelectionInteractive, handleButtonTap, interpretCode, parseSeriesRequest, seriesMenu } = require("./products.js");
-const { detectSeriesEntry, filenameFor, folderToDocType } = require("./catalogue-map.js");
+const { buildSelectionReply, buildSelectionInteractive, handleButtonTap, interpretCode, parseSeriesRequest, seriesMenu, parseDatasheetRequest, datasheetMenu } = require("./products.js");
+const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSeries, datasheetCondition } = require("./catalogue-map.js");
 require("dotenv").config();
 
 const app = express();
@@ -476,8 +476,22 @@ function findExactFileInDoc(exactName, docType, files) {
   return null;
 }
 
-// Resolve a series + docType to a file.
-//   1) DETERMINISTIC MAP (catalogue-map.js): exact filename lookup — instant,
+// Find datasheet files for a series + code. Looks only inside that series'
+// datasheet subfolder(s) and matches files whose name contains the 5-digit
+// code. Returns an array of { name, id, condition } (condition = T1/T3/null).
+function findDatasheetFiles(series, code, files) {
+  const out = [];
+  for (const f of files) {
+    if (!datasheetFolderForSeries(f.folder, series)) continue;
+    // the code must appear in the filename
+    const re = new RegExp(`\\b${code}\\b`);
+    if (!re.test(f.name)) continue;
+    out.push({ name: f.name, id: f.id, condition: datasheetCondition(f.name) });
+  }
+  return out;
+}
+
+
 //      free, no guessing. This is the primary path now that we have the full
 //      Drive file list mapped.
 //   2) Old prefix matcher, then AI — only as a safety net for a series that
@@ -719,6 +733,16 @@ app.post("/webhook", async (req, res) => {
           `The ${action.series} ${action.docType} isn't available yet. Please check back soon or contact us.`
         );
       }
+      // Datasheet condition chosen (T1/T3) -> fetch that exact file by ID.
+      if (action?.type === "datasheetFile") {
+        const files = await listFolderFiles();
+        const file = files.find((f) => f.id === action.fileId);
+        if (file) return await sendDriveFile(from, file);
+        return await sendText(
+          from,
+          `Sorry, that datasheet isn't available right now. Please try again or contact us.`
+        );
+      }
       if (action?.type === "sheet") {
         // fetch the model data sheet PDF from the Drive folder by name
         const files = await listFolderFiles();
@@ -743,6 +767,43 @@ app.post("/webhook", async (req, res) => {
     }
 
     console.log(`📩 ${from}: "${text}"`);
+
+    // 1a) DATASHEET request: "APMR 52300 datasheet" (series + 5-digit code,
+    //     with "datasheet"/"spec" or a T1/T3). Fetches from the series'
+    //     Datasheets subfolder. Two files (T1+T3) -> ask which; one -> send it.
+    //     Must run BEFORE the TR/CFM selection logic, which also sees codes.
+    const dsReq = parseDatasheetRequest(text);
+    if (dsReq) {
+      console.log(`📄 Datasheet request: ${dsReq.series} ${dsReq.code} ${dsReq.condition || ""}`);
+      const files = await listFolderFiles();
+      const matches = findDatasheetFiles(dsReq.series, dsReq.code, files);
+
+      if (!matches.length) {
+        return await sendText(
+          from,
+          `I couldn't find a datasheet for ${dsReq.series} ${dsReq.code}. Please check the model number or contact us.`
+        );
+      }
+
+      // If the user already specified a condition, try to honour it directly.
+      if (dsReq.condition) {
+        const exact = matches.find((m) => m.condition === dsReq.condition);
+        if (exact) {
+          const file = files.find((f) => f.id === exact.id);
+          if (file) return await sendDriveFile(from, file);
+        }
+      }
+
+      // Single file (e.g. PAC4A has no T1/T3) -> send it directly.
+      if (matches.length === 1) {
+        const file = files.find((f) => f.id === matches[0].id);
+        if (file) return await sendDriveFile(from, file);
+      }
+
+      // Multiple files (T1 + T3) -> ask which condition via buttons.
+      const menu = datasheetMenu(dsReq.series, dsReq.code, matches);
+      return await sendButtons(from, menu.text, menu.buttons);
+    }
 
     // 1) Product selection by tonnage or CFM (e.g. "package unit 20 tr t3",
     //    "5000 cfm package unit"). This must run BEFORE generic sheet keyword
