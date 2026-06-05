@@ -511,8 +511,10 @@ function interactiveForFcuTr(product, tr) {
         `  Rated at 45°F (7.2°C) EWT\n\n` +
         `• District Cooling (DCMP): ${dcmpModel.fullModel} — ${dcmpModel.cap_tr} TR (${dcmpModel.cap_kw} kW), ${dcmpModel.nomCfm} CFM nom.\n` +
         `  Rated at 42°F (5.55°C) EWT\n\n` +
-        `Tap to get the FCU catalogue:`,
+        `Tap a model to get its datasheet:`,
       buttons: [
+        { id: `fcu-sheet|${dmpModel.fullModel}`,  title: `${dmpModel.fullModel} Sheet` },
+        { id: `fcu-sheet|${dcmpModel.fullModel}`, title: `${dcmpModel.fullModel} Sheet` },
         { id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" },
       ],
     };
@@ -529,7 +531,10 @@ function interactiveForFcuTr(product, tr) {
       text:
         `${tr} TR exceeds the largest ${label} model.\n` +
         `Biggest: ${m.fullModel} → ${m.cap_tr} TR (${m.cap_kw} kW), ${m.nomCfm} CFM nom.`,
-      buttons: [{ id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" }],
+      buttons: [
+        { id: `fcu-sheet|${m.fullModel}`, title: `${m.fullModel} Sheet` },
+        { id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" },
+      ],
     };
   }
 
@@ -541,8 +546,12 @@ function interactiveForFcuTr(product, tr) {
         `For ${tr} TR — ${label} (EWT ${ewt}), two close options:\n\n` +
         `• ${lo.fullModel} → ${lo.cap_tr} TR (${lo.cap_kw} kW), ${lo.nomCfm} CFM — ${loShort}% under\n` +
         `• ${hi.fullModel} → ${hi.cap_tr} TR (${hi.cap_kw} kW), ${hi.nomCfm} CFM — meets ${tr} TR\n\n` +
-        `Tap for the catalogue:`,
-      buttons: [{ id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" }],
+        `Tap a model for its datasheet:`,
+      buttons: [
+        { id: `fcu-sheet|${lo.fullModel}`, title: `${lo.fullModel} Sheet` },
+        { id: `fcu-sheet|${hi.fullModel}`, title: `${hi.fullModel} Sheet` },
+        { id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" },
+      ],
     };
   }
 
@@ -552,8 +561,12 @@ function interactiveForFcuTr(product, tr) {
       `For ${tr} TR — ${label} (EWT ${ewt}):\n\n` +
       `✅ ${m.fullModel}\n` +
       `• Capacity: ${m.cap_tr} TR (${m.cap_kw} kW)\n` +
-      `• Nominal airflow: ${m.nomCfm} CFM  |  Actual @ high: ${m.cfm} CFM`,
-    buttons: [{ id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" }],
+      `• Nominal airflow: ${m.nomCfm} CFM  |  Actual @ high: ${m.cfm} CFM\n\n` +
+      `Tap to get its datasheet (3-row or 4-row coil):`,
+    buttons: [
+      { id: `fcu-sheet|${m.fullModel}`, title: `${m.fullModel} Sheet` },
+      { id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" },
+    ],
   };
 }
 
@@ -561,7 +574,7 @@ function interactiveForFcuTr(product, tr) {
 function interactiveForFcuCfm(product, cfm) {
   const products = product ? [product] : ["fcu-dmp", "fcu-dcmp"];
   const lines = [];
-  let firstModel = null;
+  const sheetModels = []; // collect models for sheet buttons
 
   for (const pk of products) {
     const res = selectFcuByCfm(pk, cfm);
@@ -570,18 +583,31 @@ function interactiveForFcuCfm(product, cfm) {
     if (res.kind === "toolarge") {
       const big = res.max[0];
       lines.push(`• ${label}: largest is ${big.fullModel} (${big.nomCfm} CFM nom.)`);
-      if (!firstModel) firstModel = big;
+      sheetModels.push(big);
     } else {
+      // Group by nomCfm — show one representative per size, list all variants in text
+      const bySize = {};
       for (const m of res.models) {
-        lines.push(`• ${label} — ${m.fullModel}: ${m.nomCfm} CFM nom. | ${m.cap_tr} TR (${m.cap_kw} kW) @ ${ewt}`);
-        if (!firstModel) firstModel = m;
+        (bySize[m.nomCfm] = bySize[m.nomCfm] || []).push(m);
+      }
+      for (const [nom, ms] of Object.entries(bySize)) {
+        const codes = ms.map(m => m.fullModel).join(", ");
+        lines.push(`• ${label}: ${codes} — ${nom} CFM nom. | ${ms[0].cap_tr} TR (${ms[0].cap_kw} kW) @ ${ewt}`);
+        sheetModels.push(...ms);
       }
     }
   }
 
+  // Build sheet buttons — up to 2 models, leave room for catalogue button
+  const btnModels = sheetModels.slice(0, 2);
+  const buttons = [
+    ...btnModels.map(m => ({ id: `fcu-sheet|${m.fullModel}`, title: `${m.fullModel} Sheet` })),
+    { id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" },
+  ];
+
   return {
-    text: `Fan Coil for ${cfm} CFM:\n\n${lines.join("\n")}\n\nTap for the full catalogue:`,
-    buttons: [{ id: "fileid|1HwmjgIFEpx4QjVphwtO04S7IC4l9dQCo", title: "FCU Catalogue" }],
+    text: `Fan Coil for ${cfm} CFM:\n\n${lines.join("\n")}\n\nTap a model for its datasheet:`,
+    buttons,
   };
 }
 

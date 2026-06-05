@@ -809,6 +809,25 @@ app.post("/webhook", async (req, res) => {
         if (aiHits && aiHits.length >= 1) return await sendFileOptions(from, aiHits, `${docType} — which product?`);
         return await sendText(from, `Sorry, no ${docType} found for "${query}". Please contact us.`);
       }
+      // FCU model sheet: "fcu-sheet|DMP-10" -> find 3-row & 4-row datasheets for that model.
+      if (btnId.startsWith("fcu-sheet|")) {
+        const model = btnId.slice(10); // e.g. "DMP-10"
+        const files = await listFolderFiles();
+        // Normalize model name (DMP-10 -> dmp10) and find files whose name contains it.
+        const norm = (s) => s.toLowerCase().replace(/[\s\-_.]/g, "");
+        const q = norm(model);
+        const hits = files.filter((f) => {
+          const base = norm(f.name.replace(/\.[^.]+$/, ""));
+          // Must start with model prefix AND be in a DMP/DCMP selection folder
+          return base.startsWith(q) && /fcu.*(dmp|dcmp).*select/i.test(f.folder || "");
+        });
+        if (hits.length >= 1) return await sendFileOptions(from, hits, `${model} datasheets (choose coil rows):`);
+        // Fallback: search by name anywhere in Drive if folder filter missed
+        const fallback = files.filter((f) => norm(f.name.replace(/\.[^.]+$/, "")).startsWith(q) && f.name.toLowerCase().endsWith(".pdf"));
+        if (fallback.length >= 1) return await sendFileOptions(from, fallback, `${model} datasheets:`);
+        return await sendText(from, `${model} datasheets not available yet. Contact us for the datasheet.`);
+      }
+
       // Direct file by Drive ID (used by sendFileOptions buttons)
       if (btnId.startsWith("fileid|")) {
         const fileId = btnId.slice(7);
