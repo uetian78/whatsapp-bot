@@ -79,6 +79,9 @@ function driveFileId(link) {
 let fileIndex = { files: [], ts: 0 };
 const FILE_CACHE_MS = 2 * 60 * 1000; // refresh at most every 2 minutes
 
+// Stores numbered-list selections per user so they can reply "1", "2", etc.
+const pendingLists = {}; // { [from]: File[] }
+
 async function listFolderFiles() {
   if (!DRIVE_FOLDER_ID) return [];
   if (Date.now() - fileIndex.ts < FILE_CACHE_MS && fileIndex.files.length) {
@@ -716,6 +719,36 @@ app.get("/webhook", (req, res) => {
   return res.sendStatus(403);
 });
 
+// Clean display name: strip _IOM / _catalogue suffix and extension.
+function displayName(file) {
+  return file.name
+    .replace(/_IOM\.pdf$/i, "")
+    .replace(/_catalogue\.pdf$/i, "")
+    .replace(/\.pdf$/i, "")
+    .trim();
+}
+
+// Send multiple file matches smartly:
+//   1 match  → send it directly
+//   2-3      → WhatsApp reply buttons (tappable)
+//   4+       → numbered text list (user replies "1", "2", …)
+async function sendFileOptions(to, matchedFiles, prompt) {
+  if (matchedFiles.length === 1) return sendDriveFile(to, matchedFiles[0]);
+
+  if (matchedFiles.length <= 3) {
+    const buttons = matchedFiles.map((f) => ({
+      id: `fileid|${f.id}`,
+      title: displayName(f).slice(0, 20),
+    }));
+    return sendButtons(to, prompt || "Which one would you like?", buttons);
+  }
+
+  // 4+ options: numbered list stored for next reply
+  pendingLists[to] = matchedFiles;
+  const list = matchedFiles.map((f, i) => `${i + 1}. ${displayName(f)}`).join("\n");
+  return sendText(to, `${prompt || "I found several matches:"}\n\n${list}\n\nReply with a number to get the file.`);
+}
+
 // ============================================================
 //  WEBHOOK RECEIVER
 // ============================================================
@@ -766,11 +799,31 @@ app.post("/webhook", async (req, res) => {
           `The ${action.fileName} data sheet isn't available yet. Please check back soon or contact us.`
         );
       }
+      // Direct file by Drive ID (used by sendFileOptions buttons)
+      if (btnId.startsWith("fileid|")) {
+        const fileId = btnId.slice(7);
+        const files = await listFolderFiles();
+        const file = files.find((f) => f.id === fileId);
+        if (file) return await sendDriveFile(from, file);
+        return await sendText(from, "Sorry, that file isn't available right now. Please try again.");
+      }
       return; // unknown button
     }
 
     if (message.type !== "text") return;
-    const text = message.text.body;
+    const text = message.text.body.trim();
+
+    // Numeric reply to a pending numbered list ("1", "2", etc.)
+    if (/^\d+$/.test(text) && pendingLists[from]) {
+      const idx = parseInt(text, 10) - 1;
+      const list = pendingLists[from];
+      delete pendingLists[from];
+      if (idx >= 0 && idx < list.length) {
+        console.log(`🔢 ${from} selected #${idx + 1}: ${list[idx].name}`);
+        return await sendDriveFile(from, list[idx]);
+      }
+      return await sendText(from, `Please reply with a number between 1 and ${list.length}.`);
+    }
 
     const { rules, knowledge, allowed } = await loadSheet();
 
@@ -922,11 +975,7 @@ app.post("/webhook", async (req, res) => {
     // 2) Exact filename search (fast, free) — works for codes & names.
     const hits = findFilesByName(text, searchFiles);
     console.log(`🔎 Folder search "${text}" [${mentionedDocType || "all"}]: ${hits.length} hit(s)`);
-    if (hits.length === 1) return await sendDriveFile(from, hits[0]);
-    if (hits.length > 1 && hits.length <= 8) {
-      const list = hits.map((f) => `• ${f.name.replace(/\.[^.]+$/, "")}`).join("\n");
-      return await sendText(from, `I found a few matches — reply with the exact one:\n${list}`);
-    }
+    if (hits.length >= 1) return await sendFileOptions(from, hits, "I found a few matches:");
 
     // Classify the message: is it asking for a PRODUCT, or a general QUESTION?
     const isKnowledgeQuestion =
@@ -937,13 +986,9 @@ app.post("/webhook", async (req, res) => {
     //    Pass only the doc-type-filtered file list so AI never suggests wrong type.
     if (!isKnowledgeQuestion) {
       const aiHits = await aiMatchFile(text, searchFiles);
-      if (aiHits && aiHits.length === 1) {
-        console.log(`🤖 AI matched "${text}" -> ${aiHits[0].name}`);
-        return await sendDriveFile(from, aiHits[0]);
-      }
-      if (aiHits && aiHits.length > 1 && aiHits.length <= 8) {
-        const list = aiHits.map((f) => `• ${f.name.replace(/\.[^.]+$/, "")}`).join("\n");
-        return await sendText(from, `Did you mean one of these? Reply with the exact one:\n${list}`);
+      if (aiHits && aiHits.length >= 1) {
+        console.log(`🤖 AI matched "${text}" -> ${aiHits.map(f => f.name).join(", ")}`);
+        return await sendFileOptions(from, aiHits, "Did you mean one of these?");
       }
     }
 
