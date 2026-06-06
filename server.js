@@ -342,14 +342,10 @@ function suggestionMessage(text, rules) {
   const near = closestKeywords(text, rules);
   if (near.length) {
     const list = near.map((k) => `• ${k.toUpperCase()}`).join("\n");
-    return `I didn't find an exact match for "${text}". Did you mean one of these? Reply with the code:\n${list}`;
+    return `I couldn't find an exact match for "${text}". Here are the closest documents I have:\n${list}\n\nReply with a keyword above, or email hassan.saleem@mannai.com.qa if you need something else.`;
   }
-  // nothing close: list all document keywords as a menu
-  const all = rules
-    .filter((r) => r.matchType !== "exact" && r.type === "document")
-    .map((r) => `• ${r.keywords[0].toUpperCase()}`)
-    .join("\n");
-  return `I couldn't match that. Here are the catalogues you can request — reply with a code:\n${all}`;
+  // nothing close at all -> standard apology
+  return NOT_FOUND_MSG;
 }
 
 // ============================================================
@@ -1057,8 +1053,8 @@ app.post("/webhook", async (req, res) => {
       return await sendText(from, aiReply);
     }
 
-    // 5) Nothing matched -> standard apology message
-    await sendText(from, NOT_FOUND_MSG);
+    // 5) Nothing matched -> show closest documents if any, otherwise standard apology
+    await sendText(from, suggestionMessage(text, rules));
   } catch (err) {
     console.error("Handler error:", err.message);
   }
