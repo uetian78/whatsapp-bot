@@ -94,7 +94,10 @@ async function listFolderFiles() {
   // Track each folder's name so we know which folder a file lives in
   // (e.g. "Catalogue", "IOM", "Datasheets"). The parent folder itself
   // is recorded under its own name too.
-  const folderNames = { [DRIVE_FOLDER_ID]: "(root)" };
+  // folderPaths stores the FULL path for each folder id, e.g.
+  // "Catalogues/Hisense VRF" — so a file inside a brand sub-folder still
+  // inherits the "Catalogues" ancestor and passes the doc-type filter.
+  const folderPaths = { [DRIVE_FOLDER_ID]: "(root)" };
   const toVisit = [DRIVE_FOLDER_ID];
   let foldersVisited = 0;
 
@@ -113,11 +116,13 @@ async function listFolderFiles() {
       });
       for (const f of res.data.files || []) {
         if (f.mimeType === "application/vnd.google-apps.folder") {
-          console.log(`   ↳ subfolder found: ${f.name} (${f.id})`);
-          folderNames[f.id] = f.name; // remember its name
-          toVisit.push(f.id); // recurse into subfolders
+          // Build full path so nested folders inherit their ancestors' names
+          const parentPath = folderPaths[folderId] || "(root)";
+          folderPaths[f.id] = parentPath === "(root)" ? f.name : `${parentPath}/${f.name}`;
+          console.log(`   ↳ subfolder found: ${folderPaths[f.id]} (${f.id})`);
+          toVisit.push(f.id);
         } else if (f.mimeType === "application/pdf" || /\.(pdf|png|jpe?g)$/i.test(f.name)) {
-          collected.push({ id: f.id, name: f.name, folder: folderNames[folderId] || "(root)" });
+          collected.push({ id: f.id, name: f.name, folder: folderPaths[folderId] || "(root)" });
         }
       }
       pageToken = res.data.nextPageToken;
@@ -154,11 +159,13 @@ function docTypeFromFilename(filename) {
   return null;
 }
 
-// docType is "Catalogue" or "IOM". Match by folder name OR filename suffix.
-function folderMatchesDocType(folderName, docType) {
-  const f = (folderName || "").toLowerCase().trim();
-  if (docType === "Catalogue") return /^catalogues?$/.test(f) || /^catalog$/.test(f);
-  if (docType === "IOM") return /^ioms?$/.test(f);
+// docType is "Catalogue" or "IOM". Match by folder path (any segment), not just
+// the immediate parent — so files in "Catalogues/Hisense VRF/" still count as Catalogues.
+function folderMatchesDocType(folderPath, docType) {
+  // Split full path (e.g. "Catalogues/Hisense VRF") and check each segment.
+  const segments = (folderPath || "").split("/").map((s) => s.toLowerCase().trim());
+  if (docType === "Catalogue") return segments.some((s) => /^catalogues?$/.test(s) || /^catalog$/.test(s));
+  if (docType === "IOM") return segments.some((s) => /^ioms?$/.test(s));
   return false;
 }
 
