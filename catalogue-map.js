@@ -73,7 +73,7 @@ const CATALOGUE_MAP = [
   {
     name: "APMR-A",
     aliases: ["apmr-a", "apmra", "apmr a"],
-    catalogue: "APMR-A_catalogue.pdf",
+    catalogue: "APMR-A. 2025_catalogue.pdf",
     iom: "APMRA 2025 IOM_IOM.pdf",
   },
   {
@@ -243,19 +243,19 @@ const CATALOGUE_MAP = [
   {
     name: "FCU",
     aliases: ["fcu", "skm fcu", "skmfcu", "fan coil", "fan coil unit"],
-    catalogue: "FCU Catalogue_catalogue.pdf",
+    catalogue: "FCU DMP DCMP _catalogue.pdf",
     iom: "FCU_IOM.pdf",
   },
   {
     name: "FCU Hi-Static",
     aliases: ["fcu hi-static", "fcu hi static", "hi-static fcu", "hi static fcu", "high static fcu"],
-    catalogue: "FCU_Hi-Static_catalogue.pdf",
+    catalogue: "FCU_Hi-Static DYP DCYP_catalogue.pdf",
     iom: null,
   },
   {
     name: "FCU Hi-Static EC",
     aliases: ["fcu hi-static ec", "fcu hi static ec", "hi-static ec", "ec fcu"],
-    catalogue: "FCU_Hi-Static EC_catalogue.pdf",
+    catalogue: "FCU_Hi-Static DYP DCYP EC_catalogue.pdf",
     iom: null,
   },
 
