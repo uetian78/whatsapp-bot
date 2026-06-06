@@ -12,6 +12,7 @@ const Anthropic = require("@anthropic-ai/sdk");
 const FormData = require("form-data");
 const { buildSelectionReply, buildSelectionInteractive, handleButtonTap, interpretCode, parseSeriesRequest, seriesMenu, parseDatasheetRequest, datasheetMenu, detectDocType } = require("./products.js");
 const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSeries, datasheetCondition } = require("./catalogue-map.js");
+const { findBrandDocs } = require("./brand-docs.js");
 require("dotenv").config();
 
 const app = express();
@@ -1019,6 +1020,25 @@ app.post("/webhook", async (req, res) => {
     // Classify the message: is it asking for a PRODUCT, or a general QUESTION?
     const isKnowledgeQuestion =
       /\b(hours|open|close|deliver|delivery|price|cost|warranty|install|contact|email|phone|location|address|about|who are you|what do you)\b/i.test(text);
+
+    // 2b) Brand-docs map lookup — direct keyword→filename match, no AI needed.
+    //     Covers third-party brands (Hisense, Daikin, etc.) and any doc added to brand-docs.js.
+    if (!hits.length) {
+      const brandMatches = findBrandDocs(text, mentionedDocType);
+      if (brandMatches.length) {
+        // Resolve each matched filename against the Drive file index
+        const norm = (s) => s.toLowerCase().replace(/[\s\-_.]/g, "");
+        const resolved = [];
+        for (const { entry, file } of brandMatches) {
+          const found = files.find((f) => norm(f.name) === norm(file.filename));
+          if (found) resolved.push(found);
+        }
+        if (resolved.length === 1) return await sendDriveFile(from, resolved[0]);
+        if (resolved.length > 1) return await sendFileOptions(from, resolved, "Here are the matching documents:");
+        // filename listed in brand-docs.js but not yet on Drive
+        return await sendText(from, NOT_FOUND_MSG);
+      }
+    }
 
     // 3) Product-ish request that filename search missed -> AI matches by meaning
     //    (e.g. "AHU IOM" / "air handling unit" / "do you have the fresh air unit").
