@@ -1025,13 +1025,21 @@ app.post("/webhook", async (req, res) => {
     //     Covers third-party brands (Hisense, Daikin, etc.) and any doc added to brand-docs.js.
     if (!hits.length) {
       const brandMatches = findBrandDocs(text, mentionedDocType);
+      console.log(`📚 brand-docs lookup "${text}" [${mentionedDocType || "all"}]: ${brandMatches.length} match(es)`);
       if (brandMatches.length) {
-        // Resolve each matched filename against the Drive file index
-        const norm = (s) => s.toLowerCase().replace(/[\s\-_.]/g, "");
+        // Resolve each matched filename against the Drive file index.
+        // Use flexible matching: strip extension + separators, then check if
+        // one normalized string contains the other (handles extra year/suffix in filename).
+        const normStr = (s) => (s || "").toLowerCase().replace(/\.[^.]+$/, "").replace(/[\s\-_.]/g, "");
         const resolved = [];
         for (const { entry, file } of brandMatches) {
-          const found = files.find((f) => norm(f.name) === norm(file.filename));
+          const needle = normStr(file.filename);
+          const found = files.find((f) => {
+            const hay = normStr(f.name);
+            return hay === needle || hay.includes(needle) || needle.includes(hay);
+          });
           if (found) resolved.push(found);
+          else console.log(`⚠️  brand-docs: "${file.filename}" not found in Drive index`);
         }
         if (resolved.length === 1) return await sendDriveFile(from, resolved[0]);
         if (resolved.length > 1) return await sendFileOptions(from, resolved, "Here are the matching documents:");
