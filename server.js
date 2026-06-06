@@ -1096,4 +1096,25 @@ app.post("/webhook", async (req, res) => {
 });
 
 app.get("/", (_, res) => res.send("WhatsApp AI bot running ✅"));
+
+// Temporary: list all indexed Drive files so we can update brand-docs.js
+app.get("/drive-index", async (_, res) => {
+  try {
+    const files = await listFolderFiles();
+    const grouped = {};
+    for (const f of files) {
+      if (!grouped[f.folder]) grouped[f.folder] = [];
+      grouped[f.folder].push(f.name);
+    }
+    let out = `Total: ${files.length} files\n\n`;
+    for (const [folder, names] of Object.entries(grouped).sort()) {
+      out += `📁 ${folder}\n`;
+      for (const n of names.sort()) out += `   ${n}\n`;
+      out += "\n";
+    }
+    res.type("text/plain").send(out);
+  } catch (e) {
+    res.status(500).send("Error: " + e.message);
+  }
+});
 app.listen(PORT, () => console.log(`🚀 Listening on ${PORT}`));

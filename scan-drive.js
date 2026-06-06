@@ -1,25 +1,30 @@
-// Run: node scan-drive.js path/to/sa.json
+// Run: node scan-drive.js
 // Lists every file in the HVACBOT Drive folder grouped by subfolder.
 // Use this output to update brand-docs.js with new or changed files.
 
 const fs = require("fs");
-const path = require("path");
 const { google } = require("googleapis");
 
 async function main() {
-  const keyFile = process.argv[2];
-  if (!keyFile) { console.error("Usage: node scan-drive.js path/to/sa.json"); process.exit(1); }
-
   const env = fs.readFileSync(".env", "utf8");
+
+  // Read DRIVE_FOLDER_ID
   const rootMatch = env.match(/DRIVE_FOLDER_ID=([^\r\n]+)/);
   if (!rootMatch) { console.error("DRIVE_FOLDER_ID not found in .env"); process.exit(1); }
   const rootId = rootMatch[1].trim();
 
-  const creds = JSON.parse(fs.readFileSync(keyFile, "utf8"));
+  // Read GOOGLE_SERVICE_ACCOUNT_JSON (stored as outer-quoted JSON string in .env)
+  const idx = env.indexOf("GOOGLE_SERVICE_ACCOUNT_JSON=");
+  if (idx === -1) { console.error("GOOGLE_SERVICE_ACCOUNT_JSON not found in .env"); process.exit(1); }
+  const rest = env.substring(idx + "GOOGLE_SERVICE_ACCOUNT_JSON=".length);
+  const match = rest.match(/^"([\s\S]+?)"\s*\n/);
+  if (!match) { console.error("Could not parse GOOGLE_SERVICE_ACCOUNT_JSON"); process.exit(1); }
+  const creds = JSON.parse(JSON.parse('"' + match[1] + '"'));
+
   const auth = new google.auth.GoogleAuth({ credentials: creds, scopes: ["https://www.googleapis.com/auth/drive.readonly"] });
   const drive = google.drive({ version: "v3", auth });
 
-  const folderNames = { [rootId]: "(root)" };
+  const folderPaths = { [rootId]: "(root)" };
   const toVisit = [rootId];
   const allFiles = [];
 
@@ -37,10 +42,11 @@ async function main() {
       });
       for (const f of res.data.files || []) {
         if (f.mimeType === "application/vnd.google-apps.folder") {
-          folderNames[f.id] = f.name;
+          const parentPath = folderPaths[folderId] || "(root)";
+          folderPaths[f.id] = parentPath === "(root)" ? f.name : `${parentPath}/${f.name}`;
           toVisit.push(f.id);
         } else {
-          allFiles.push({ folder: folderNames[folderId] || "?", name: f.name, id: f.id });
+          allFiles.push({ folder: folderPaths[folderId] || "(root)", name: f.name, id: f.id });
         }
       }
       pageToken = res.data.nextPageToken;
@@ -57,7 +63,6 @@ async function main() {
       lastFolder = f.folder;
     }
     console.log(`   ${f.name}`);
-    console.log(`      ID: ${f.id}`);
   }
   console.log(`\nTotal: ${allFiles.length} files\n`);
 }
