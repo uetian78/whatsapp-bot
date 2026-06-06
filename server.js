@@ -1,4 +1,4 @@
-// ============================================================
+﻿// ============================================================
 //  WhatsApp Auto-Responder + Claude Haiku AI Fallback
 //  - Google Sheet = control panel (rules + AI knowledge)
 //  - Keyword rules answer common questions for FREE
@@ -335,6 +335,8 @@ function closestKeywords(text, rules, limit = 5) {
   return out;
 }
 
+const NOT_FOUND_MSG = "Apologies - I cannot find the required document; kindly email us at hassan.saleem@mannai.com.qa to get required document";
+
 // Build a friendly "did you mean" message, or a full menu if nothing is close.
 function suggestionMessage(text, rules) {
   const near = closestKeywords(text, rules);
@@ -393,8 +395,9 @@ async function aiMatchFile(text, files) {
   // Give Claude the list of filenames (without extension) to choose from.
   const list = files.map((f, i) => `${i + 1}. ${f.name.replace(/\.[^.]+$/, "")}`).join("\n");
 
-  const system = `You match a customer's request to ONE product catalogue file from a list.
-These are SKM HVAC catalogues. Use your knowledge of HVAC abbreviations:
+  const system = `You match a customer's request to ONE or more HVAC product files from a list.
+The list may include SKM brand files as well as third-party brand catalogues (Hisense, Daikin, Mitsubishi, Trane, Carrier, etc.).
+Use your knowledge of HVAC abbreviations and brand names:
 - MAH = Modular Air Handling Unit (AHU)
 - CAH = Comfort Air Handling Unit (AHU)
 - FCU = Fan Coil Unit
@@ -404,6 +407,8 @@ These are SKM HVAC catalogues. Use your knowledge of HVAC abbreviations:
 - ACMR = Air-Cooled Scroll Chiller
 - PAC4A = 100% Fresh Air Packaged Unit (DOAS)
 - PAC4A 5xxxx = a specific PAC4A unit selection sheet
+- VRF / VRV = Variable Refrigerant Flow/Volume multi-split system
+- Also match third-party brand names directly (e.g. "Hisense VRF" matches any file with "Hisense" and "VRF" in the name)
 
 Reply with ONLY the number of the single best matching file.
 If several are equally valid (e.g. user said "chiller" and there are several), reply with their numbers separated by commas.
@@ -658,7 +663,7 @@ async function sendDriveFile(to, file) {
     });
   } catch (err) {
     console.error("❌ Drive file send error:", err.response?.data || err.message);
-    return sendText(to, `Sorry, I couldn't fetch ${niceName} right now. Please try again or contact us.`);
+    return sendText(to, `NOT_FOUND_MSG`);
   }
 }
 
@@ -676,7 +681,7 @@ async function sendRule(to, rule) {
       console.error("❌ Document upload error:", err.response?.data || err.message);
       return sendText(
         to,
-        `Sorry, I couldn't fetch that file right now. Please contact us directly.`
+        `NOT_FOUND_MSG`
       );
     }
   }
@@ -776,7 +781,7 @@ app.post("/webhook", async (req, res) => {
         if (file) return await sendDriveFile(from, file);
         return await sendText(
           from,
-          `The ${action.series} ${action.docType} isn't available yet. Please check back soon or contact us.`
+          `NOT_FOUND_MSG`
         );
       }
       // Datasheet condition chosen (T1/T3) -> fetch that exact file by ID.
@@ -786,7 +791,7 @@ app.post("/webhook", async (req, res) => {
         if (file) return await sendDriveFile(from, file);
         return await sendText(
           from,
-          `Sorry, that datasheet isn't available right now. Please try again or contact us.`
+          `NOT_FOUND_MSG`
         );
       }
       if (action?.type === "sheet") {
@@ -805,7 +810,7 @@ app.post("/webhook", async (req, res) => {
         if (hits.length >= 1) return await sendDriveFile(from, hits[0]);
         return await sendText(
           from,
-          `The ${action.fileName} data sheet isn't available yet. Please check back soon or contact us.`
+          `NOT_FOUND_MSG`
         );
       }
       // Doc-type choice button: "doctype|IOM|<query>" or "doctype|Catalogue|<query>"
@@ -816,7 +821,7 @@ app.post("/webhook", async (req, res) => {
         const filtered = files.filter((f) => fileMatchesDocType(f, docType));
         const aiHits = await aiMatchFile(query, filtered);
         if (aiHits && aiHits.length >= 1) return await sendFileOptions(from, aiHits, `${docType} — which product?`);
-        return await sendText(from, `Sorry, no ${docType} found for "${query}". Please contact us.`);
+        return await sendText(from, `NOT_FOUND_MSG`);
       }
       // FCU model sheet: "fcu-sheet|DMP-10" -> find 3-row & 4-row datasheets for that model.
       if (btnId.startsWith("fcu-sheet|")) {
@@ -834,7 +839,7 @@ app.post("/webhook", async (req, res) => {
         // Fallback: search by name anywhere in Drive if folder filter missed
         const fallback = files.filter((f) => norm(f.name.replace(/\.[^.]+$/, "")).startsWith(q) && f.name.toLowerCase().endsWith(".pdf"));
         if (fallback.length >= 1) return await sendFileOptions(from, fallback, `${model} datasheets:`);
-        return await sendText(from, `${model} datasheets not available yet. Contact us for the datasheet.`);
+        return await sendText(from, `NOT_FOUND_MSG`);
       }
 
       // Direct file by Drive ID (used by sendFileOptions buttons)
@@ -843,7 +848,7 @@ app.post("/webhook", async (req, res) => {
         const files = await listFolderFiles();
         const file = files.find((f) => f.id === fileId);
         if (file) return await sendDriveFile(from, file);
-        return await sendText(from, "Sorry, that file isn't available right now. Please try again.");
+        return await sendText(from, "NOT_FOUND_MSG");
       }
       return; // unknown button
     }
@@ -885,7 +890,7 @@ app.post("/webhook", async (req, res) => {
       if (!matches.length) {
         return await sendText(
           from,
-          `I couldn't find a datasheet for ${dsReq.series} ${dsReq.code}. Please check the model number or contact us.`
+          `NOT_FOUND_MSG`
         );
       }
 
@@ -932,7 +937,7 @@ app.post("/webhook", async (req, res) => {
           if (file) return await sendDriveFile(from, file);
           return await sendText(
             from,
-            `The ${menu.only.series} ${menu.only.docType} isn't available yet. Please check back soon or contact us.`
+            `NOT_FOUND_MSG`
           );
         }
         // No buttons (nothing on file) -> just send the text.
@@ -949,7 +954,7 @@ app.post("/webhook", async (req, res) => {
       if (file) return await sendDriveFile(from, file);
       return await sendText(
         from,
-        `The ${seriesReq.series} ${seriesReq.docType} isn't available yet. Please check back soon or contact us.`
+        `NOT_FOUND_MSG`
       );
     }
 
@@ -1052,8 +1057,8 @@ app.post("/webhook", async (req, res) => {
       return await sendText(from, aiReply);
     }
 
-    // 5) Nothing matched -> suggestion menu
-    await sendText(from, suggestionMessage(text, rules));
+    // 5) Nothing matched -> standard apology message
+    await sendText(from, NOT_FOUND_MSG);
   } catch (err) {
     console.error("Handler error:", err.message);
   }
