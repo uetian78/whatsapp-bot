@@ -836,9 +836,9 @@ async function runAndSendAnalysis(from, params) {
 
 // Handle an image sent during a psychro session
 async function handlePsychroImage(from, mediaId) {
-  delete pendingPsychro[from]; // session complete after image
+  delete pendingPsychro[from];
 
-  await sendText(from, "📷 Image received — reading data with AI...");
+  await sendText(from, "📷 Image received — reading all values with AI...");
 
   let b64, mime;
   try {
@@ -848,35 +848,42 @@ async function handlePsychroImage(from, mediaId) {
     return sendText(from, "❌ Could not download the image. Please try again.");
   }
 
-  // Ask Claude Vision to extract the psychrometric values
+  // Use Claude Sonnet for better vision accuracy on datasheets
   let extracted;
   try {
     const msg = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 400,
+      model: "claude-sonnet-4-5-20251001",
+      max_tokens: 800,
       messages: [{
         role: "user",
         content: [
-          {
-            type: "image",
-            source: { type: "base64", media_type: mime, data: b64 },
-          },
+          { type: "image", source: { type: "base64", media_type: mime, data: b64 } },
           {
             type: "text",
-            text: `Extract HVAC psychrometric data from this image.
-Return ONLY a JSON object with these keys (use null if not found):
+            text: `You are reading an HVAC equipment schedule, selection sheet, or datasheet image.
+
+Extract every value you can find and return ONLY a JSON object. Use null for any value not found.
+
 {
-  "db1": on-coil dry-bulb temperature (number),
-  "wb1": on-coil wet-bulb temperature (number),
-  "db2": off-coil dry-bulb temperature (number),
-  "wb2": off-coil wet-bulb temperature (number),
-  "cfm": airflow in CFM (number),
-  "unit": "F" or "C",
+  "db1": on-coil / entering dry-bulb temperature (number),
+  "wb1": on-coil / entering wet-bulb temperature (number),
+  "db2": off-coil / leaving dry-bulb temperature (number),
+  "wb2": off-coil / leaving wet-bulb temperature (number),
+  "temp_unit": "F" or "C",
+  "cfm": supply airflow (number),
+  "ls": airflow in L/s if shown (number or null),
   "tc": total cooling capacity (number or null),
   "sc": sensible cooling capacity (number or null),
-  "cap_unit": "MBH" or "kW" or null
+  "lc": latent cooling capacity (number or null),
+  "shr": sensible heat ratio (number or null),
+  "kw_input": power input kW (number or null),
+  "eer": EER value (number or null),
+  "cap_unit": "MBH" or "kW" or "TR" or "Btu/h",
+  "model": equipment model number (string or null),
+  "notes": any important notes or flags visible (string or null)
 }
-No explanation. JSON only.`,
+
+Be thorough — read every number on the image carefully. JSON only, no explanation.`,
           },
         ],
       }],
@@ -887,44 +894,121 @@ No explanation. JSON only.`,
     extracted = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
   } catch (err) {
     console.error("❌ Vision error:", err.message);
-    return sendText(from, "❌ Could not read the image. Please type the values manually or send a clearer image.\n\nExample: `on-coil 80/67, off-coil 55/54, 3000 CFM`");
+    return sendText(from, "❌ Could not read the image. Please send a clearer photo or type values manually.\n\nExample: `on-coil 80/67, off-coil 55/54, 3000 CFM`");
   }
 
   if (!extracted || extracted.db1 == null || extracted.wb1 == null ||
-      extracted.db2 == null || extracted.wb2 == null || extracted.cfm == null) {
+      extracted.db2 == null || extracted.wb2 == null ||
+      (extracted.cfm == null && extracted.ls == null)) {
     return sendText(from,
-      "⚠️ Could not extract all required values from the image.\n\n" +
-      "Please type the values manually:\n`on-coil DB/WB, off-coil DB/WB, airflow CFM`\n" +
-      "Example: `on-coil 80/67, off-coil 55/54, 3000 CFM`\n\n" +
+      "⚠️ Could not read all required values (on-coil, off-coil, airflow) from the image.\n\n" +
+      "Please ensure the image shows entering/leaving conditions and airflow clearly, " +
+      "or type values manually:\n`on-coil 80/67, off-coil 55/54, 3000 CFM`\n\n" +
       "_(Type *analysis* to start again)_"
     );
   }
 
-  // Convert °C to °F if needed
-  let { db1, wb1, db2, wb2, cfm, unit, tc, sc, cap_unit } = extracted;
-  if (unit === "C") {
+  // ── Normalise units to °F and MBH ───────────────────────────
+  let { db1, wb1, db2, wb2, temp_unit, cfm, ls,
+        tc, sc, lc, shr, kw_input, eer, cap_unit, model, notes } = extracted;
+
+  if (temp_unit === "C") {
     db1 = c2f(db1); wb1 = c2f(wb1);
     db2 = c2f(db2); wb2 = c2f(wb2);
   }
-  // Convert kW capacity to MBH if needed
-  let tcGiven = tc, scGiven = sc;
-  if (cap_unit === "kW") {
-    if (tcGiven) tcGiven = tcGiven / 0.293071;
-    if (scGiven) scGiven = scGiven / 0.293071;
+  if (!cfm && ls) cfm = ls / 0.471947;
+
+  // Normalise capacity to MBH
+  const toMbh = (v) => {
+    if (v == null) return null;
+    if (cap_unit === "kW")   return v / 0.293071;
+    if (cap_unit === "TR")   return v * 12;
+    if (cap_unit === "Btu/h") return v / 1000;
+    return v; // already MBH
+  };
+  const tcMbh = toMbh(tc);
+  const scMbh = toMbh(sc);
+  const lcMbh = toMbh(lc);
+
+  // ── Show what was read ───────────────────────────────────────
+  const uLabel = temp_unit === "C" ? "°C" : "°F";
+  let readMsg = `*📋 Values read from image:*\n`;
+  if (model)    readMsg += `• Model: ${model}\n`;
+  readMsg += `• On-coil:  DB ${extracted.db1}${uLabel} / WB ${extracted.wb1}${uLabel}\n`;
+  readMsg += `• Off-coil: DB ${extracted.db2}${uLabel} / WB ${extracted.wb2}${uLabel}\n`;
+  readMsg += `• Airflow:  ${extracted.cfm ? extracted.cfm.toLocaleString() + " CFM" : extracted.ls + " L/s"}\n`;
+  if (tc != null) readMsg += `• Total cap (given):   ${tc} ${cap_unit}\n`;
+  if (sc != null) readMsg += `• Sensible cap (given): ${sc} ${cap_unit}\n`;
+  if (lc != null) readMsg += `• Latent cap (given):  ${lc} ${cap_unit}\n`;
+  if (shr != null) readMsg += `• SHR (given): ${shr}\n`;
+  if (kw_input != null) readMsg += `• Power input: ${kw_input} kW\n`;
+  if (eer != null) readMsg += `• EER (given): ${eer}\n`;
+  if (notes) readMsg += `• Notes: ${notes}\n`;
+  readMsg += `\n_Calculating..._`;
+
+  await sendText(from, readMsg);
+
+  // ── Run calculations ─────────────────────────────────────────
+  let result;
+  try {
+    result = analyze({ db1, wb1, db2, wb2, cfm, tcGiven: tcMbh, scGiven: scMbh });
+  } catch (err) {
+    console.error("❌ Analysis error:", err.message);
+    return sendText(from, "❌ Calculation failed. Please check the values and try again.");
   }
 
-  console.log(`🌡️ Psychro from image: DB${db1}/WB${wb1} → DB${db2}/WB${wb2}, ${cfm} CFM`);
-  await sendText(from,
-    `✅ *Extracted from image:*\n` +
-    `• On-coil: DB ${extracted.db1}${unit === "C" ? "°C" : "°F"} / WB ${extracted.wb1}${unit === "C" ? "°C" : "°F"}\n` +
-    `• Off-coil: DB ${extracted.db2}${unit === "C" ? "°C" : "°F"} / WB ${extracted.wb2}${unit === "C" ? "°C" : "°F"}\n` +
-    `• Airflow: ${extracted.cfm.toLocaleString()} CFM\n` +
-    (tc ? `• Total cap: ${tc} ${cap_unit || "MBH"}\n` : "") +
-    (sc ? `• Sensible cap: ${sc} ${cap_unit || "MBH"}\n` : "") +
-    `\nCalculating...`
-  );
+  // ── Full psychro analysis ────────────────────────────────────
+  await sendText(from, formatAnalysis(result));
 
-  await runAndSendAnalysis(from, { db1, wb1, db2, wb2, cfm, tcGiven, scGiven });
+  // ── Verification: check given vs calculated ──────────────────
+  const TOL = 5; // % tolerance for "correct"
+  let vMsg = `\n*🔍 VERIFICATION — Given vs Calculated*\n${"─".repeat(30)}\n`;
+  let hasIssue = false;
+
+  const check = (label, given, calc, unit) => {
+    if (given == null || calc == null) return;
+    const err = Math.abs((calc - given) / given) * 100;
+    const ok = err <= TOL;
+    if (!ok) hasIssue = true;
+    const sign = calc > given ? "+" : "";
+    vMsg += `${ok ? "✅" : "❌"} *${label}*\n`;
+    vMsg += `   Given: ${given.toFixed(1)} ${unit}  |  Calc: ${calc.toFixed(1)} ${unit}  |  Diff: ${sign}${(calc - given).toFixed(1)} (${sign}${err.toFixed(1)}%)\n`;
+  };
+
+  check("Total Cooling Capacity", tcMbh, result.tc, "MBH");
+  check("Sensible Capacity",      scMbh, result.sc, "MBH");
+  check("Latent Capacity",        lcMbh, result.lat, "MBH");
+
+  // SHR check
+  if (shr != null) {
+    const shrErr = Math.abs(result.shr - shr);
+    const shrOk = shrErr <= 0.05;
+    if (!shrOk) hasIssue = true;
+    vMsg += `${shrOk ? "✅" : "❌"} *SHR*\n`;
+    vMsg += `   Given: ${shr.toFixed(2)}  |  Calc: ${result.shr.toFixed(2)}  |  Diff: ${(result.shr - shr).toFixed(3)}\n`;
+  }
+
+  // EER check (calculated from TC and kW_input if available)
+  if (eer != null && kw_input != null) {
+    const eerCalc = (result.tc * 1000) / (kw_input * 3412);
+    const eerErr  = Math.abs((eerCalc - eer) / eer) * 100;
+    const eerOk   = eerErr <= TOL;
+    if (!eerOk) hasIssue = true;
+    vMsg += `${eerOk ? "✅" : "❌"} *EER*\n`;
+    vMsg += `   Given: ${eer.toFixed(2)}  |  Calc: ${eerCalc.toFixed(2)}  |  Diff: ${(eerCalc - eer > 0 ? "+" : "")}${(eerCalc - eer).toFixed(2)}\n`;
+  }
+
+  if (!tcMbh && !scMbh && shr == null) {
+    vMsg += `_No capacity values found in image to verify against._\n`;
+  } else {
+    vMsg += `\n${hasIssue
+      ? "⚠️ *Some values differ by more than 5% — review the datasheet.*"
+      : "✅ *All given values match calculated results within 5% tolerance.*"}`;
+  }
+  vMsg += `\n\n_Tolerance: ±5%. Calculations at sea level (14.696 psia)._`;
+
+  await sendText(from, vMsg);
+  console.log(`🌡️ Psychro image analysis done for ${from}`);
 }
 
 // Handle text step in psychro session
