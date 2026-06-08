@@ -14,6 +14,7 @@ const { buildSelectionReply, buildSelectionInteractive, handleButtonTap, interpr
 const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSeries, datasheetCondition } = require("./catalogue-map.js");
 const { findBrandDocs } = require("./brand-docs.js");
 const { generateMtzPdf } = require("./mtz-pdf.js");
+const { analyze, formatAnalysis, c2f, f2c } = require("./psychro-engine.js");
 require("dotenv").config();
 
 const app = express();
@@ -88,6 +89,11 @@ const pendingLists = {}; // { [from]: File[] }
 // { step, reqTC, db, wb, amb, airflow, project, tag, ts }
 const pendingMtz = {};  // { [from]: object }
 const MTZ_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+// Stores psychrometric analysis sessions per user.
+// { step, db1, wb1, db2, wb2, cfm, tcGiven, scGiven, ts }
+const pendingPsychro = {}; // { [from]: object }
+const PSYCHRO_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 async function listFolderFiles() {
   if (!DRIVE_FOLDER_ID) return [];
@@ -765,6 +771,267 @@ async function sendFileOptions(to, matchedFiles, prompt) {
 }
 
 // ============================================================
+//  PSYCHROMETRIC ANALYSIS HANDLER
+// ============================================================
+
+// Download a WhatsApp media item and return a base64 string + mime type.
+async function downloadWhatsAppMedia(mediaId) {
+  const metaRes = await axios.get(
+    `https://graph.facebook.com/v21.0/${mediaId}`,
+    { headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` } }
+  );
+  const url = metaRes.data.url;
+  const mediaRes = await axios.get(url, {
+    responseType: "arraybuffer",
+    headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` },
+  });
+  const mime = mediaRes.headers["content-type"] || "image/jpeg";
+  const b64  = Buffer.from(mediaRes.data).toString("base64");
+  return { b64, mime };
+}
+
+// Parse inline text input: "on-coil 80/67, off-coil 55/54, 3000 CFM"
+// Also handles step-by-step single-value replies.
+function parsePsychroText(text) {
+  const t = text.toLowerCase();
+  const nums = [...text.matchAll(/([\d.]+)/g)].map(m => parseFloat(m[1]));
+
+  // Try to find labelled values
+  const onMatch  = t.match(/on.?coil\s+([\d.]+)\s*[\/\s,]\s*([\d.]+)/);
+  const offMatch = t.match(/off.?coil\s+([\d.]+)\s*[\/\s,]\s*([\d.]+)/);
+  const cfmMatch = t.match(/([\d,]+)\s*cfm/);
+  const lsMatch  = t.match(/([\d.]+)\s*l\/s/);
+  const tcMatch  = t.match(/tc[:\s]*([\d.]+)|total[:\s]*([\d.]+)\s*(?:mbh|kw|mbtu)/i);
+  const scMatch  = t.match(/sc[:\s]*([\d.]+)|sensible[:\s]*([\d.]+)\s*(?:mbh|kw|mbtu)/i);
+
+  const result = {};
+  if (onMatch)  { result.db1 = parseFloat(onMatch[1]);  result.wb1 = parseFloat(onMatch[2]); }
+  if (offMatch) { result.db2 = parseFloat(offMatch[1]); result.wb2 = parseFloat(offMatch[2]); }
+  if (cfmMatch) result.cfm = parseFloat(cfmMatch[1].replace(",", ""));
+  if (lsMatch)  result.cfm = parseFloat(lsMatch[1]) / 0.471947; // L/s → CFM
+  if (tcMatch)  result.tcGiven = parseFloat(tcMatch[1] || tcMatch[2]);
+  if (scMatch)  result.scGiven = parseFloat(scMatch[1] || scMatch[2]);
+
+  // Auto-detect °C: if DB < 50 assume Celsius, convert
+  if (result.db1 != null && result.db1 < 50) {
+    result.db1 = c2f(result.db1); result.wb1 = c2f(result.wb1);
+  }
+  if (result.db2 != null && result.db2 < 50) {
+    result.db2 = c2f(result.db2); result.wb2 = c2f(result.wb2);
+  }
+
+  return result;
+}
+
+async function runAndSendAnalysis(from, params) {
+  try {
+    const result = analyze(params);
+    const msg    = formatAnalysis(result);
+    await sendText(from, msg);
+  } catch (err) {
+    console.error("❌ Psychro analysis error:", err.message);
+    await sendText(from, "❌ Could not complete analysis. Please check your values and try again.");
+  }
+}
+
+// Handle an image sent during a psychro session
+async function handlePsychroImage(from, mediaId) {
+  delete pendingPsychro[from]; // session complete after image
+
+  await sendText(from, "📷 Image received — reading data with AI...");
+
+  let b64, mime;
+  try {
+    ({ b64, mime } = await downloadWhatsAppMedia(mediaId));
+  } catch (err) {
+    console.error("❌ Media download error:", err.message);
+    return sendText(from, "❌ Could not download the image. Please try again.");
+  }
+
+  // Ask Claude Vision to extract the psychrometric values
+  let extracted;
+  try {
+    const msg = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 400,
+      messages: [{
+        role: "user",
+        content: [
+          {
+            type: "image",
+            source: { type: "base64", media_type: mime, data: b64 },
+          },
+          {
+            type: "text",
+            text: `Extract HVAC psychrometric data from this image.
+Return ONLY a JSON object with these keys (use null if not found):
+{
+  "db1": on-coil dry-bulb temperature (number),
+  "wb1": on-coil wet-bulb temperature (number),
+  "db2": off-coil dry-bulb temperature (number),
+  "wb2": off-coil wet-bulb temperature (number),
+  "cfm": airflow in CFM (number),
+  "unit": "F" or "C",
+  "tc": total cooling capacity (number or null),
+  "sc": sensible cooling capacity (number or null),
+  "cap_unit": "MBH" or "kW" or null
+}
+No explanation. JSON only.`,
+          },
+        ],
+      }],
+    });
+
+    const raw = (msg.content?.[0]?.text || "").trim();
+    const jsonMatch = raw.match(/\{[\s\S]*\}/);
+    extracted = jsonMatch ? JSON.parse(jsonMatch[0]) : null;
+  } catch (err) {
+    console.error("❌ Vision error:", err.message);
+    return sendText(from, "❌ Could not read the image. Please type the values manually or send a clearer image.\n\nExample: `on-coil 80/67, off-coil 55/54, 3000 CFM`");
+  }
+
+  if (!extracted || extracted.db1 == null || extracted.wb1 == null ||
+      extracted.db2 == null || extracted.wb2 == null || extracted.cfm == null) {
+    return sendText(from,
+      "⚠️ Could not extract all required values from the image.\n\n" +
+      "Please type the values manually:\n`on-coil DB/WB, off-coil DB/WB, airflow CFM`\n" +
+      "Example: `on-coil 80/67, off-coil 55/54, 3000 CFM`\n\n" +
+      "_(Type *analysis* to start again)_"
+    );
+  }
+
+  // Convert °C to °F if needed
+  let { db1, wb1, db2, wb2, cfm, unit, tc, sc, cap_unit } = extracted;
+  if (unit === "C") {
+    db1 = c2f(db1); wb1 = c2f(wb1);
+    db2 = c2f(db2); wb2 = c2f(wb2);
+  }
+  // Convert kW capacity to MBH if needed
+  let tcGiven = tc, scGiven = sc;
+  if (cap_unit === "kW") {
+    if (tcGiven) tcGiven = tcGiven / 0.293071;
+    if (scGiven) scGiven = scGiven / 0.293071;
+  }
+
+  console.log(`🌡️ Psychro from image: DB${db1}/WB${wb1} → DB${db2}/WB${wb2}, ${cfm} CFM`);
+  await sendText(from,
+    `✅ *Extracted from image:*\n` +
+    `• On-coil: DB ${extracted.db1}${unit === "C" ? "°C" : "°F"} / WB ${extracted.wb1}${unit === "C" ? "°C" : "°F"}\n` +
+    `• Off-coil: DB ${extracted.db2}${unit === "C" ? "°C" : "°F"} / WB ${extracted.wb2}${unit === "C" ? "°C" : "°F"}\n` +
+    `• Airflow: ${extracted.cfm.toLocaleString()} CFM\n` +
+    (tc ? `• Total cap: ${tc} ${cap_unit || "MBH"}\n` : "") +
+    (sc ? `• Sensible cap: ${sc} ${cap_unit || "MBH"}\n` : "") +
+    `\nCalculating...`
+  );
+
+  await runAndSendAnalysis(from, { db1, wb1, db2, wb2, cfm, tcGiven, scGiven });
+}
+
+// Handle text step in psychro session
+async function handlePsychroStep(from, text) {
+  const s = pendingPsychro[from];
+
+  // Timeout check
+  if (Date.now() - s.ts > PSYCHRO_TIMEOUT_MS) {
+    delete pendingPsychro[from];
+    return sendText(from, "⏰ Session timed out. Type *analysis* to start again.");
+  }
+
+  // Cancel
+  if (/^(cancel|stop|exit|quit|reset)\b/i.test(text.trim())) {
+    delete pendingPsychro[from];
+    return sendText(from, "✅ Analysis cancelled. Type *analysis* to start again.");
+  }
+
+  // ── Step: waiting for input ──────────────────────────────────
+  if (s.step === "input") {
+    // Try to parse a full one-liner first
+    const parsed = parsePsychroText(text);
+
+    if (parsed.db1 != null && parsed.wb1 != null &&
+        parsed.db2 != null && parsed.wb2 != null && parsed.cfm != null) {
+      // Got everything in one message
+      delete pendingPsychro[from];
+      await runAndSendAnalysis(from, {
+        db1: parsed.db1, wb1: parsed.wb1,
+        db2: parsed.db2, wb2: parsed.wb2,
+        cfm: parsed.cfm,
+        tcGiven: parsed.tcGiven || null,
+        scGiven: parsed.scGiven || null,
+      });
+      return;
+    }
+
+    // Otherwise start step-by-step
+    s.step = "on_coil";
+    return sendText(from,
+      "*Step 1/3:* Enter *on-coil* DB and WB temperatures\n" +
+      "Format: `DB / WB` e.g. `80/67` (°F) or `27/19` (°C auto-detected)"
+    );
+  }
+
+  // ── Step-by-step collection ──────────────────────────────────
+  const nums = [...text.matchAll(/([\d.]+)/g)].map(m => parseFloat(m[1]));
+
+  if (s.step === "on_coil") {
+    if (nums.length < 2) return sendText(from, "❌ Need two numbers — DB and WB. Example: `80/67`");
+    let [db, wb] = nums;
+    if (db < 50) { db = c2f(db); wb = c2f(wb); } // auto °C→°F
+    if (wb > db) return sendText(from, "❌ WB must be ≤ DB. Please re-enter.");
+    s.db1 = db; s.wb1 = wb;
+    s.step = "off_coil";
+    return sendText(from,
+      `✅ On-coil: DB ${nums[0]} / WB ${nums[1]}\n\n` +
+      "*Step 2/3:* Enter *off-coil* DB and WB temperatures\n" +
+      "Format: `DB / WB` e.g. `55/54`"
+    );
+  }
+
+  if (s.step === "off_coil") {
+    if (nums.length < 2) return sendText(from, "❌ Need two numbers — DB and WB. Example: `55/54`");
+    let [db, wb] = nums;
+    if (db < 50) { db = c2f(db); wb = c2f(wb); }
+    s.db2 = db; s.wb2 = wb;
+    s.step = "airflow";
+    return sendText(from,
+      `✅ Off-coil: DB ${nums[0]} / WB ${nums[1]}\n\n` +
+      "*Step 3/3:* Enter *airflow* in CFM or L/s\n" +
+      "Example: `3000` (CFM) or `1500 L/s`"
+    );
+  }
+
+  if (s.step === "airflow") {
+    const lsMatch = text.match(/([\d.]+)\s*l\/s/i);
+    let cfm = lsMatch ? parseFloat(lsMatch[1]) / 0.471947 : nums[0];
+    if (!cfm || cfm < 100) return sendText(from, "❌ Enter a valid airflow, e.g. `3000` CFM or `1500 L/s`");
+    s.cfm = cfm;
+    s.step = "capacity";
+    return sendText(from,
+      `✅ Airflow: ${Math.round(cfm).toLocaleString()} CFM\n\n` +
+      "*Optional:* Enter known capacities for verification\n" +
+      "Format: `TC=120, SC=90` (MBH) — or reply *skip*"
+    );
+  }
+
+  if (s.step === "capacity") {
+    if (!/skip/i.test(text)) {
+      const tcM = text.match(/tc[=:\s]*([\d.]+)/i);
+      const scM = text.match(/sc[=:\s]*([\d.]+)/i);
+      if (tcM) s.tcGiven = parseFloat(tcM[1]);
+      if (scM) s.scGiven = parseFloat(scM[1]);
+    }
+    delete pendingPsychro[from];
+    await runAndSendAnalysis(from, {
+      db1: s.db1, wb1: s.wb1,
+      db2: s.db2, wb2: s.wb2,
+      cfm: s.cfm,
+      tcGiven: s.tcGiven || null,
+      scGiven: s.scGiven || null,
+    });
+  }
+}
+
+// ============================================================
 //  TRANE MTZ STEP HANDLER
 // ============================================================
 const TR_TO_MBH = 12; // 1 TR = 12 MBtu/h
@@ -1035,6 +1302,14 @@ app.post("/webhook", async (req, res) => {
       return; // unknown button
     }
 
+    // ── Image message → psychro analysis via Claude Vision ─────
+    if (message.type === "image") {
+      if (pendingPsychro[from]) {
+        return await handlePsychroImage(from, message.image.id);
+      }
+      return; // ignore images outside a psychro session
+    }
+
     if (message.type !== "text") return;
     const text = message.text.body.trim();
 
@@ -1049,6 +1324,25 @@ app.post("/webhook", async (req, res) => {
       }
       return await sendText(from, `Please reply with a number between 1 and ${list.length}.`);
     }
+
+    // ── Psychro multi-step session ─────────────────────────────
+    if (pendingPsychro[from]) {
+      return await handlePsychroStep(from, text);
+    }
+    // Trigger: "analysis"
+    if (/^\s*analysis\s*$/i.test(text)) {
+      pendingPsychro[from] = { step: "input", ts: Date.now() };
+      return await sendText(from,
+        "🌡️ *Psychrometric Analysis*\n\n" +
+        "Send me the data in *one of these ways*:\n\n" +
+        "📷 *Image* — photo/screenshot of equipment schedule or datasheet\n\n" +
+        "✏️ *Text* — type values like:\n" +
+        "`on-coil 80/67, off-coil 55/54, 3000 CFM`\n\n" +
+        "Or just type the values step by step and I'll guide you.\n\n" +
+        "_Type *cancel* to exit._"
+      );
+    }
+    // ────────────────────────────────────────────────────────────
 
     // ── MTZ multi-step session ─────────────────────────────────
     if (pendingMtz[from]) {
