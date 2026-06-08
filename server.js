@@ -85,8 +85,9 @@ const FILE_CACHE_MS = 2 * 60 * 1000; // refresh at most every 2 minutes
 const pendingLists = {}; // { [from]: File[] }
 
 // Stores multi-step MTZ selection sessions per user.
-// { step, reqTC, db, wb, amb, airflow, project, tag }
+// { step, reqTC, db, wb, amb, airflow, project, tag, ts }
 const pendingMtz = {};  // { [from]: object }
+const MTZ_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 async function listFolderFiles() {
   if (!DRIVE_FOLDER_ID) return [];
@@ -792,11 +793,17 @@ function parseNum(text) {
 
 async function handleMtzStep(from, text) {
   const s = pendingMtz[from];
-  const cancel = /^(cancel|stop|exit|quit)\b/i.test(text.trim());
 
+  // Auto-cancel if session is older than 10 minutes
+  if (Date.now() - s.ts > MTZ_TIMEOUT_MS) {
+    delete pendingMtz[from];
+    return sendText(from, "⏰ MTZ session timed out. Type *MTZ* to start a new selection.");
+  }
+
+  const cancel = /^(cancel|stop|exit|quit|reset)\b/i.test(text.trim());
   if (cancel) {
     delete pendingMtz[from];
-    return sendText(from, "MTZ selection cancelled. Type *MTZ* anytime to start again.");
+    return sendText(from, "✅ MTZ selection cancelled. Type *MTZ* anytime to start again.");
   }
 
   // ── Step 1: required cooling load ───────────────────────────
@@ -1049,7 +1056,7 @@ app.post("/webhook", async (req, res) => {
     }
     // Trigger word: "mtz", "trane mtz", "mtz selection", "mtz selector"
     if (/\bmtz\b/i.test(text)) {
-      pendingMtz[from] = { step: "load" };
+      pendingMtz[from] = { step: "load", ts: Date.now() };
       return await sendText(from,
         "🌡️ *Trane MTZ Package Unit Selector*\n\n" +
         "I'll walk you through 4 quick questions to find the best model and generate a datasheet PDF.\n\n" +
