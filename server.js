@@ -13,6 +13,7 @@ const FormData = require("form-data");
 const { buildSelectionReply, buildSelectionInteractive, handleButtonTap, interpretCode, parseSeriesRequest, seriesMenu, parseDatasheetRequest, datasheetMenu, detectDocType } = require("./products.js");
 const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSeries, datasheetCondition } = require("./catalogue-map.js");
 const { findBrandDocs } = require("./brand-docs.js");
+const { generateMtzPdf } = require("./mtz-pdf.js");
 require("dotenv").config();
 
 const app = express();
@@ -82,6 +83,10 @@ const FILE_CACHE_MS = 2 * 60 * 1000; // refresh at most every 2 minutes
 
 // Stores numbered-list selections per user so they can reply "1", "2", etc.
 const pendingLists = {}; // { [from]: File[] }
+
+// Stores multi-step MTZ selection sessions per user.
+// { step, reqTC, db, wb, amb, airflow, project, tag }
+const pendingMtz = {};  // { [from]: object }
 
 async function listFolderFiles() {
   if (!DRIVE_FOLDER_ID) return [];
@@ -759,6 +764,171 @@ async function sendFileOptions(to, matchedFiles, prompt) {
 }
 
 // ============================================================
+//  TRANE MTZ STEP HANDLER
+// ============================================================
+const TR_TO_MBH = 12; // 1 TR = 12 MBtu/h
+
+function parseMbh(text) {
+  // Accept: "100", "100 MBH", "8 TR", "8.5 ton", "8.5 tons"
+  const t = text.toLowerCase().trim();
+  const trMatch = t.match(/^([\d.]+)\s*(?:tr|ton|tons)$/);
+  if (trMatch) return parseFloat(trMatch[1]) * TR_TO_MBH;
+  const numMatch = t.match(/^([\d.]+)\s*(?:mbh|mbtu\/h|mbtuh)?$/);
+  if (numMatch) return parseFloat(numMatch[1]);
+  return null;
+}
+
+function parseTempPair(text) {
+  // Accept: "80/67", "80 67", "80,67", "db80 wb67", "80°F / 67°F"
+  const nums = text.match(/[\d.]+/g);
+  if (nums && nums.length >= 2) return { db: parseFloat(nums[0]), wb: parseFloat(nums[1]) };
+  return null;
+}
+
+function parseNum(text) {
+  const m = text.match(/[\d.]+/);
+  return m ? parseFloat(m[0]) : null;
+}
+
+async function handleMtzStep(from, text) {
+  const s = pendingMtz[from];
+  const cancel = /^(cancel|stop|exit|quit)\b/i.test(text.trim());
+
+  if (cancel) {
+    delete pendingMtz[from];
+    return sendText(from, "MTZ selection cancelled. Type *MTZ* anytime to start again.");
+  }
+
+  // ── Step 1: required cooling load ───────────────────────────
+  if (s.step === "load") {
+    const mbh = parseMbh(text);
+    if (!mbh || mbh <= 0) {
+      return sendText(from,
+        "❌ Couldn't parse that. Please enter the required total cooling load.\n" +
+        "Examples: `100` (MBtu/h), `120 MBH`, `8.5 TR`\n" +
+        "Type *cancel* to exit."
+      );
+    }
+    s.reqTC = mbh;
+    s.step  = "conditions";
+    return sendText(from,
+      `✅ Load: *${mbh.toFixed(1)} MBtu/h* (${(mbh / TR_TO_MBH).toFixed(2)} TR)\n\n` +
+      "*Step 2/4:* What are the *on-coil conditions*?\n" +
+      "Reply with dry-bulb and wet-bulb temperatures in °F — e.g. `80/67`\n" +
+      "_(Typical: DB 80°F / WB 67°F)_"
+    );
+  }
+
+  // ── Step 2: on-coil DB / WB ─────────────────────────────────
+  if (s.step === "conditions") {
+    const pair = parseTempPair(text);
+    if (!pair || pair.db < 60 || pair.db > 100 || pair.wb < 50 || pair.wb > 85 || pair.wb > pair.db) {
+      return sendText(from,
+        "❌ Couldn't parse that. Enter DB and WB in °F, e.g. `80/67`\n" +
+        "DB range 60–100°F · WB range 50–85°F · WB must be ≤ DB\n" +
+        "Type *cancel* to exit."
+      );
+    }
+    s.db   = pair.db;
+    s.wb   = pair.wb;
+    s.step = "ambient";
+    return sendText(from,
+      `✅ On-coil: *DB ${pair.db}°F / WB ${pair.wb}°F*\n\n` +
+      "*Step 3/4:* What is the *outdoor ambient temperature*? (°F)\n" +
+      "Reply with a number, e.g. `115`\n" +
+      "_(Table range: 85–125°F. Typical Qatar/Gulf: 115–125°F)_"
+    );
+  }
+
+  // ── Step 3: ambient ─────────────────────────────────────────
+  if (s.step === "ambient") {
+    const amb = parseNum(text);
+    if (!amb || amb < 70 || amb > 135) {
+      return sendText(from,
+        "❌ Enter ambient temp in °F, e.g. `115`. Range: 70–135°F.\nType *cancel* to exit."
+      );
+    }
+    s.amb  = amb;
+    s.step = "airflow";
+    return sendText(from,
+      `✅ Ambient: *${amb}°F*\n\n` +
+      "*Step 4/4:* What is the *supply airflow*? (CFM)\n" +
+      "Reply with a CFM value, e.g. `2800`\n" +
+      "Or reply *rated* to use each model's catalogue rated airflow."
+    );
+  }
+
+  // ── Step 4: airflow → generate PDF ──────────────────────────
+  if (s.step === "airflow") {
+    const useRated = /^rated$/i.test(text.trim());
+    const cfm = useRated ? null : parseNum(text);
+    if (!useRated && (!cfm || cfm < 500 || cfm > 20000)) {
+      return sendText(from,
+        "❌ Enter airflow in CFM (500–20000), e.g. `2800`\nOr reply *rated* to use catalogue rated airflow.\nType *cancel* to exit."
+      );
+    }
+    s.airflow = cfm;
+    delete pendingMtz[from];
+
+    await sendText(from,
+      `✅ Airflow: *${cfm ? cfm + " CFM" : "rated (catalogue)"}*\n\n` +
+      "⏳ Generating your MTZ selection datasheet... please wait a moment."
+    );
+
+    console.log(`📊 MTZ selection: reqTC=${s.reqTC} DB=${s.db} WB=${s.wb} amb=${s.amb} airflow=${s.airflow}`);
+
+    let pdfBuffer;
+    try {
+      pdfBuffer = await generateMtzPdf({
+        reqTC:   s.reqTC,
+        db:      s.db,
+        wb:      s.wb,
+        amb:     s.amb,
+        airflow: s.airflow,
+        project: s.project || "",
+        tag:     s.tag     || "",
+      });
+    } catch (err) {
+      console.error("❌ MTZ PDF error:", err.message);
+      return sendText(from, "❌ Failed to generate the datasheet. Please try again or contact support.");
+    }
+
+    if (!pdfBuffer) {
+      return sendText(from, "❌ No MTZ model found for those conditions. Please try different values.");
+    }
+
+    // Upload the PDF buffer to WhatsApp media and send as document
+    try {
+      const fd = new FormData();
+      fd.append("messaging_product", "whatsapp");
+      fd.append("type", "application/pdf");
+      fd.append("file", pdfBuffer, { filename: "MTZ_Selection.pdf", contentType: "application/pdf" });
+
+      const uploadRes = await axios.post(
+        `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/media`,
+        fd,
+        { headers: { ...fd.getHeaders(), Authorization: `Bearer ${WHATSAPP_TOKEN}` } }
+      );
+      const mediaId = uploadRes.data.id;
+
+      await send(from, {
+        messaging_product: "whatsapp",
+        to: from,
+        type: "document",
+        document: {
+          id: mediaId,
+          filename: "MTZ_Selection_Datasheet.pdf",
+          caption: `Trane MTZ Selection — ${(s.reqTC / TR_TO_MBH).toFixed(1)} TR @ DB${s.db}/WB${s.wb}°F, ${s.amb}°F amb`,
+        },
+      });
+    } catch (err) {
+      console.error("❌ MTZ send error:", err.message);
+      return sendText(from, "❌ PDF was generated but could not be sent. Please try again.");
+    }
+  }
+}
+
+// ============================================================
 //  WEBHOOK RECEIVER
 // ============================================================
 app.post("/webhook", async (req, res) => {
@@ -872,6 +1042,22 @@ app.post("/webhook", async (req, res) => {
       }
       return await sendText(from, `Please reply with a number between 1 and ${list.length}.`);
     }
+
+    // ── MTZ multi-step session ─────────────────────────────────
+    if (pendingMtz[from]) {
+      return await handleMtzStep(from, text);
+    }
+    // Trigger word: "mtz", "trane mtz", "mtz selection", "mtz selector"
+    if (/\bmtz\b/i.test(text)) {
+      pendingMtz[from] = { step: "load" };
+      return await sendText(from,
+        "🌡️ *Trane MTZ Package Unit Selector*\n\n" +
+        "I'll walk you through 4 quick questions to find the best model and generate a datasheet PDF.\n\n" +
+        "*Step 1/4:* What is your required total cooling load?\n" +
+        "Reply with a number in *MBtu/h* or add TR — e.g. `100` or `8.5 TR`"
+      );
+    }
+    // ────────────────────────────────────────────────────────────
 
     const { rules, knowledge, allowed } = await loadSheet();
 
