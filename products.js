@@ -167,94 +167,6 @@ const PRODUCTS = {
   // APCY-E Air-Cooled Screw Chillers — 50 Hz only, R-134a
   // T1 = 95°F (35°C) ambient, T3 = 115°F (46°C) ambient
   // Capacity at LCWT = 45°F (7.2°C), from SKM APCY-E catalogue (SI IP table)
-  "apcy-e": {
-    label: "APCY-E Air-Cooled Screw Chiller (R-134a)",
-    series: "APCY-E",
-    selectBy: "chiller",
-    t1Label: "35°C",
-    t3Label: "46°C",
-    models: [
-      { model: "APCY5080DE", t1_tr: 79.32, t3_tr: 70.64 },
-      { model: "APCY5085DE", t1_tr: 83.88, t3_tr: 74.96 },
-      { model: "APCY5090DE", t1_tr: 88.26, t3_tr: 79.12 },
-      { model: "APCY5095DE", t1_tr: 92.4,  t3_tr: 82.63 },
-      { model: "APCY5105DE", t1_tr: 103.3, t3_tr: 92.14 },
-      { model: "APCY5115DE", t1_tr: 112.3, t3_tr: 98.99 },
-      { model: "APCY5125DE", t1_tr: 125.5, t3_tr: 109.3 },
-      { model: "APCY5130DE", t1_tr: 129.9, t3_tr: 112.9 },
-      { model: "APCY5140DE", t1_tr: 139.3, t3_tr: 122.1 },
-      { model: "APCY5155DE", t1_tr: 156.2, t3_tr: 144.3 },
-      { model: "APCY5165DE", t1_tr: 163.5, t3_tr: 150.8 },
-      { model: "APCY5175DE", t1_tr: 170.7, t3_tr: 157.2 },
-      { model: "APCY5185DE", t1_tr: 180.3, t3_tr: 165.7 },
-      { model: "APCY5195DE", t1_tr: 193.7, t3_tr: 178.9 },
-      { model: "APCY5210DE", t1_tr: 206.7, t3_tr: 190.4 },
-      { model: "APCY5230DE", t1_tr: 226.9, t3_tr: 208.2 },
-      { model: "APCY5250DE", t1_tr: 242.4, t3_tr: 223.4 },
-      { model: "APCY5265DE", t1_tr: 253.3, t3_tr: 233.0 },
-      { model: "APCY5285DE", t1_tr: 280.6, t3_tr: 258.5 },
-      { model: "APCY5300DE", t1_tr: 298.7, t3_tr: 274.7 },
-      { model: "APCY5325DE", t1_tr: 318.2, t3_tr: 293.3 },
-      { model: "APCY5345DE", t1_tr: 333.0, t3_tr: 306.3 },
-      { model: "APCY5365TE", t1_tr: 353.3, t3_tr: 325.5 },
-      { model: "APCY5380TE", t1_tr: 363.9, t3_tr: 334.9 },
-      { model: "APCY5395TE", t1_tr: 378.6, t3_tr: 349.3 },
-      { model: "APCY5410TE", t1_tr: 395.4, t3_tr: 364.6 },
-      { model: "APCY5425TE", t1_tr: 416.0, t3_tr: 384.6 },
-    ],
-  },
-
-  // APCY-H High Efficiency Air-Cooled Screw Chillers — 50 Hz only, R-134a
-  // T1 = 95°F (35°C) ambient, T3 = 125.6°F (52°C) ambient
-  // Capacity at LCWT = 45°F (7.2°C), from SKM APCY-H catalogue
-  "apcy-h": {
-    label: "APCY-H High Efficiency Air-Cooled Screw Chiller (R-134a)",
-    series: "APCY-H",
-    selectBy: "chiller",
-    t1Label: "35°C",
-    t3Label: "52°C",
-    models: [
-      { model: "APCY5080DH", t1_tr: 83.16,  t3_tr: 67.6  },
-      { model: "APCY5085DH", t1_tr: 87.81,  t3_tr: 72.09 },
-      { model: "APCY5090DH", t1_tr: 92.3,   t3_tr: 76.46 },
-      { model: "APCY5095DH", t1_tr: 96.55,  t3_tr: 80.69 },
-      { model: "APCY5105DH", t1_tr: 107.7,  t3_tr: 90.54 },
-      { model: "APCY5115DH", t1_tr: 117.4,  t3_tr: 96.9  },
-      { model: "APCY5125DH", t1_tr: 131.8,  t3_tr: 106.8 },
-      { model: "APCY5130DH", t1_tr: 136.6,  t3_tr: 110.2 },
-      { model: "APCY5140DH", t1_tr: 145.5,  t3_tr: 118.8 },
-      { model: "APCY5155DH", t1_tr: 157.7,  t3_tr: 138.5 },
-      { model: "APCY5165DH", t1_tr: 166.5,  t3_tr: 145.5 },
-      { model: "APCY5175DH", t1_tr: 175.0,  t3_tr: 152.2 },
-      { model: "APCY5185DH", t1_tr: 184.6,  t3_tr: 160.0 },
-      { model: "APCY5195DH", t1_tr: 197.9,  t3_tr: 172.2 },
-      { model: "APCY5210DH", t1_tr: 210.7,  t3_tr: 184.5 },
-      { model: "APCY5230DH", t1_tr: 231.2,  t3_tr: 203.4 },
-      { model: "APCY5250DH", t1_tr: 246.3,  t3_tr: 217.6 },
-      { model: "APCY5265DH", t1_tr: 257.7,  t3_tr: 227.1 },
-      { model: "APCY5285DH", t1_tr: 283.7,  t3_tr: 247.5 },
-      { model: "APCY5300DH", t1_tr: 301.1,  t3_tr: 259.3 },
-      { model: "APCY5325DH", t1_tr: 318.6,  t3_tr: 283.1 },
-      { model: "APCY5345DH", t1_tr: 332.3,  t3_tr: 302.6 },
-      { model: "APCY5365TH", t1_tr: 359.1,  t3_tr: 317.5 },
-      { model: "APCY5380TH", t1_tr: 370.1,  t3_tr: 326.7 },
-      { model: "APCY5395TH", t1_tr: 384.4,  t3_tr: 340.3 },
-      { model: "APCY5410TH", t1_tr: 400.6,  t3_tr: 351.6 },
-      { model: "APCY5425TH", t1_tr: 419.9,  t3_tr: 367.3 },
-      { model: "APCY5455TH", t1_tr: 449.4,  t3_tr: 388.2 },
-      { model: "APCY5475TH", t1_tr: 467.0,  t3_tr: 412.3 },
-      { model: "APCY5495TH", t1_tr: 480.4,  t3_tr: 431.0 },
-      { model: "APCY5520TH", t1_tr: 501.3,  t3_tr: 457.8 },
-      { model: "APCY5530TH", t1_tr: 510.6,  t3_tr: 465.8 },
-      { model: "APCY5540QH", t1_tr: 522.5,  t3_tr: 463.5 },
-      { model: "APCY5550QH", t1_tr: 539.9,  t3_tr: 476.0 },
-      { model: "APCY5560QH", t1_tr: 557.0,  t3_tr: 488.1 },
-      { model: "APCY5570QH", t1_tr: 573.7,  t3_tr: 499.7 },
-      { model: "APCY5590QH", t1_tr: 590.0,  t3_tr: 511.0 },
-      { model: "APCY5600QH", t1_tr: 602.9,  t3_tr: 528.8 },
-    ],
-  },
-
   // PAC4A 100% Fresh Air (DOAS) units (R-410A) — single condition (46.1C).
   // capacity = "Actual Capacity" at 46.1C entering/ambient. No T1/T3 split.
   "pac4a": {
@@ -283,13 +195,6 @@ const PRODUCTS = {
 
 // compute TR and fullModel for each model once
 for (const key of Object.keys(PRODUCTS)) {
-  // Chiller models already have t1_tr/t3_tr set and model IS the fullModel
-  if (PRODUCTS[key].selectBy === "chiller") {
-    for (const m of PRODUCTS[key].models) {
-      m.fullModel = m.model;
-    }
-    continue;
-  }
 
   const prefix = PRODUCTS[key].namePrefix || "APMR ";
   const suffix = key === "apmr-a" ? "A" : "";
@@ -338,24 +243,6 @@ function parseSelectionRequest(text) {
     if (cfmMatch) return { mode: "fcu-cfm", product: fcuProduct, cfm: parseInt(cfmMatch[1], 10) };
     if (trMatch)  return { mode: "fcu-tr",  product: fcuProduct, tr: parseFloat(trMatch[1]) };
     return null; // fcu mentioned but no number -> let folder/AI handle
-  }
-
-  // Chiller requests -> APCY-E / APCY-H selection
-  const isChiller = /\bchiller\b|\bapcy\b|\bscrew chiller\b|\bair.?cooled screw\b/.test(t);
-  if (isChiller) {
-    // Detect specific series
-    let series = null;
-    if (/\bapcy-?e\b/.test(t)) series = "apcy-e";
-    else if (/\bapcy-?h\b/.test(t)) series = "apcy-h";
-    // else both series will be shown
-
-    // Condition
-    let condition = null;
-    if (/\bt3\b/.test(t)) condition = "t3";
-    else if (/\bt1\b/.test(t)) condition = "t1";
-
-    if (trMatch) return { mode: "chiller-tr", product: series, tr: parseFloat(trMatch[1]), condition };
-    return null; // chiller mentioned but no TR -> let folder/AI handle
   }
 
   // must look like a packaged-unit request
@@ -484,117 +371,6 @@ function selectFreshByCfm(cfm) {
 // ============================================================
 
 // Return the models within ±selection window for a chiller product at a condition.
-// Rules:
-//   - "upper" = first model whose capacity >= requested TR
-//   - "lower" = model just below upper, if its capacity >= requested * 0.95
-// Returns array of { series, product, model, kind:"upper"|"lower" }
-function selectChillerModels(productKey, tr, condition) {
-  const p = PRODUCTS[productKey];
-  if (!p) return [];
-  const key = condition === "t3" ? "t3_tr" : "t1_tr";
-  const ordered = [...p.models].sort((a, b) => a[key] - b[key]);
-
-  const upperIdx = ordered.findIndex((m) => m[key] >= tr);
-  const results = [];
-
-  if (upperIdx === -1) {
-    // All models are smaller than requested — show the largest
-    results.push({ productKey, product: p, model: ordered[ordered.length - 1], kind: "max" });
-    return results;
-  }
-
-  const upper = ordered[upperIdx];
-  results.push({ productKey, product: p, model: upper, kind: "upper" });
-
-  if (upperIdx > 0) {
-    const lower = ordered[upperIdx - 1];
-    if (lower[key] >= tr * 0.95) {
-      results.push({ productKey, product: p, model: lower, kind: "lower" });
-    }
-  }
-  return results;
-}
-
-// Build the chiller interactive response.
-// product = "apcy-e" | "apcy-h" | null (both)
-// condition = "t1" | "t3" | null (ask first)
-function interactiveForChiller(product, tr, condition) {
-  const seriesList = product ? [product] : ["apcy-e", "apcy-h"];
-
-  // No condition yet -> ask T1 or T3
-  if (!condition) {
-    const seriesLabel = product
-      ? PRODUCTS[product].label
-      : "APCY-E / APCY-H Air-Cooled Screw Chiller";
-    const pKey = product || "apcy-both";
-    return {
-      text:
-        `${seriesLabel} around ${tr} TR.\n` +
-        `Which design condition?\n\n` +
-        `• T1 = 35°C ambient\n` +
-        `• T3 = 46°C ambient (APCY-E) / 52°C (APCY-H)`,
-      buttons: [
-        { id: `chiller|${pKey}|${tr}|t1`, title: "T1 (35°C)" },
-        { id: `chiller|${pKey}|${tr}|t3`, title: "T3 (46°C/52°C)" },
-      ],
-    };
-  }
-
-  // Collect matching models from each series
-  const allMatches = [];
-  for (const sk of seriesList) {
-    allMatches.push(...selectChillerModels(sk, tr, condition));
-  }
-
-  const cond     = condition.toUpperCase();
-  const key      = condition === "t3" ? "t3_tr" : "t1_tr";
-  const threshold = Math.round(tr * 0.95 * 10) / 10;
-
-  // Build list lines
-  const lines = allMatches.map((r) => {
-    const cap = r.model[key];
-    const diff = Math.round((cap / tr - 1) * 1000) / 10; // % vs requested
-    const sign = diff >= 0 ? "+" : "";
-    const note =
-      r.kind === "max"
-        ? " ⚠️ largest model"
-        : r.kind === "lower"
-        ? ` (${sign}${diff}% vs ${tr} TR)`
-        : ` ✓ meets ${tr} TR`;
-    return `• ${r.model.fullModel} — ${cap} TR${note}`;
-  });
-
-  const seriesNames = [...new Set(allMatches.map((r) => r.product.series))];
-  const catLabel = seriesNames.length === 1 ? `${seriesNames[0]} Catalogue` : "Catalogue";
-
-  let headerText;
-  if (allMatches.length === 0) {
-    return { text: `No APCY chiller model found for ${tr} TR at ${cond}. Please contact us.`, buttons: [] };
-  } else if (allMatches.every((r) => r.kind === "max")) {
-    const maxCap = allMatches[allMatches.length - 1].model[key];
-    headerText =
-      `${tr} TR at ${cond} exceeds the largest available APCY model (${maxCap} TR).\n` +
-      `Consider multiple units. Largest options shown:`;
-  } else {
-    headerText =
-      `APCY Screw Chiller options for ${tr} TR at ${cond}:\n` +
-      `(showing models ≥ ${threshold} TR and next model above ${tr} TR)`;
-  }
-
-  const fullText = `${headerText}\n\n${lines.join("\n")}`;
-
-  // Build up to 3 catalogue buttons (one per series in results)
-  const buttons = [];
-  for (const sk of [...new Set(allMatches.map((r) => r.productKey))]) {
-    const s = PRODUCTS[sk].series;
-    if (buttons.length < 2)
-      buttons.push({ id: `doc|${s}|Catalogue`, title: `${s} Catalogue` });
-  }
-  buttons.push({ id: "contact|chiller", title: "Contact Us" });
-
-  return { text: fullText.slice(0, 1024), buttons };
-}
-
 // Build the WhatsApp reply text for a selection result (legacy text fallback).
 function buildSelectionReply(text) {
   const req = parseSelectionRequest(text);
@@ -673,7 +449,6 @@ function buildSelectionInteractive(text) {
   if (req.mode === "fresh-tr") return interactiveForFreshTr(req.tr);
   if (req.mode === "fcu-cfm") return interactiveForFcuCfm(req.product, req.cfm);
   if (req.mode === "fcu-tr")  return interactiveForFcuTr(req.product, req.tr);
-  if (req.mode === "chiller-tr") return interactiveForChiller(req.product, req.tr, req.condition);
   return interactiveFor(req.product, req.tr, req.condition);
 }
 
@@ -1005,16 +780,6 @@ function handleButtonTap(buttonId) {
     return out ? { type: "interactive", ...out } : null;
   }
 
-  // Chiller condition selection: "chiller|<product>|<tr>|<t1|t3>"
-  if (parts[0] === "chiller") {
-    const [, productRaw, trStr, condition] = parts;
-    const tr = parseFloat(trStr);
-    // "apcy-both" means no specific series (show both)
-    const product = productRaw === "apcy-both" ? null : productRaw;
-    const out = interactiveForChiller(product, tr, condition);
-    return out ? { type: "interactive", ...out } : null;
-  }
-
   if (parts[0] === "sheet") {
     // Format: "sheet|<fullModel>|<condition>" where condition is optional (t1/t3)
     // condition is always the LAST part if it matches t1/t3, model name is everything in between
@@ -1096,9 +861,6 @@ function detectSeries(text) {
 // let the selection logic handle it.
 function parseSeriesRequest(text) {
   const t = text.toLowerCase();
-
-  // If it looks like a chiller selection request, let the chiller flow handle it.
-  if (/\bchiller\b|\bscrew chiller\b|\bair.?cooled screw\b/.test(t)) return null;
 
   // If there's a tonnage, CFM, or a 5-digit model code, it's a selection
   // request (handled elsewhere), not a catalogue/IOM request.
