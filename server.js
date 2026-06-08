@@ -854,6 +854,12 @@ app.post("/webhook", async (req, res) => {
         if (file) return await sendDriveFile(from, file);
         return await sendText(from, "NOT_FOUND_MSG");
       }
+
+      // Contact Us button (e.g. from chiller selection)
+      if (btnId.startsWith("contact|")) {
+        return await sendText(from, "For chiller enquiries, please email us at hassan.saleem@mannai.com.qa or call our sales team. We'll be happy to assist you with a detailed proposal.");
+      }
+
       return; // unknown button
     }
 
