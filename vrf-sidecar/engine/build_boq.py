@@ -203,10 +203,14 @@ def build(inp, out_path, discount=None, price_list_path=None):
                 if len(selected) > 1:
                     tag = f"{tag}-{iu_counter}"
                 room = src.get("room", "")
+                # Use the SELECTED unit's type, not the source type: a standard
+                # duct load can be escalated to a high static unit inside
+                # select_idu, and the BOQ row + accessories must reflect that.
+                sel_type = sel["type"]
                 line_kw = sel["cap_kw"] * qty
                 total_idu += qty; total_idu_kw += line_kw
                 sys_required_t3 += sel["req_kw"] * qty
-                vals = [tag, room, ctype, round(sel["req_kw"], 2), qty,
+                vals = [tag, room, sel_type, round(sel["req_kw"], 2), qty,
                         sel["model"], sel["cap_kw"], round(line_kw, 2),
                         sel["hp"], "", ""]
                 for j, v in enumerate(vals, start=1):
@@ -217,11 +221,11 @@ def build(inp, out_path, discount=None, price_list_path=None):
                 if price_formulas(r, sel["model"]):
                     line_rows.append(r); equip_rows.append(r)
                 r += 1
-                if ctype != HI_WALL_TYPE:
+                if sel_type != HI_WALL_TYPE:
                     n_therm += qty
-                if ctype in CASSETTE_TYPES:
+                if sel_type in CASSETTE_TYPES:
                     n_panel += qty
-                if ctype == HIGH_STATIC_TYPE:
+                if sel_type == HIGH_STATIC_TYPE:
                     n_drain += qty; n_bfilt += qty
 
         odus = select_odu(sys_required_t3)  # NO diversity
