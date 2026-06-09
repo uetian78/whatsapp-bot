@@ -1083,6 +1083,43 @@ app.post("/webhook", async (req, res) => {
       return; // unknown button
     }
 
+    // ── VRF Selection session (handles text, image, and document messages) ──
+    if (vrfSessions.has(from)) {
+      const s = vrfSessions.get(from);
+      if (Date.now() - (s.ts || 0) > VRF_TIMEOUT_MS) {
+        vrfSessions.delete(from);
+        return await sendText(from, "⏰ VRF session timed out. Type *VRF Selection* to start again.");
+      }
+      s.ts = Date.now(); // refresh on activity
+
+      const vText = message.type === "text" ? message.text.body.trim() : "";
+      let attachment = null;
+      try {
+        if (message.type === "image" && message.image?.id) {
+          const dl = await downloadWhatsAppMedia(message.image.id);
+          attachment = { base64: dl.buffer.toString("base64"), mediaType: dl.mediaType, filename: "schedule.jpg" };
+        } else if (message.type === "document" && message.document?.id) {
+          const dl = await downloadWhatsAppMedia(message.document.id);
+          attachment = {
+            base64: dl.buffer.toString("base64"),
+            mediaType: message.document.mime_type || dl.mediaType,
+            filename: message.document.filename || "schedule",
+          };
+        }
+      } catch (err) {
+        console.error("❌ VRF media download error:", err.response?.data || err.message);
+        return await sendText(from, "I couldn't download that file. Try again, or type the rows manually.");
+      }
+
+      await onVrfMessage(from, vText, attachment);
+      return;
+    }
+
+    // ── VRF trigger: exact phrase "VRF Selection" only ──
+    if (message.type === "text" && isVrfTrigger(message.text.body)) {
+      return await onVrfKeyword(from);
+    }
+
     if (message.type !== "text") return;
     const text = message.text.body.trim();
 
