@@ -14,6 +14,10 @@ const { buildSelectionReply, buildSelectionInteractive, handleButtonTap, interpr
 const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSeries, datasheetCondition } = require("./catalogue-map.js");
 const { findBrandDocs } = require("./brand-docs.js");
 const { generateMtzPdf } = require("./mtz-pdf.js");
+const { isVrfTrigger } = require("./vrf/trigger.js");
+const {
+  initVrf, onVrfKeyword, onVrfMessage, sessions: vrfSessions,
+} = require("./vrf/vrfHandler.js");
 require("dotenv").config();
 
 const app = express();
@@ -88,6 +92,7 @@ const pendingLists = {}; // { [from]: File[] }
 // { step, reqTC, db, wb, amb, airflow, project, tag, ts }
 const pendingMtz = {};  // { [from]: object }
 const MTZ_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+const VRF_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 
 async function listFolderFiles() {
@@ -655,6 +660,47 @@ async function uploadMedia({ link, fileId, filename }) {
   return up.data.id; // media ID
 }
 
+// Download an inbound WhatsApp media object by its media id -> bytes.
+// Two-step per Meta Cloud API: (1) GET the media metadata to obtain a short-
+// lived URL, (2) GET that URL with the same bearer token.
+async function downloadWhatsAppMedia(mediaId) {
+  const meta = await axios.get(`https://graph.facebook.com/v21.0/${mediaId}`, {
+    headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` },
+  });
+  const url = meta.data?.url;
+  const mediaType = meta.data?.mime_type || "application/octet-stream";
+  if (!url) throw new Error("media url not returned by WhatsApp");
+  const bin = await axios.get(url, {
+    headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}` },
+    responseType: "arraybuffer",
+    maxRedirects: 5,
+  });
+  return { buffer: Buffer.from(bin.data), mediaType };
+}
+
+// Upload a raw buffer (e.g. a generated xlsx) to WhatsApp media. Returns a media id.
+// Buffer variant of uploadMedia (which downloads-then-uploads from Drive).
+async function uploadMediaBuffer(buffer, filename) {
+  const mime = mimeFromName(filename);
+  const form = new FormData();
+  form.append("messaging_product", "whatsapp");
+  form.append("file", buffer, { filename, contentType: mime });
+  form.append("type", mime);
+  const up = await axios.post(MEDIA_URL, form, {
+    headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, ...form.getHeaders() },
+  });
+  return up.data.id;
+}
+
+// Send a generated buffer to a user as a WhatsApp document.
+async function sendDocument(to, buffer, filename, caption) {
+  const mediaId = await uploadMediaBuffer(buffer, filename);
+  return send(to, {
+    messaging_product: "whatsapp", to, type: "document",
+    document: { id: mediaId, filename, caption: caption || "" },
+  });
+}
+
 // Send a file found in the Drive folder, by its Drive ID.
 async function sendDriveFile(to, file) {
   const isImage = /\.(png|jpe?g)$/i.test(file.name);
@@ -1037,6 +1083,43 @@ app.post("/webhook", async (req, res) => {
       return; // unknown button
     }
 
+    // ── VRF Selection session (handles text, image, and document messages) ──
+    if (vrfSessions.has(from)) {
+      const s = vrfSessions.get(from);
+      if (Date.now() - (s.ts || 0) > VRF_TIMEOUT_MS) {
+        vrfSessions.delete(from);
+        return await sendText(from, "⏰ VRF session timed out. Type *VRF Selection* to start again.");
+      }
+      s.ts = Date.now(); // refresh on activity
+
+      const vText = message.type === "text" ? message.text.body.trim() : "";
+      let attachment = null;
+      try {
+        if (message.type === "image" && message.image?.id) {
+          const dl = await downloadWhatsAppMedia(message.image.id);
+          attachment = { base64: dl.buffer.toString("base64"), mediaType: dl.mediaType, filename: "schedule.jpg" };
+        } else if (message.type === "document" && message.document?.id) {
+          const dl = await downloadWhatsAppMedia(message.document.id);
+          attachment = {
+            base64: dl.buffer.toString("base64"),
+            mediaType: message.document.mime_type || dl.mediaType,
+            filename: message.document.filename || "schedule",
+          };
+        }
+      } catch (err) {
+        console.error("❌ VRF media download error:", err.response?.data || err.message);
+        return await sendText(from, "I couldn't download that file. Try again, or type the rows manually.");
+      }
+
+      await onVrfMessage(from, vText, attachment);
+      return;
+    }
+
+    // ── VRF trigger: exact phrase "VRF Selection" only ──
+    if (message.type === "text" && isVrfTrigger(message.text.body)) {
+      return await onVrfKeyword(from);
+    }
+
     if (message.type !== "text") return;
     const text = message.text.body.trim();
 
@@ -1313,4 +1396,5 @@ app.get("/drive-index", async (_, res) => {
     res.status(500).send("Error: " + e.message);
   }
 });
+initVrf({ sendText, sendDocument });
 app.listen(PORT, () => console.log(`🚀 Listening on ${PORT}`));
