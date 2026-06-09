@@ -8,3 +8,8 @@ _vrf_extract/
 whatsapp-bot-*.json
 _temp_sa.json
 _sa.json
+
+# python venv / local sidecar test artifacts
+vrf-sidecar/.venv/
+vrf-sidecar/_uvicorn.log
+vrf-sidecar/vrf_test.xlsx
