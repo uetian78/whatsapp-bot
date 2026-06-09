@@ -15,17 +15,17 @@ const {
   extractionConfirmText,
 } = require('./vrfIntake');
 
-// ---- wire these to your existing bot functions -----------------------------
+// ---- injected by the bot via initVrf() -------------------------------------
+// deps.sendText(userId, text)            -> outbound WhatsApp text
+// deps.sendDocument(userId, buf, name)   -> outbound WhatsApp document (xlsx)
+let deps = {
+  sendText: async () => { throw new Error('VRF not initialized: call initVrf({ sendText, sendDocument })'); },
+  sendDocument: async () => { throw new Error('VRF not initialized: call initVrf({ sendText, sendDocument })'); },
+};
+function initVrf(d) { deps = { ...deps, ...d }; }
+
 async function sendWhatsApp(userId, text) {
-  // TODO: your existing send function
-}
-async function sendWhatsAppFileNote(userId, text) {
-  // optional: same as sendWhatsApp
-  return sendWhatsApp(userId, text);
-}
-async function uploadToDrive(buffer, filename) {
-  // TODO: your existing service-account upload. Must return a shareable URL.
-  // return 'https://drive.google.com/file/d/.../view';
+  return deps.sendText(userId, text);
 }
 // ----------------------------------------------------------------------------
 
@@ -34,7 +34,7 @@ const sessions = new Map(); // userId -> { mode:'vrf', guided, pending? }
 // Call from your keyword router when message text === 'vrf' (or contains it).
 async function onVrfKeyword(userId) {
   const guided = startGuided();
-  sessions.set(userId, { mode: 'vrf', guided, pending: null });
+  sessions.set(userId, { mode: 'vrf', guided, pending: null, ts: Date.now() });
   await sendWhatsApp(userId,
     'VRF selection. You can either:\n' +
     '1) Send a *photo / PDF / xlsx* of the schedule, or\n' +
@@ -127,8 +127,8 @@ async function finishAndSend(userId, input) {
   await sendWhatsApp(userId, 'Running selection...');
   const { xlsxBuffer, summary } = await runVrfSelection(input);
   const filename = `${(summary.project || 'VRF').replace(/[^\w]+/g, '_')}_VRF_BOQ.xlsx`;
-  const driveLink = await uploadToDrive(xlsxBuffer, filename);
-  await sendWhatsApp(userId, summaryToWhatsApp(summary, driveLink));
+  await deps.sendDocument(userId, xlsxBuffer, filename);
+  await sendWhatsApp(userId, summaryToWhatsApp(summary)); // no link: file sent directly
 }
 
-module.exports = { onVrfKeyword, onVrfMessage, sessions };
+module.exports = { initVrf, onVrfKeyword, onVrfMessage, sessions };
