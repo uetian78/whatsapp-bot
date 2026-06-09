@@ -13,3 +13,7 @@ _sa.json
 vrf-sidecar/.venv/
 vrf-sidecar/_uvicorn.log
 vrf-sidecar/vrf_test.xlsx
+
+# python bytecode
+__pycache__/
+*.pyc

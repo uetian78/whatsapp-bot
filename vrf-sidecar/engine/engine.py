@@ -88,6 +88,14 @@ def select_idu(ctype, required_kw):
         return [{"model": "Model Not Found", "type": ctype, "t1": 0, "t3": 0,
                  "hp": 0, "cap_kw": 0, "req_kw": required_kw}]
     largest = models[-1]
+    # Escalation: a standard duct load larger than the biggest standard duct
+    # model (16 kW) is served by a single high static pressure duct unit
+    # (which extends to 22.4 / 28 kW), not by splitting into multiple standard
+    # ducts. Only standard duct escalates; other types keep their own split.
+    if (ctype == DEFAULT_TYPE
+            and required_kw > largest["t1"] + 1e-9
+            and _idu_models(HIGH_STATIC_TYPE)):
+        return select_idu(HIGH_STATIC_TYPE, required_kw)
     if required_kw <= largest["t1"]:
         chosen = next(m for m in models if m["t1"] >= required_kw - 1e-9)
         return [{"model": chosen["model"], "type": ctype, "t1": chosen["t1"],
