@@ -1,3 +1,10 @@
 node_modules/
 .env
 .claude/
+
+# VRF temp/extract
+_vrf_extract/
+# stray service-account / credential files (never commit)
+whatsapp-bot-*.json
+_temp_sa.json
+_sa.json
