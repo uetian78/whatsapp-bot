@@ -69,8 +69,10 @@ function summaryToWhatsApp(summary, driveLink) {
   if (summary.flags && summary.flags.length) {
     lines.push(``, `Flags: ${summary.flags.join('; ')}`);
   }
-  lines.push(``, `BOQ: ${driveLink}`);
-  lines.push(`(Open the Prices tab to fill unit prices — totals repopulate automatically.)`);
+  if (driveLink) {
+    lines.push(``, `BOQ: ${driveLink}`);
+  }
+  lines.push(``, `(Open the Prices tab to fill unit prices — totals repopulate automatically.)`);
   return lines.join('\n');
 }
 
