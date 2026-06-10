@@ -130,13 +130,14 @@ function rowsFromWorkbook(buffer) {
 // This is the ONE step that needs Claude. It only EXTRACTS data; the
 // deterministic engine still does all selection.
 //
-// Model is configurable. Default is Haiku 4.5 (cheap, fine for clean
-// schedules). For degraded photos / dense AutoCAD layouts you can override to
-// Sonnet 4.6 — either globally (VRF_EXTRACT_MODEL) or just for images
-// (VRF_EXTRACT_MODEL_IMAGE), while keeping Haiku for PDFs.
-const MODEL_DEFAULT = process.env.VRF_EXTRACT_MODEL || 'claude-haiku-4-5-20251001';
-const MODEL_IMAGE = process.env.VRF_EXTRACT_MODEL_IMAGE || MODEL_DEFAULT;
-const MODEL_PDF = process.env.VRF_EXTRACT_MODEL_PDF || MODEL_DEFAULT;
+// Model is configurable. Default is Sonnet 4.6: a VRF schedule feeds an
+// engineering BOQ, so transcription accuracy matters more than cost, and Haiku
+// misreads degraded photos / dense AutoCAD layouts. Override per-path
+// (VRF_EXTRACT_MODEL_IMAGE / VRF_EXTRACT_MODEL_PDF) or globally
+// (VRF_EXTRACT_MODEL) back to Haiku for known-clean schedules.
+const MODEL_GLOBAL = process.env.VRF_EXTRACT_MODEL || null;
+const MODEL_IMAGE = process.env.VRF_EXTRACT_MODEL_IMAGE || MODEL_GLOBAL || 'claude-sonnet-4-6';
+const MODEL_PDF = process.env.VRF_EXTRACT_MODEL_PDF || MODEL_GLOBAL || 'claude-sonnet-4-6';
 
 // Returns { rows, model }. rows already sanitized. The handler shows a
 // confirmation (count of units/systems) before running the engine, so a

@@ -9,6 +9,31 @@
 const VRF_SIDECAR_URL = process.env.VRF_SIDECAR_URL;
 const VRF_API_KEY = process.env.VRF_API_KEY;
 
+// Render free-tier services spin down after idle; the first request then
+// cold-starts and the edge returns 502/503/504 until the app is up. Retry
+// those (and network errors) with backoff. A genuinely down/crash-looping
+// service still surfaces a clear error once the attempts are exhausted.
+const RETRY_STATUSES = new Set([502, 503, 504]);
+const RETRY_DELAYS_MS = [3000, 6000, 10000, 15000]; // 4 retries, ~34s total wait
+const REQUEST_TIMEOUT_MS = 30000;                    // per attempt (cold boot can hang)
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+// Best-effort wake-up ping. Call when a VRF session starts so the sidecar is
+// warm by the time the user finishes typing/confirming. Never throws.
+async function warmUpSidecar() {
+  if (!VRF_SIDECAR_URL) return;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+    try {
+      await fetch(`${VRF_SIDECAR_URL}/health`, { method: 'GET', signal: ctrl.signal });
+    } finally {
+      clearTimeout(t);
+    }
+  } catch (_) { /* best-effort; ignore */ }
+}
+
 /**
  * @param {Object} input
  * @param {string} input.project
@@ -24,31 +49,59 @@ async function runVrfSelection(input) {
     throw new Error('input.rows must be a non-empty array');
   }
 
-  const res = await fetch(`${VRF_SIDECAR_URL}/select`, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'X-API-Key': VRF_API_KEY,
-    },
-    body: JSON.stringify({
-      project: input.project || 'VRF Project',
-      discount: input.discount, // undefined is fine; JSON drops it
-      rows: input.rows,
-    }),
+  const body = JSON.stringify({
+    project: input.project || 'VRF Project',
+    discount: input.discount, // undefined is fine; JSON drops it
+    rows: input.rows,
   });
 
-  if (!res.ok) {
-    let detail = '';
-    try { detail = JSON.stringify(await res.json()); } catch (_) {}
-    throw new Error(`sidecar ${res.status}: ${detail}`);
+  const maxAttempts = RETRY_DELAYS_MS.length + 1;
+  let lastTransient = '';
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let res;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+      try {
+        res = await fetch(`${VRF_SIDECAR_URL}/select`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-API-Key': VRF_API_KEY },
+          body,
+          signal: ctrl.signal,
+        });
+      } finally {
+        clearTimeout(t);
+      }
+    } catch (e) {
+      // network error / timeout (cold start hang) -> transient, retry
+      lastTransient = e.name === 'AbortError' ? 'request timed out' : e.message;
+      if (attempt < maxAttempts - 1) { await sleep(RETRY_DELAYS_MS[attempt]); continue; }
+      throw new Error(`sidecar unreachable after ${maxAttempts} tries (${lastTransient}). It may be asleep or down — try again in a minute.`);
+    }
+
+    // 502/503/504 from Render's edge -> service waking/unavailable, retry
+    if (RETRY_STATUSES.has(res.status)) {
+      lastTransient = `status ${res.status}`;
+      if (attempt < maxAttempts - 1) { await sleep(RETRY_DELAYS_MS[attempt]); continue; }
+      throw new Error(`sidecar not responding after ${maxAttempts} tries (${lastTransient}). It may be asleep or down — try again in a minute, or check the sidecar service.`);
+    }
+
+    // Any other non-OK (400 engine error, 401 auth, etc.) is a real error: do not retry.
+    if (!res.ok) {
+      let detail = '';
+      try { detail = JSON.stringify(await res.json()); } catch (_) {}
+      throw new Error(`sidecar ${res.status}: ${detail}`);
+    }
+
+    const summaryHeader = res.headers.get('x-summary');
+    const summary = summaryHeader ? JSON.parse(summaryHeader) : {};
+    const arrayBuf = await res.arrayBuffer();
+    return { xlsxBuffer: Buffer.from(arrayBuf), summary };
   }
 
-  const summaryHeader = res.headers.get('x-summary');
-  const summary = summaryHeader ? JSON.parse(summaryHeader) : {};
-  const arrayBuf = await res.arrayBuffer();
-  const xlsxBuffer = Buffer.from(arrayBuf);
-
-  return { xlsxBuffer, summary };
+  // Unreachable, but keep the contract explicit.
+  throw new Error(`sidecar selection failed (${lastTransient || 'unknown'})`);
 }
 
 /**
@@ -76,4 +129,4 @@ function summaryToWhatsApp(summary, driveLink) {
   return lines.join('\n');
 }
 
-module.exports = { runVrfSelection, summaryToWhatsApp };
+module.exports = { runVrfSelection, summaryToWhatsApp, warmUpSidecar };

@@ -8,7 +8,7 @@
 // Replace the two TODO stubs (sendWhatsApp, uploadToDrive) with your existing
 // functions. Everything else is wired.
 
-const { runVrfSelection, summaryToWhatsApp } = require('./vrfClient');
+const { runVrfSelection, summaryToWhatsApp, warmUpSidecar } = require('./vrfClient');
 const {
   startGuided, guidedStep,
   rowsFromWorkbook, rowsFromImageOrPdf,
@@ -35,6 +35,9 @@ const sessions = new Map(); // userId -> { mode:'vrf', guided, pending? }
 async function onVrfKeyword(userId) {
   const guided = startGuided();
   sessions.set(userId, { mode: 'vrf', guided, pending: null, ts: Date.now() });
+  // Wake the (possibly spun-down) sidecar in the background so it's warm by the
+  // time the user sends a schedule and confirms. Best-effort, never blocks.
+  warmUpSidecar().catch(() => {});
   await sendWhatsApp(userId,
     'VRF selection. You can either:\n' +
     '1) Send a *photo / PDF / xlsx* of the schedule, or\n' +
