@@ -43,6 +43,10 @@ const DATASHEET_FOLDERS = {
   "APMR-A": ["apmr-a selections", "apmra selections", "apmr-a selection", "apmra selection"],
   "APMR":   ["apmr selections", "apmr selection"],
   "PAC4A":  ["pac4a selections", "pac4a selection"],
+  // Air-cooled screw chillers. Top-level Drive folders (case-insensitive),
+  // matched by any path segment so nesting under "Datasheets/" still works.
+  "APCY-E": ["apcy-e datasheets", "apcye datasheets", "apcy-e datasheet"],
+  "APCY-H": ["apcy-h datasheets", "apcyh datasheets", "apcy-h datasheet"],
 };
 
 // Does this folder name belong to the given series' datasheet set?

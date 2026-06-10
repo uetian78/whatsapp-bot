@@ -11,7 +11,8 @@ const { google } = require("googleapis");
 const Anthropic = require("@anthropic-ai/sdk");
 const FormData = require("form-data");
 const { buildSelectionReply, buildSelectionInteractive, handleButtonTap, interpretCode, parseSeriesRequest, seriesMenu, parseDatasheetRequest, datasheetMenu, detectDocType } = require("./products.js");
-const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSeries, datasheetCondition } = require("./catalogue-map.js");
+const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSeries, datasheetCondition, DATASHEET_FOLDERS } = require("./catalogue-map.js");
+const { routeChillerText, handleChillerButton } = require("./chillers.js");
 const { findBrandDocs } = require("./brand-docs.js");
 const { generateMtzPdf } = require("./mtz-pdf.js");
 const { isVrfTrigger } = require("./vrf/trigger.js");
@@ -528,6 +529,43 @@ function findDatasheetFiles(series, code, files) {
   return out;
 }
 
+// Chiller datasheets: the 4-digit code is embedded in the model string
+// (e.g. "APCY5530TH..."), so word-boundaries don't apply. Match by checking
+// any path segment against the series' datasheet folder names and the code as
+// a substring of the normalized filename. Returns matching file objects.
+function findChillerDatasheetFiles(series, code, files) {
+  const aliases = DATASHEET_FOLDERS[series] || [];
+  const out = [];
+  for (const f of files) {
+    const segs = (f.folder || "").toLowerCase().split("/").map((s) => s.trim());
+    if (!segs.some((s) => aliases.includes(s))) continue;
+    const norm = f.name.toLowerCase().replace(/[\s\-_.]/g, "");
+    if (norm.includes(code)) out.push(f);
+  }
+  return out;
+}
+
+// Dispatch a chiller response descriptor from chillers.js (text / buttons /
+// datasheet fetch). Keeps logging to the matched model/intent only.
+async function sendChillerResponse(from, r) {
+  if (!r) return;
+  if (r.type === "text") return await sendText(from, r.text);
+  if (r.type === "buttons") return await sendButtons(from, r.text, r.buttons);
+  if (r.type === "datasheet") {
+    const files = await listFolderFiles();
+    const matches = findChillerDatasheetFiles(r.series, r.code, files);
+    if (matches.length >= 1) {
+      console.log(`❄️ Chiller datasheet: ${r.series} ${r.code} -> ${matches[0].name}`);
+      return await sendDriveFile(from, matches[0]);
+    }
+    console.log(`❄️ Chiller datasheet not on file: ${r.series} ${r.code}`);
+    return await sendText(
+      from,
+      `Apologies — the ${r.series} ${r.code} datasheet isn't available yet; kindly email hassan.saleem@mannai.com.qa to get the required document.`
+    );
+  }
+}
+
 
 //      free, no guessing. This is the primary path now that we have the full
 //      Drive file list mapped.
@@ -999,6 +1037,10 @@ app.post("/webhook", async (req, res) => {
       const btnId = message.interactive.button_reply.id;
       console.log(`🔘 ${from} tapped: ${btnId}`);
 
+      // Chiller buttons (chmodel|, chsel|, chds|) -> series pick / spec / datasheet.
+      const chillerBtn = handleChillerButton(btnId);
+      if (chillerBtn) return await sendChillerResponse(from, chillerBtn);
+
       const action = handleButtonTap(btnId);
       if (action?.type === "interactive") {
         return await sendButtons(from, action.text, action.buttons);
@@ -1159,6 +1201,18 @@ app.post("/webhook", async (req, res) => {
     }
 
     console.log(`📩 ${from}: "${text}"`);
+
+    // 1-chiller) APCY-E / APCY-H chiller intents: model lookup, tonnage select,
+    //   datasheet, and series/model comparison. Runs in the equipment-SELECTION
+    //   band (before Sheet keyword rules) so "chiller"/"ton"/"TR" never get
+    //   intercepted by a generic keyword. Guarded to chiller keywords/codes only
+    //   so it won't collide with APMR/APMR-A/PAC4A routing. Returns null for a
+    //   bare series name (e.g. "APCY-H") so the catalogue/IOM flow still handles it.
+    const chillerResp = routeChillerText(text);
+    if (chillerResp) {
+      console.log(`❄️ Chiller intent (${chillerResp.type}) for "${text}"`);
+      return await sendChillerResponse(from, chillerResp);
+    }
 
     // 1a) DATASHEET request: "APMR 52300 datasheet" (series + 5-digit code,
     //     with "datasheet"/"spec" or a T1/T3). Fetches from the series'
