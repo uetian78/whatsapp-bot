@@ -20,7 +20,8 @@ const RETRY_STATUSES = new Set([502, 503, 504]);
 const RETRY_DELAYS_MS = [2000, 4000, 8000];  // 3 retries on the (now-warm) POST
 const REQUEST_TIMEOUT_MS = 30000;            // per /select attempt
 const HEALTH_TIMEOUT_MS = 70000;             // Render holds a cold GET /health during boot
-const READY_BUDGET_MS = 120000;              // total time we'll wait for the engine to wake
+const READY_BUDGET_MS = 150000;              // total time we'll wait for the engine to wake
+const PROGRESS_EVERY_MS = 10000;             // heartbeat the user every 10s while waiting
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -47,18 +48,34 @@ async function warmUpSidecar() {
 // Block until the sidecar answers /health with 200 (it cold-starts on the free
 // tier). Render holds a cold GET during boot, so a single ping often returns
 // 200 after ~15-30s; we also re-poll in case the edge 502s a request mid-boot.
-// Returns true once healthy, false if it never wakes within the budget.
-async function waitForSidecarReady(budgetMs = READY_BUDGET_MS) {
+// `onProgress(seconds)` (optional) is invoked every PROGRESS_EVERY_MS on a timer
+// so the user keeps getting a "still working" heartbeat even while a health
+// check is held open. Returns true once healthy, false if it never wakes.
+async function waitForSidecarReady(budgetMs = READY_BUDGET_MS, onProgress, heartbeatMs = PROGRESS_EVERY_MS) {
   if (!VRF_SIDECAR_URL) return false;
-  const deadline = Date.now() + budgetMs;
-  while (Date.now() < deadline) {
-    try {
-      const timeout = Math.max(5000, Math.min(HEALTH_TIMEOUT_MS, deadline - Date.now()));
-      if (await pingHealth(timeout)) return true;
-    } catch (_) { /* timeout/network during boot -> keep waiting */ }
-    if (Date.now() < deadline) await sleep(3000);
+  const start = Date.now();
+  const deadline = start + budgetMs;
+
+  let hb = null;
+  if (typeof onProgress === 'function') {
+    hb = setInterval(() => {
+      Promise.resolve(onProgress(Math.round((Date.now() - start) / 1000))).catch(() => {});
+    }, heartbeatMs);
+    if (hb.unref) hb.unref(); // don't keep the process alive for this timer
   }
-  return false;
+
+  try {
+    while (Date.now() < deadline) {
+      try {
+        const timeout = Math.max(5000, Math.min(HEALTH_TIMEOUT_MS, deadline - Date.now()));
+        if (await pingHealth(timeout)) return true;
+      } catch (_) { /* timeout/network during boot -> keep waiting */ }
+      if (Date.now() < deadline) await sleep(Math.min(3000, deadline - Date.now()));
+    }
+    return false;
+  } finally {
+    if (hb) clearInterval(hb);
+  }
 }
 
 /**
@@ -68,7 +85,7 @@ async function waitForSidecarReady(budgetMs = READY_BUDGET_MS) {
  * @param {Array}  input.rows         [{tag, system, room, type, required_kw, qty}]
  * @returns {Promise<{xlsxBuffer: Buffer, summary: Object}>}
  */
-async function runVrfSelection(input) {
+async function runVrfSelection(input, onProgress) {
   if (!VRF_SIDECAR_URL || !VRF_API_KEY) {
     throw new Error('VRF_SIDECAR_URL / VRF_API_KEY not configured');
   }
@@ -77,8 +94,8 @@ async function runVrfSelection(input) {
   }
 
   // Free-tier sidecar may be asleep. Wait for it to wake BEFORE POSTing, so the
-  // selection isn't lost to a cold-start 502.
-  const ready = await waitForSidecarReady();
+  // selection isn't lost to a cold-start 502. onProgress heartbeats the user.
+  const ready = await waitForSidecarReady(READY_BUDGET_MS, onProgress);
   if (!ready) {
     throw new Error('the selection engine is still waking up (free-tier cold start). Please wait a minute and send "VRF Selection" again.');
   }

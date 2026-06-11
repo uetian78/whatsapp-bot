@@ -143,7 +143,11 @@ async function onVrfMessage(userId, text, attachment) {
 
 async function finishAndSend(userId, input) {
   await sendWhatsApp(userId, 'Running selection… waking the engine if it was idle — this can take up to a minute on first use, please hold on.');
-  const { xlsxBuffer, summary } = await runVrfSelection(input);
+  // Heartbeat every ~10s while the free-tier sidecar wakes, so the user knows
+  // it's still working rather than wondering if it stalled.
+  const onProgress = (sec) =>
+    sendWhatsApp(userId, `⏳ Still working… the engine was idle and is waking up (${sec}s). I’ll send your BOQ the moment it’s ready.`);
+  const { xlsxBuffer, summary } = await runVrfSelection(input, onProgress);
   const filename = `${(summary.project || 'VRF').replace(/[^\w]+/g, '_')}_VRF_BOQ.xlsx`;
   await deps.sendDocument(userId, xlsxBuffer, filename);
   await sendWhatsApp(userId, summaryToWhatsApp(summary)); // no link: file sent directly

@@ -68,9 +68,16 @@ const input = { project: 'P', rows: [{ type: 'cassette', required_kw: 5, qty: 1,
   ok('ready=false', res4 === false);
   ok('returned promptly (<6s)', Date.now() - t1 < 6000);
 
-  // 5) warmUpSidecar never throws even if fetch rejects
+  // 5) waitForSidecarReady heartbeats onProgress while waiting
+  global.fetch = async () => { throw new Error('cold/booting'); };
+  console.log('Test 5: onProgress heartbeat fires while waiting');
+  let beats = 0;
+  await waitForSidecarReady(260, () => { beats++; }, 80); // ~3 beats in 260ms
+  ok('onProgress called at least once', beats >= 1);
+
+  // 6) warmUpSidecar never throws even if fetch rejects
   global.fetch = async () => { throw new Error('network down'); };
-  console.log('Test 5: warmUpSidecar swallows errors');
+  console.log('Test 6: warmUpSidecar swallows errors');
   let warmThrew = null;
   try { await warmUpSidecar(); } catch (e) { warmThrew = e; }
   ok('warmUpSidecar did not throw', warmThrew === null);
