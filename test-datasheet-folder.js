@@ -33,6 +33,31 @@ ok('parsed', !!r);
 ok('series APMR', r && r.series === 'APMR');
 ok('code 52340', r && r.code === '52340');
 ok('condition T1', r && r.condition === 'T1');
+ok('explicit (has T1)', r && r.explicit === true);
+
+console.log('parseDatasheetRequest("APMRa 51004") — bare series+code, no "datasheet" word');
+const r2 = parseDatasheetRequest('APMRa 51004');
+ok('parsed (now routes to datasheet)', !!r2);
+ok('series APMR-A', r2 && r2.series === 'APMR-A');
+ok('code 51004', r2 && r2.code === '51004');
+ok('no condition', r2 && r2.condition === null);
+ok('implicit (explicit=false)', r2 && r2.explicit === false);
+
+console.log('parseDatasheetRequest("APMR 52340 datasheet") — explicit word');
+const r3 = parseDatasheetRequest('APMR 52340 datasheet');
+ok('explicit=true', r3 && r3.explicit === true);
+
+console.log('parseDatasheetRequest("APMR 20 tr") — selection, not a datasheet');
+ok('null (no 5-digit code)', parseDatasheetRequest('APMR 20 tr') === null);
+
+console.log('findDatasheetFiles for APMR-A 51004 (nested folder)');
+const aFiles = [
+  { name: 'APMRA 51004 A - T1.pdf', id: 'a1', folder: 'Datasheets/APMR-A Selections' },
+  { name: 'APMRA 51004 A - T3.pdf', id: 'a3', folder: 'Datasheets/APMR-A Selections' },
+];
+const aMatches = findDatasheetFiles('APMR-A', '51004', aFiles);
+ok('finds both APMR-A 51004 files', aMatches.length === 2);
+ok('conditions T1+T3', aMatches.some(m => m.condition === 'T1') && aMatches.some(m => m.condition === 'T3'));
 
 console.log('findDatasheetFiles against the real Drive layout');
 const files = [

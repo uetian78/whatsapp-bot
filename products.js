@@ -890,21 +890,21 @@ function parseDatasheetRequest(text) {
   const codeMatch = t.match(/\b(\d{5})\b/);
   if (!codeMatch) return null; // datasheets are per-model; need a code
 
+  // Need a known series that actually has a datasheet folder.
+  const series = detectSeries(text);
+  if (!series) return null;
+  if (!seriesHasDatasheets(series)) return null;
+
   const wantsDatasheet = /\bdata\s*sheet\b|\bdatasheet\b|\bspec\b|\bspecs\b/.test(t);
-  // Also treat "APMR 52300 T3" (code + condition, no other intent) as a
-  // datasheet request, since that's a specific model selection.
   const condition = (t.match(/\bt\s*([13])\b/) || [])[1];
   const conditionToken = condition ? "T" + condition : null;
 
-  if (!wantsDatasheet && !conditionToken) return null;
-
-  const series = detectSeries(text);
-  if (!series) return null;
-
-  // Only series that actually have datasheet folders qualify.
-  if (!seriesHasDatasheets(series)) return null;
-
-  return { series, code: codeMatch[1], condition: conditionToken };
+  // "<series> <code>" alone is enough to mean "the datasheet for this model" —
+  // the word "datasheet"/"spec" or a T1/T3 is optional. `explicit` records
+  // whether the user clearly asked, so the caller knows whether to dead-end on
+  // a miss (explicit) or fall through to other handlers (implicit).
+  const explicit = wantsDatasheet || !!conditionToken;
+  return { series, code: codeMatch[1], condition: conditionToken, explicit };
 }
 
 // Build the T1/T3 selection buttons for a datasheet that has two conditions.

@@ -1220,35 +1220,37 @@ app.post("/webhook", async (req, res) => {
     //     Must run BEFORE the TR/CFM selection logic, which also sees codes.
     const dsReq = parseDatasheetRequest(text);
     if (dsReq) {
-      console.log(`📄 Datasheet request: ${dsReq.series} ${dsReq.code} ${dsReq.condition || ""}`);
+      console.log(`📄 Datasheet request: ${dsReq.series} ${dsReq.code} ${dsReq.condition || ""}${dsReq.explicit ? "" : " (implicit)"}`);
       const files = await listFolderFiles();
       const matches = findDatasheetFiles(dsReq.series, dsReq.code, files);
 
-      if (!matches.length) {
-        return await sendText(
-          from,
-          NOT_FOUND_MSG
-        );
-      }
+      if (matches.length) {
+        // If the user already specified a condition, try to honour it directly.
+        if (dsReq.condition) {
+          const exact = matches.find((m) => m.condition === dsReq.condition);
+          if (exact) {
+            const file = files.find((f) => f.id === exact.id);
+            if (file) return await sendDriveFile(from, file);
+          }
+        }
 
-      // If the user already specified a condition, try to honour it directly.
-      if (dsReq.condition) {
-        const exact = matches.find((m) => m.condition === dsReq.condition);
-        if (exact) {
-          const file = files.find((f) => f.id === exact.id);
+        // Single file (e.g. PAC4A has no T1/T3) -> send it directly.
+        if (matches.length === 1) {
+          const file = files.find((f) => f.id === matches[0].id);
           if (file) return await sendDriveFile(from, file);
         }
+
+        // Multiple files (T1 + T3) -> ask which condition via buttons.
+        const menu = datasheetMenu(dsReq.series, dsReq.code, matches);
+        return await sendButtons(from, menu.text, menu.buttons);
       }
 
-      // Single file (e.g. PAC4A has no T1/T3) -> send it directly.
-      if (matches.length === 1) {
-        const file = files.find((f) => f.id === matches[0].id);
-        if (file) return await sendDriveFile(from, file);
+      // No datasheet on file for this code. If the user explicitly asked for a
+      // datasheet (word "datasheet"/spec or a T1/T3), say so. If it was just
+      // "<series> <code>", fall through so the rest of the pipeline can try.
+      if (dsReq.explicit) {
+        return await sendText(from, NOT_FOUND_MSG);
       }
-
-      // Multiple files (T1 + T3) -> ask which condition via buttons.
-      const menu = datasheetMenu(dsReq.series, dsReq.code, matches);
-      return await sendButtons(from, menu.text, menu.buttons);
     }
 
     // 1) Product selection by tonnage or CFM (e.g. "package unit 20 tr t3",
