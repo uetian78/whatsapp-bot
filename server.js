@@ -552,6 +552,7 @@ async function sendChillerResponse(from, r) {
   if (r.type === "text") return await sendText(from, r.text);
   if (r.type === "buttons") return await sendButtons(from, r.text, r.buttons);
   if (r.type === "datasheet") {
+    await sendText(from, "🔍 Looking up that datasheet…");
     const files = await listFolderFiles();
     const matches = findChillerDatasheetFiles(r.series, r.code, files);
     if (matches.length >= 1) {
@@ -1202,6 +1203,16 @@ app.post("/webhook", async (req, res) => {
 
     console.log(`📩 ${from}: "${text}"`);
 
+    // One-time "searching" acknowledgement for document requests, so the user
+    // gets instant feedback while the bot hits Drive / runs a match. Fires at
+    // most once per message regardless of which lookup path handles it.
+    let announcedSearch = false;
+    const announceSearch = async (label) => {
+      if (announcedSearch) return;
+      announcedSearch = true;
+      try { await sendText(from, label || "🔍 Searching our library, one moment…"); } catch (_) {}
+    };
+
     // 1-chiller) APCY-E / APCY-H chiller intents: model lookup, tonnage select,
     //   datasheet, and series/model comparison. Runs in the equipment-SELECTION
     //   band (before Sheet keyword rules) so "chiller"/"ton"/"TR" never get
@@ -1221,6 +1232,7 @@ app.post("/webhook", async (req, res) => {
     const dsReq = parseDatasheetRequest(text);
     if (dsReq) {
       console.log(`📄 Datasheet request: ${dsReq.series} ${dsReq.code} ${dsReq.condition || ""}${dsReq.explicit ? "" : " (implicit)"}`);
+      await announceSearch("🔍 Looking up that datasheet…");
       const files = await listFolderFiles();
       const matches = findDatasheetFiles(dsReq.series, dsReq.code, files);
 
@@ -1271,6 +1283,7 @@ app.post("/webhook", async (req, res) => {
         // Only one document type exists -> send it directly, no extra tap.
         if (menu.only) {
           console.log(`📚 Series single-doc: ${menu.only.series} ${menu.only.docType}`);
+          await announceSearch("🔍 Fetching that document…");
           const files = await listFolderFiles();
           const file = await resolveSeriesFile(menu.only.series, menu.only.docType, files);
           if (file) return await sendDriveFile(from, file);
@@ -1288,6 +1301,7 @@ app.post("/webhook", async (req, res) => {
       }
       // direct: user named both series and doc type
       console.log(`📚 Series direct: ${seriesReq.series} ${seriesReq.docType}`);
+      await announceSearch("🔍 Fetching that document…");
       const files = await listFolderFiles();
       const file = await resolveSeriesFile(seriesReq.series, seriesReq.docType, files);
       if (file) return await sendDriveFile(from, file);
@@ -1300,6 +1314,13 @@ app.post("/webhook", async (req, res) => {
     // 2) Sheet keyword rules (custom overrides / captions)
     const rule = matchRule(text, rules);
     if (rule) return await sendRule(from, rule);
+
+    // From here it's a free-form document lookup (bare code, filename, brand,
+    // or a general question). Announce a search unless it's clearly a
+    // knowledge/general question (which ends in a chat reply, not a file).
+    const isKnowledgeQuestion =
+      /\b(hours|open|close|deliver|delivery|price|cost|warranty|install|contact|email|phone|location|address|about|who are you|what do you)\b/i.test(text);
+    if (!isKnowledgeQuestion) await announceSearch();
 
     const files = await listFolderFiles();
 
@@ -1358,10 +1379,6 @@ app.post("/webhook", async (req, res) => {
     const hits = findFilesByName(text, searchFiles);
     console.log(`🔎 Folder search "${text}" [${mentionedDocType || "all"}]: ${hits.length} hit(s)`);
     if (hits.length >= 1) return await sendFileOptions(from, hits, "I found a few matches:");
-
-    // Classify the message: is it asking for a PRODUCT, or a general QUESTION?
-    const isKnowledgeQuestion =
-      /\b(hours|open|close|deliver|delivery|price|cost|warranty|install|contact|email|phone|location|address|about|who are you|what do you)\b/i.test(text);
 
     // 2b) Brand-docs map lookup — direct keyword→filename match, no AI needed.
     //     Covers third-party brands (Hisense, Daikin, etc.) and any doc added to brand-docs.js.
