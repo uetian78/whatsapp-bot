@@ -9,29 +9,56 @@
 const VRF_SIDECAR_URL = process.env.VRF_SIDECAR_URL;
 const VRF_API_KEY = process.env.VRF_API_KEY;
 
-// Render free-tier services spin down after idle; the first request then
-// cold-starts and the edge returns 502/503/504 until the app is up. Retry
-// those (and network errors) with backoff. A genuinely down/crash-looping
-// service still surfaces a clear error once the attempts are exhausted.
+// Render free-tier services spin down after ~15 min idle; the first request
+// then cold-starts (~15-50s) and the edge returns 502/503/504 until the app is
+// up. Strategy (free-tier friendly — we do NOT keep it warm 24/7, which would
+// burn the account's free instance-hours and risk suspension): let it sleep,
+// but WAIT for it to wake (poll /health) before POSTing /select, so a user's
+// selection is never lost to a cold-start 502. The /select POST keeps a short
+// retry as a final safety net once the service reports healthy.
 const RETRY_STATUSES = new Set([502, 503, 504]);
-const RETRY_DELAYS_MS = [3000, 6000, 10000, 15000]; // 4 retries, ~34s total wait
-const REQUEST_TIMEOUT_MS = 30000;                    // per attempt (cold boot can hang)
+const RETRY_DELAYS_MS = [2000, 4000, 8000];  // 3 retries on the (now-warm) POST
+const REQUEST_TIMEOUT_MS = 30000;            // per /select attempt
+const HEALTH_TIMEOUT_MS = 70000;             // Render holds a cold GET /health during boot
+const READY_BUDGET_MS = 120000;              // total time we'll wait for the engine to wake
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Best-effort wake-up ping. Call when a VRF session starts so the sidecar is
-// warm by the time the user finishes typing/confirming. Never throws.
+// One /health GET. Resolves true on HTTP 200, false otherwise. Throws on
+// timeout/network error (caller decides whether to keep waiting).
+async function pingHealth(timeoutMs) {
+  const ctrl = new AbortController();
+  const t = setTimeout(() => ctrl.abort(), timeoutMs);
+  try {
+    const res = await fetch(`${VRF_SIDECAR_URL}/health`, { method: 'GET', signal: ctrl.signal });
+    return res.ok;
+  } finally {
+    clearTimeout(t);
+  }
+}
+
+// Best-effort wake-up ping. Call when a VRF session starts so the cold boot
+// begins early and the service is usually warm by confirm time. Never throws.
 async function warmUpSidecar() {
   if (!VRF_SIDECAR_URL) return;
-  try {
-    const ctrl = new AbortController();
-    const t = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+  try { await pingHealth(HEALTH_TIMEOUT_MS); } catch (_) { /* best-effort */ }
+}
+
+// Block until the sidecar answers /health with 200 (it cold-starts on the free
+// tier). Render holds a cold GET during boot, so a single ping often returns
+// 200 after ~15-30s; we also re-poll in case the edge 502s a request mid-boot.
+// Returns true once healthy, false if it never wakes within the budget.
+async function waitForSidecarReady(budgetMs = READY_BUDGET_MS) {
+  if (!VRF_SIDECAR_URL) return false;
+  const deadline = Date.now() + budgetMs;
+  while (Date.now() < deadline) {
     try {
-      await fetch(`${VRF_SIDECAR_URL}/health`, { method: 'GET', signal: ctrl.signal });
-    } finally {
-      clearTimeout(t);
-    }
-  } catch (_) { /* best-effort; ignore */ }
+      const timeout = Math.max(5000, Math.min(HEALTH_TIMEOUT_MS, deadline - Date.now()));
+      if (await pingHealth(timeout)) return true;
+    } catch (_) { /* timeout/network during boot -> keep waiting */ }
+    if (Date.now() < deadline) await sleep(3000);
+  }
+  return false;
 }
 
 /**
@@ -47,6 +74,13 @@ async function runVrfSelection(input) {
   }
   if (!input || !Array.isArray(input.rows) || input.rows.length === 0) {
     throw new Error('input.rows must be a non-empty array');
+  }
+
+  // Free-tier sidecar may be asleep. Wait for it to wake BEFORE POSTing, so the
+  // selection isn't lost to a cold-start 502.
+  const ready = await waitForSidecarReady();
+  if (!ready) {
+    throw new Error('the selection engine is still waking up (free-tier cold start). Please wait a minute and send "VRF Selection" again.');
   }
 
   const body = JSON.stringify({
@@ -129,4 +163,4 @@ function summaryToWhatsApp(summary, driveLink) {
   return lines.join('\n');
 }
 
-module.exports = { runVrfSelection, summaryToWhatsApp, warmUpSidecar };
+module.exports = { runVrfSelection, summaryToWhatsApp, warmUpSidecar, waitForSidecarReady };

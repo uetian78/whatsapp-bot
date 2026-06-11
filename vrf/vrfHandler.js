@@ -127,7 +127,7 @@ async function onVrfMessage(userId, text, attachment) {
 }
 
 async function finishAndSend(userId, input) {
-  await sendWhatsApp(userId, 'Running selection...');
+  await sendWhatsApp(userId, 'Running selection… waking the engine if it was idle — this can take up to a minute on first use, please hold on.');
   const { xlsxBuffer, summary } = await runVrfSelection(input);
   const filename = `${(summary.project || 'VRF').replace(/[^\w]+/g, '_')}_VRF_BOQ.xlsx`;
   await deps.sendDocument(userId, xlsxBuffer, filename);
