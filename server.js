@@ -14,6 +14,7 @@ const { buildSelectionReply, buildSelectionInteractive, handleButtonTap, interpr
 const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSeries, datasheetCondition, DATASHEET_FOLDERS } = require("./catalogue-map.js");
 const { routeChillerText, handleChillerButton } = require("./chillers.js");
 const { findBrandDocs } = require("./brand-docs.js");
+const { isMenuTrigger, welcomeMenu, tipFor, MENU_HINT } = require("./menu.js");
 const { generateMtzPdf } = require("./mtz-pdf.js");
 const { isVrfTrigger } = require("./vrf/trigger.js");
 const {
@@ -88,6 +89,10 @@ const FILE_CACHE_MS = 2 * 60 * 1000; // refresh at most every 2 minutes
 
 // Stores numbered-list selections per user so they can reply "1", "2", etc.
 const pendingLists = {}; // { [from]: File[] }
+
+// Stores an open welcome menu per user so a numbered reply maps to a tip.
+const pendingMenu = {}; // { [from]: { options, ts } }
+const MENU_TTL_MS = 15 * 60 * 1000; // a menu reply is only honoured for 15 min
 
 // Stores multi-step MTZ selection sessions per user.
 // { step, reqTC, db, wb, amb, airflow, project, tag, ts }
@@ -356,7 +361,7 @@ function closestKeywords(text, rules, limit = 5) {
   return out;
 }
 
-const NOT_FOUND_MSG = "Cannot find requested file — Email hassan.saleem@mannai.com.qa to get the required file.";
+const NOT_FOUND_MSG = "Cannot find requested file — Email hassan.saleem@mannai.com.qa to get the required file.\n\n" + MENU_HINT;
 
 // Build a friendly "did you mean" message, or a full menu if nothing is close.
 function suggestionMessage(text, rules) {
@@ -844,7 +849,8 @@ async function sendFileOptions(to, matchedFiles, prompt) {
     return sendButtons(to, prompt || "Which one would you like?", buttons);
   }
 
-  // 4+ options: numbered list stored for next reply
+  // 4+ options: numbered list stored for next reply (supersedes any open menu)
+  delete pendingMenu[to];
   pendingLists[to] = matchedFiles;
   const list = matchedFiles.map((f, i) => `${i + 1}. ${displayName(f)}`).join("\n");
   return sendText(to, `${prompt || "I found several matches:"}\n\n${list}\n\nReply with a number to get the file.`);
@@ -1202,6 +1208,29 @@ app.post("/webhook", async (req, res) => {
     }
 
     console.log(`📩 ${from}: "${text}"`);
+
+    // ── Welcome menu / help ──────────────────────────────────────
+    // Numbered reply while a recent menu is open -> send that section's
+    // "how to ask" tip card.
+    if (/^\d+$/.test(text) && pendingMenu[from] && Date.now() - pendingMenu[from].ts < MENU_TTL_MS) {
+      const { options } = pendingMenu[from];
+      const n = parseInt(text, 10);
+      const tip = tipFor(n, options);
+      if (tip) {
+        console.log(`📋 ${from} menu pick ${n}`);
+        return await sendText(from, tip);
+      }
+      return await sendText(from, `Please reply with a number between 1 and ${options.length}, or type *menu*.`);
+    }
+    // Greeting / "menu" / "help" -> show the welcome menu (numbered list).
+    if (isMenuTrigger(text)) {
+      console.log(`📋 welcome menu -> ${from}`);
+      delete pendingLists[from];
+      const m = welcomeMenu();
+      pendingMenu[from] = { options: m.options, ts: Date.now() };
+      return await sendText(from, m.text);
+    }
+    // ─────────────────────────────────────────────────────────────
 
     // One-time "searching" acknowledgement for document requests, so the user
     // gets instant feedback while the bot hits Drive / runs a match. Fires at
