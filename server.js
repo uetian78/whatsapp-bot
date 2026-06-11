@@ -356,7 +356,7 @@ function closestKeywords(text, rules, limit = 5) {
   return out;
 }
 
-const NOT_FOUND_MSG = "Apologies - I cannot find the required document; kindly email us at hassan.saleem@mannai.com.qa to get required document";
+const NOT_FOUND_MSG = "Sorry, I couldn't find that one 🙁 It may not be in my library yet. Drop a quick email to hassan.saleem@mannai.com.qa and the team will get it across to you.";
 
 // Build a friendly "did you mean" message, or a full menu if nothing is close.
 function suggestionMessage(text, rules) {
