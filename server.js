@@ -15,6 +15,7 @@ const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSerie
 const { routeChillerText, handleChillerButton } = require("./chillers.js");
 const { findBrandDocs } = require("./brand-docs.js");
 const { isMenuTrigger, welcomeMenu, tipFor, MENU_HINT } = require("./menu.js");
+const { PRODUCT_KB } = require("./product-facts.js");
 const { generateMtzPdf } = require("./mtz-pdf.js");
 const { isVrfTrigger } = require("./vrf/trigger.js");
 const {
@@ -383,21 +384,26 @@ async function askClaude(question, knowledge) {
 
   const knowledgeText = knowledge.join("\n");
 
-  const system = `You are a helpful WhatsApp assistant for a business.
-Answer the customer's question using ONLY the information below.
+  const system = `You are a helpful WhatsApp assistant for an HVAC equipment supplier.
+Answer the customer's question using ONLY the information below (business info + product specifications).
 Keep replies short, friendly, and suitable for WhatsApp (2-4 sentences max).
+When quoting a product spec, give the exact figure and its units, and name the model (e.g. "APMR 52340 at T3: 24.9 TR / 87.6 kW, 10500 CFM").
 If the information does not contain the answer, reply exactly:
 "Let me connect you with a team member who can help with that."
-Do NOT make up prices, products, or details.
+Do NOT make up prices, products, capacities, or details — only use the numbers given.
 
 --- BUSINESS INFORMATION ---
 ${knowledgeText}
---- END INFORMATION ---`;
+--- END INFORMATION ---
+
+--- PRODUCT SPECIFICATIONS ---
+${PRODUCT_KB}
+--- END SPECIFICATIONS ---`;
 
   try {
     const msg = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
-      max_tokens: 300,
+      max_tokens: 400,
       system,
       messages: [{ role: "user", content: question }],
     });
@@ -1241,6 +1247,26 @@ app.post("/webhook", async (req, res) => {
       announcedSearch = true;
       try { await sendText(from, label || "🔍 Searching our library, one moment…"); } catch (_) {}
     };
+
+    // ── Quick Questions about products ───────────────────────────
+    // A spec-style question that is NOT asking for a document is answered by the
+    // AI using PRODUCT_KB (real catalogue/datasheet numbers). Requests that name
+    // a document (catalogue / IOM / datasheet) fall through to the file handlers.
+    const mentionsDocument = /\b(datasheet|data ?sheet|catalog(?:ue)?|iom|manual|brochure|drawing|pdf|document|file)\b/i.test(text);
+    const isSpecQuestion = !mentionsDocument && (
+      /\?/.test(text) ||
+      /\b(what|whats|what's|how many|how much|which|tell me|explain|compare|difference|capacity|cooling|airflow|eer|iplv|tonnage|weight|dimensions?|sound|dba|refrigerant)\b/i.test(text)
+    );
+    if (isSpecQuestion) {
+      console.log(`❓ product question -> AI: "${text}"`);
+      await announceSearch("🔍 Checking the specs…");
+      const aiReply = await askClaude(text, knowledge);
+      if (aiReply && !/connect you with a team member/i.test(aiReply)) {
+        return await sendText(from, aiReply);
+      }
+      // AI had nothing useful -> fall through to the document/selection handlers.
+    }
+    // ─────────────────────────────────────────────────────────────
 
     // 1-chiller) APCY-E / APCY-H chiller intents: model lookup, tonnage select,
     //   datasheet, and series/model comparison. Runs in the equipment-SELECTION
