@@ -52,23 +52,38 @@ async function onVrfMessage(userId, text, attachment) {
   const s = sessions.get(userId);
   if (!s) return false; // not in a vrf session
 
+  // Universal escape hatch — works at ANY point, including after a build error
+  // (e.g. sidecar 502) left the session open. Checked before anything else so
+  // "exit"/"cancel" is never swallowed by the guided flow as a project name.
+  if (/^(exit|cancel|quit|stop|reset|end)$/i.test((text || '').trim())) {
+    sessions.delete(userId);
+    await sendWhatsApp(userId, '✅ VRF selection cancelled. Type *VRF Selection* to start again.');
+    return true;
+  }
+
   try {
     // ---- if we're awaiting a yes/no confirmation on extracted rows ----
     if (s.pending) {
       const ans = (text || '').trim().toLowerCase();
       if (/^(y|yes|ok|go|build|confirm)$/.test(ans)) {
         const { project, discount, rows } = s.pending;
-        s.pending = null;
-        await finishAndSend(userId, { project, discount, rows });
-        sessions.delete(userId);
+        try {
+          await finishAndSend(userId, { project, discount, rows });
+          sessions.delete(userId); // success -> done
+        } catch (err) {
+          // Keep the session + pending so the user can retry or exit cleanly,
+          // instead of being stranded in a half-open session after a 502.
+          await sendWhatsApp(userId,
+            `⚠️ ${err.message}\n\nReply *yes* to try again, or *exit* to cancel.`);
+        }
         return true;
       }
-      if (/^(n|no|cancel|stop)$/.test(ans)) {
+      if (/^(n|no)$/.test(ans)) {
         s.pending = null;
-        await sendWhatsApp(userId, 'Cancelled. Send a clearer file, or type rows manually (project name first).');
+        await sendWhatsApp(userId, 'Okay, dropped that extraction. Send a clearer file, or type *exit* to leave.');
         return true;
       }
-      await sendWhatsApp(userId, 'Reply *yes* to build, or *no* to cancel.');
+      await sendWhatsApp(userId, 'Reply *yes* to build, *no* to redo, or *exit* to cancel.');
       return true;
     }
 
@@ -121,7 +136,7 @@ async function onVrfMessage(userId, text, attachment) {
     }
     return true;
   } catch (err) {
-    await sendWhatsApp(userId, `Something went wrong: ${err.message}`);
+    await sendWhatsApp(userId, `Something went wrong: ${err.message}\n\n(Type *exit* to cancel, or try again.)`);
     return true;
   }
 }
