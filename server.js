@@ -1407,6 +1407,18 @@ app.post("/webhook", async (req, res) => {
       }
     }
 
+    // A message that names a specific MODEL CODE (5-digit) but matched no real
+    // file should NOT get an AI-improvised "details about the unit" reply —
+    // unless the user explicitly asked for "detail(s)". So a bare "APMR52090 t1"
+    // returns not-found; "APMR52090 detail" opts into the descriptive answer.
+    // Genuine knowledge questions (hours/price/etc.) are unaffected.
+    const wantsDetail = /\bdetails?\b/i.test(text);
+    const hasModelCode = /\d{5}/.test(text);
+    if (hasModelCode && !wantsDetail && !isKnowledgeQuestion) {
+      console.log(`🚫 model code without "detail" -> not-found (no AI details): "${text}"`);
+      return await sendText(from, NOT_FOUND_MSG);
+    }
+
     // 3) Product-ish request that filename search missed -> AI matches by meaning
     //    (e.g. "AHU IOM" / "air handling unit" / "do you have the fresh air unit").
     //    Pass only the doc-type-filtered file list so AI never suggests wrong type.
