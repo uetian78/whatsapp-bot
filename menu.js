@@ -78,6 +78,7 @@ const MENU_OPTIONS = [
       "   e.g. *package unit 20 tr*, *fresh air 15 tr*\n\n" +
       "3️⃣ *Ask a question* — in plain words.\n" +
       "   e.g. *How many TR is DMP 10?*\n\n" +
+      "📋 *See a whole range* — *list APMR units* (also PAC4A, DMP, chillers…)\n\n" +
       "Type *menu* anytime. For anything else: *hassan.saleem@mannai.com.qa*",
   },
 ];

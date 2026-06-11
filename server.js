@@ -15,7 +15,7 @@ const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSerie
 const { routeChillerText, handleChillerButton } = require("./chillers.js");
 const { findBrandDocs } = require("./brand-docs.js");
 const { isMenuTrigger, welcomeMenu, tipFor, MENU_HINT } = require("./menu.js");
-const { PRODUCT_KB } = require("./product-facts.js");
+const { PRODUCT_KB, parseListRequest, buildUnitList } = require("./product-facts.js");
 const { generateMtzPdf } = require("./mtz-pdf.js");
 const { isVrfTrigger } = require("./vrf/trigger.js");
 const {
@@ -623,6 +623,24 @@ async function sendText(to, body) {
     type: "text",
     text: { preview_url: true, body },
   });
+}
+
+// Send a long body in order, split on line breaks to stay under WhatsApp's
+// 4096-char message limit (used for full unit lists).
+async function sendLongText(to, body, limit = 3800) {
+  if (!body) return;
+  if (body.length <= limit) return await sendText(to, body);
+  const lines = body.split("\n");
+  let chunk = "";
+  for (const line of lines) {
+    if (chunk && (chunk.length + 1 + line.length) > limit) {
+      await sendText(to, chunk);
+      chunk = line;
+    } else {
+      chunk = chunk ? chunk + "\n" + line : line;
+    }
+  }
+  if (chunk) await sendText(to, chunk);
 }
 
 // Send up to 3 tappable reply buttons. buttons = [{id, title}, ...].
@@ -1247,6 +1265,16 @@ app.post("/webhook", async (req, res) => {
       announcedSearch = true;
       try { await sendText(from, label || "🔍 Searching our library, one moment…"); } catch (_) {}
     };
+
+    // ── List units in a series ───────────────────────────────────
+    // "give me list of APMR units", "list all DMP models", "what chillers do
+    // you have" -> every model in that series with capacity + airflow.
+    const listReq = parseListRequest(text);
+    if (listReq) {
+      console.log(`📋 unit list: ${listReq.join(", ")}`);
+      const body = buildUnitList(listReq);
+      if (body) return await sendLongText(from, body);
+    }
 
     // ── Quick Questions about products ───────────────────────────
     // A spec-style question that is NOT asking for a document is answered by the

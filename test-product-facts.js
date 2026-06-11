@@ -2,7 +2,7 @@
 // Guards that known datasheet figures are present and correctly formatted, so
 // the AI always has real numbers to answer "Quick Questions" from.
 
-const { PRODUCT_KB } = require("./product-facts.js");
+const { PRODUCT_KB, parseListRequest, buildUnitList } = require("./product-facts.js");
 const { PRODUCTS } = require("./products.js");
 const chillers = require("./chillers.js");
 
@@ -34,6 +34,27 @@ ok(`all ${allPackaged} products/FCU models listed`, missing === 0);
 let chMissing = 0;
 for (const m of (chillers.MODELS || [])) if (!PRODUCT_KB.includes(m.model)) chMissing++;
 ok(`all ${(chillers.MODELS || []).length} chiller models listed`, chMissing === 0);
+
+console.log("parseListRequest detection");
+ok('"give me list of APMR units" -> apmr', JSON.stringify(parseListRequest("give me list of APMR units")) === '["apmr"]');
+ok('"list all APMR-A models" -> apmr-a', JSON.stringify(parseListRequest("list all APMR-A models")) === '["apmr-a"]');
+ok('"list PAC4A" -> pac4a', JSON.stringify(parseListRequest("list PAC4A")) === '["pac4a"]');
+ok('"list fcu" -> both FCU', JSON.stringify(parseListRequest("list fcu")) === '["fcu-dmp","fcu-dcmp"]');
+ok('"what chillers do you have" -> both APCY', JSON.stringify(parseListRequest("what chillers do you have")) === '["chiller:APCY-E","chiller:APCY-H"]');
+ok('"APMR catalogue" is NOT a list', parseListRequest("APMR catalogue") === null);
+ok('"APMR 20 tr" (selection) is NOT a list', parseListRequest("APMR 20 tr") === null);
+ok('"APMRa 51004" (model) is NOT a list', parseListRequest("APMRa 51004") === null);
+
+console.log("buildUnitList content");
+const apmrList = buildUnitList(parseListRequest("list APMR units"));
+ok("APMR list has all 15 models", PRODUCTS.apmr.models.every((m) => apmrList.includes(m.fullModel)));
+ok("APMR list shows TR and CFM", /28\.1 \/ 24\.9 TR — 10500 CFM/.test(apmrList));
+ok("APMR list shows model count", /15 models/.test(apmrList));
+const dmpList = buildUnitList(["fcu-dmp"]);
+ok("DMP list groups 3-row / 4-row", /DMP-10 — 3-row .* \/ 4-row .* TR/.test(dmpList));
+const chList = buildUnitList(["chiller:APCY-H"]);
+ok("Chiller list shows TR + EER", /APCY\w+DH — [\d.]+ TR — EER [\d.]+/.test(chList));
+ok("every list stays under WhatsApp limit", ["apmr", "apmr-a", "pac4a", "fcu-dmp", "fcu-dcmp"].every((k) => buildUnitList([k]).length < 4096));
 
 console.log(`\n${fail === 0 ? "✅ All product-facts checks passed" : "❌ " + fail + " FAILED"} (${pass} passed)`);
 process.exit(fail === 0 ? 0 : 1);
