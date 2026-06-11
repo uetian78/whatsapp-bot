@@ -364,14 +364,11 @@ function closestKeywords(text, rules, limit = 5) {
 
 const NOT_FOUND_MSG = "Cannot find requested file — Email hassan.saleem@mannai.com.qa to get the required file.\n\n" + MENU_HINT;
 
-// Build a friendly "did you mean" message, or a full menu if nothing is close.
+// Not-found reply. (Previously this guessed "closest documents" via fuzzy
+// keyword matching, but that surfaced irrelevant suggestions — e.g. a VRF query
+// matched "PAC4A SELECTIONS" — so we now just send the clean not-found message,
+// which already points to email and the menu.)
 function suggestionMessage(text, rules) {
-  const near = closestKeywords(text, rules);
-  if (near.length) {
-    const list = near.map((k) => `• ${k.toUpperCase()}`).join("\n");
-    return `I couldn't find an exact match for "${text}". Here are the closest documents I have:\n${list}\n\nReply with a keyword above, or email hassan.saleem@mannai.com.qa if you need something else.`;
-  }
-  // nothing close at all -> standard apology
   return NOT_FOUND_MSG;
 }
 
