@@ -1,0 +1,50 @@
+// test-datasheet-folder.js — verifies datasheet lookup works for nested folders
+// (e.g. "Datasheets/APMR Selections") and that "APMR 52340 T1" parses correctly.
+// Run: node test-datasheet-folder.js
+'use strict';
+const { datasheetFolderForSeries, datasheetCondition } = require('./catalogue-map.js');
+const { parseDatasheetRequest } = require('./products.js');
+
+let failures = 0;
+const ok = (l, c) => { console.log((c ? '  ✅ ' : '  ❌ ') + l); if (!c) failures++; };
+
+// Mirror server.js findDatasheetFiles() exactly, to prove the real matcher works.
+function findDatasheetFiles(series, code, files) {
+  const out = [];
+  for (const f of files) {
+    if (!datasheetFolderForSeries(f.folder, series)) continue;
+    if (!new RegExp(`\\b${code}\\b`).test(f.name)) continue;
+    out.push({ name: f.name, id: f.id, condition: datasheetCondition(f.name) });
+  }
+  return out;
+}
+
+console.log('datasheetFolderForSeries (segment match)');
+ok('nested "Datasheets/APMR Selections" -> APMR', datasheetFolderForSeries('Datasheets/APMR Selections', 'APMR') === true);
+ok('flat "APMR Selections" -> APMR',              datasheetFolderForSeries('APMR Selections', 'APMR') === true);
+ok('APMR folder does NOT match APMR-A',           datasheetFolderForSeries('Datasheets/APMR Selections', 'APMR-A') === false);
+ok('nested APMR-A folder -> APMR-A',              datasheetFolderForSeries('Datasheets/APMR-A Selections', 'APMR-A') === true);
+ok('APMR-A folder does NOT match APMR',           datasheetFolderForSeries('Datasheets/APMR-A Selections', 'APMR') === false);
+ok('nested PAC4A folder -> PAC4A',                datasheetFolderForSeries('Datasheets/PAC4A Selections', 'PAC4A') === true);
+
+console.log('parseDatasheetRequest("APMR 52340 T1") — with space after APMR');
+const r = parseDatasheetRequest('APMR 52340 T1');
+ok('parsed', !!r);
+ok('series APMR', r && r.series === 'APMR');
+ok('code 52340', r && r.code === '52340');
+ok('condition T1', r && r.condition === 'T1');
+
+console.log('findDatasheetFiles against the real Drive layout');
+const files = [
+  { name: 'APMR 52340 - T1.pdf', id: 't1', folder: 'Datasheets/APMR Selections' },
+  { name: 'APMR 52340 - T3.pdf', id: 't3', folder: 'Datasheets/APMR Selections' },
+  { name: 'APMR 52300 - T1.pdf', id: 'x',  folder: 'Datasheets/APMR Selections' },
+];
+const matches = findDatasheetFiles('APMR', '52340', files);
+ok('finds both 52340 files', matches.length === 2);
+ok('T1 present', matches.some((m) => m.condition === 'T1'));
+ok('T3 present', matches.some((m) => m.condition === 'T3'));
+ok('does not grab 52300', !matches.some((m) => m.id === 'x'));
+
+console.log(failures ? `\n❌ ${failures} check(s) failed` : '\n✅ All datasheet-folder checks passed');
+process.exit(failures ? 1 : 0);

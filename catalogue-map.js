@@ -51,10 +51,12 @@ const DATASHEET_FOLDERS = {
 
 // Does this folder name belong to the given series' datasheet set?
 function datasheetFolderForSeries(folderName, seriesName) {
-  const f = (folderName || "").toLowerCase().trim();
   const names = DATASHEET_FOLDERS[seriesName];
   if (!names) return false;
-  return names.includes(f);
+  // Match ANY path segment, so a nested folder like "Datasheets/APMR Selections"
+  // still resolves (the file index stores the full path, not just the leaf).
+  const segs = (folderName || "").toLowerCase().split("/").map((s) => s.trim());
+  return segs.some((s) => names.includes(s));
 }
 
 // Series that actually have a datasheet folder.
