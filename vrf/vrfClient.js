@@ -6,7 +6,10 @@
 //
 // Node 18+ has global fetch. If on older Node, require('node-fetch').
 
-const VRF_SIDECAR_URL = process.env.VRF_SIDECAR_URL;
+// Co-hosted by default: the VRF engine runs in the same container on
+// 127.0.0.1:8000 (see root Dockerfile). Override with VRF_SIDECAR_URL only if
+// you run the engine as a separate service again.
+const VRF_SIDECAR_URL = process.env.VRF_SIDECAR_URL || "http://127.0.0.1:8000";
 const VRF_API_KEY = process.env.VRF_API_KEY;
 
 // Render free-tier services spin down after ~15 min idle; the first request

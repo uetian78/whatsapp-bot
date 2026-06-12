@@ -1,0 +1,28 @@
+# Keep the build context (and image) small and free of secrets.
+# Node + Python deps are reinstalled inside the image from manifests.
+node_modules
+npm-debug.log*
+
+# Python virtualenv / caches (huge; never needed in the image)
+vrf-sidecar/.venv
+**/__pycache__
+**/*.pyc
+_vrf_extract
+
+# Local-only assets the server never reads (it fetches from Google Drive)
+FCU DCMP Datasheets
+FCU DMP Datasheets
+
+# Secrets are provided via Render env vars, not files — never bake them in
+.env
+.env.*
+*.pem
+*service-account*.json
+*credentials*.json
+
+# VCS / docs / scratch
+.git
+.gitignore
+*.md
+*.log
+CUsers*.txt
