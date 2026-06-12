@@ -50,8 +50,24 @@ const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 let sheetsClient = null;
 let driveClient = null;
 
+// Parse the service-account credentials from GOOGLE_SERVICE_ACCOUNT_JSON.
+// Accepts EITHER raw JSON or a base64-encoded JSON. Base64 is recommended on
+// hosting dashboards because it has no quotes/newlines/backslashes to get
+// mangled on paste (the private_key's \n is the usual casualty).
+function parseServiceAccount() {
+  const raw = (GOOGLE_SERVICE_ACCOUNT_JSON || "").trim();
+  if (!raw) throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is not set");
+  const text = raw.startsWith("{") ? raw : Buffer.from(raw, "base64").toString("utf8");
+  const creds = JSON.parse(text);
+  // If the private key survived as literal "\n" sequences, restore real newlines.
+  if (creds.private_key && creds.private_key.includes("\\n")) {
+    creds.private_key = creds.private_key.replace(/\\n/g, "\n");
+  }
+  return creds;
+}
+
 async function getGoogleAuth() {
-  const credentials = JSON.parse(GOOGLE_SERVICE_ACCOUNT_JSON);
+  const credentials = parseServiceAccount();
   return new google.auth.GoogleAuth({
     credentials,
     scopes: [
