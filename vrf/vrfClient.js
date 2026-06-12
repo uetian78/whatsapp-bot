@@ -48,6 +48,19 @@ async function warmUpSidecar() {
   try { await pingHealth(HEALTH_TIMEOUT_MS); } catch (_) { /* best-effort */ }
 }
 
+// One-shot diagnostic probe (used by GET /vrf-health on the bot): which URL is
+// the client pointed at, and does /health answer? Never throws.
+async function sidecarProbe() {
+  const started = Date.now();
+  try {
+    const ok = await pingHealth(10000);
+    return { engineUrl: VRF_SIDECAR_URL, ok, ms: Date.now() - started };
+  } catch (e) {
+    const error = e.name === "AbortError" ? "timeout (no answer in 10s)" : e.message;
+    return { engineUrl: VRF_SIDECAR_URL, ok: false, error, ms: Date.now() - started };
+  }
+}
+
 // Block until the sidecar answers /health with 200 (it cold-starts on the free
 // tier). Render holds a cold GET during boot, so a single ping often returns
 // 200 after ~15-30s; we also re-poll in case the edge 502s a request mid-boot.
@@ -100,7 +113,7 @@ async function runVrfSelection(input, onProgress) {
   // selection isn't lost to a cold-start 502. onProgress heartbeats the user.
   const ready = await waitForSidecarReady(READY_BUDGET_MS, onProgress);
   if (!ready) {
-    throw new Error('the selection engine is still waking up (free-tier cold start). Please wait a minute and send "VRF Selection" again.');
+    throw new Error('the selection engine is not responding. Please try again in a minute — if it keeps failing, ask the admin to check /vrf-health.');
   }
 
   const body = JSON.stringify({
@@ -183,4 +196,4 @@ function summaryToWhatsApp(summary, driveLink) {
   return lines.join('\n');
 }
 
-module.exports = { runVrfSelection, summaryToWhatsApp, warmUpSidecar, waitForSidecarReady };
+module.exports = { runVrfSelection, summaryToWhatsApp, warmUpSidecar, waitForSidecarReady, sidecarProbe };

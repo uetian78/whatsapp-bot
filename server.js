@@ -1577,5 +1577,14 @@ app.get("/drive-index", async (_, res) => {
     res.status(500).send("Error: " + e.message);
   }
 });
+// Diagnostic: is the co-hosted VRF engine reachable, and at which URL?
+// ok:true => engine healthy. ok:false + 127.0.0.1 => uvicorn not running in
+// this container (check deploy logs / Docker runtime). ok:false + a remote
+// onrender.com URL => stale VRF_SIDECAR_URL env var overriding the localhost
+// default.
+app.get("/vrf-health", async (_, res) => {
+  res.json(await require("./vrf/vrfClient.js").sidecarProbe());
+});
+
 initVrf({ sendText, sendDocument });
 app.listen(PORT, () => console.log(`🚀 Listening on ${PORT}`));
