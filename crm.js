@@ -251,15 +251,41 @@ async function statsMessage() {
     const topIntents = count(week, 4).slice(0, 5)
       .map(([k, n]) => `• ${k}: ${n}`).join("\n");
     const notFound = week.filter((r) => /cannot find/i.test(r[5] || "")).length;
+    // Responses are " || "-joined segments; real file sends START with 📄/🖼️
+    // (a text reply may merely contain the emoji — don't count those).
+    const fileSegs = (resp) => (resp || "").split(" || ").filter((s) => /^(📄|🖼️) /.test(s.trim()));
+    const filesSent = week.reduce((s, r) => s + fileSegs(r[5]).length, 0);
+
+    // Busiest hour of the week (Qatar time)
+    const byHour = count(week.map((r) => [(r[0] || "").slice(11, 13)]), 0);
+    const busiest = byHour.length ? `${byHour[0][0]}:00 (${byHour[0][1]} requests)` : "—";
+
+    // Top documents actually delivered
+    const docCount = {};
+    for (const r of week) {
+      for (const seg of fileSegs(r[5])) {
+        const name = seg.trim().replace(/^(📄|🖼️) /, "");
+        docCount[name] = (docCount[name] || 0) + 1;
+      }
+    }
+    const topDocs = Object.entries(docCount).sort((a, b) => b[1] - a[1]).slice(0, 3)
+      .map(([d, n]) => `• ${d} — ${n}×`).join("\n");
+
+    // Latest unanswered request, so the admin can act immediately
+    const lastMiss = [...week].reverse().find((r) => /cannot find/i.test(r[5] || ""));
 
     return (
-      `📊 *Bot usage*\n\n` +
-      `Today: *${todayRows.length}* requests\n` +
-      `Last 7 days: *${week.length}* requests from *${new Set(week.map((r) => r[1])).size}* users\n\n` +
+      `📊 *Bot usage*\n` +
+      `━━━━━━━━━━━━━━\n` +
+      `Today: *${todayRows.length}* requests · *${new Set(todayRows.map((r) => r[1])).size}* users\n` +
+      `Last 7 days: *${week.length}* requests · *${new Set(week.map((r) => r[1])).size}* users\n` +
+      `Files sent (7d): *${filesSent}*  |  Busiest hour: ${busiest}\n\n` +
       `*Top users (7d):*\n${topUsers || "—"}\n\n` +
       `*Top request types (7d):*\n${topIntents || "—"}\n\n` +
-      `Not-found replies (7d): ${notFound}\n` +
-      `Full log: https://docs.google.com/spreadsheets/d/${CRM_SHEET_ID}`
+      `*Most-sent documents (7d):*\n${topDocs || "—"}\n\n` +
+      `⚠️ Not-found (7d): *${notFound}*` +
+      (lastMiss ? `\nLatest miss: "${(lastMiss[3] || "").slice(0, 60)}" — ${lastMiss[2] || lastMiss[1]}` : "") +
+      `\n\n📈 Dashboard: https://docs.google.com/spreadsheets/d/${CRM_SHEET_ID}`
     );
   } catch (e) {
     console.error("CRM stats error:", e.message);
