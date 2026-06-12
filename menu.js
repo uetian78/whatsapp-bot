@@ -84,16 +84,24 @@ const MENU_OPTIONS = [
 ];
 
 const NUM = ["", "1️⃣", "2️⃣", "3️⃣", "4️⃣"];
+const ICON = ["", "📄", "🛠️", "❓", "🙋"];
 
 // Build the welcome message (numbered list) + the options array to remember.
-function welcomeMenu() {
-  const line = (o) => `${NUM[o.n] || o.n + "."} *${o.title}*`;
+// `name` = WhatsApp profile name (optional); `returning` = seen before (CRM).
+function welcomeMenu(name, returning) {
+  const first = (name || "").trim().split(/\s+/)[0];
+  const hello = first
+    ? (returning ? `👋 *Welcome back, ${first}!*` : `👋 *Welcome, ${first}!*`)
+    : "👋 *Welcome!*";
+  const line = (o) => `${NUM[o.n] || o.n + "."} ${ICON[o.n] || ""} *${o.title}*`;
   const text =
-    "👋 *Welcome to the Mannai HVAC Assistant*\n" +
-    "I help you find documents, select equipment, and answer product questions.\n\n" +
-    "Reply with a *number* to see how:\n\n" +
-    MENU_OPTIONS.map(line).join("\n") + "\n\n" +
-    "💡 Or just type what you need, e.g. *APMR catalogue* or *APMRa 51004*.";
+    `${hello}\n` +
+    "_Mannai HVAC Assistant_ — documents, selections & product answers.\n" +
+    "━━━━━━━━━━━━━━\n" +
+    "Reply with a *number*:\n\n" +
+    MENU_OPTIONS.map(line).join("\n") + "\n" +
+    "━━━━━━━━━━━━━━\n" +
+    "💡 Or just type what you need — e.g. *APMR catalogue* · *APMRa 51004*";
   return { text, options: MENU_OPTIONS };
 }
 

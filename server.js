@@ -16,6 +16,7 @@ const { routeChillerText, handleChillerButton } = require("./chillers.js");
 const { findBrandDocs } = require("./brand-docs.js");
 const { isMenuTrigger, welcomeMenu, tipFor, MENU_HINT } = require("./menu.js");
 const { PRODUCT_KB, parseListRequest, buildUnitList } = require("./product-facts.js");
+const crm = require("./crm.js");
 const { generateMtzPdf } = require("./mtz-pdf.js");
 const { isVrfTrigger } = require("./vrf/trigger.js");
 const {
@@ -71,7 +72,7 @@ async function getGoogleAuth() {
   return new google.auth.GoogleAuth({
     credentials,
     scopes: [
-      "https://www.googleapis.com/auth/spreadsheets.readonly",
+      "https://www.googleapis.com/auth/spreadsheets", // read rules/knowledge + write CRM log
       "https://www.googleapis.com/auth/drive.readonly",
     ],
   });
@@ -397,17 +398,17 @@ async function askClaude(question, knowledge) {
 
   const knowledgeText = knowledge.join("\n");
 
-  const system = `You are a helpful WhatsApp assistant for an HVAC equipment supplier.
-Answer the customer's question using ONLY the information below (business info + product specifications).
+  // System prompt in two blocks: the big static block (instructions + product
+  // specs, ~5K tokens) goes FIRST and is prompt-cached — repeat questions
+  // within 5 minutes read it at ~10% of the normal input price. The small
+  // dynamic Sheet knowledge follows, outside the cached prefix.
+  const staticBlock = `You are a helpful WhatsApp assistant for an HVAC equipment supplier.
+Answer the customer's question using ONLY the information provided (product specifications below + business info that follows).
 Keep replies short, friendly, and suitable for WhatsApp (2-4 sentences max).
 When quoting a product spec, give the exact figure and its units, and name the model (e.g. "APMR 52340 at T3: 24.9 TR / 87.6 kW, 10500 CFM").
 If the information does not contain the answer, reply exactly:
 "Let me connect you with a team member who can help with that."
 Do NOT make up prices, products, capacities, or details — only use the numbers given.
-
---- BUSINESS INFORMATION ---
-${knowledgeText}
---- END INFORMATION ---
 
 --- PRODUCT SPECIFICATIONS ---
 ${PRODUCT_KB}
@@ -417,7 +418,10 @@ ${PRODUCT_KB}
     const msg = await anthropic.messages.create({
       model: "claude-haiku-4-5-20251001",
       max_tokens: 400,
-      system,
+      system: [
+        { type: "text", text: staticBlock, cache_control: { type: "ephemeral" } },
+        { type: "text", text: `--- BUSINESS INFORMATION ---\n${knowledgeText}\n--- END INFORMATION ---` },
+      ],
       messages: [{ role: "user", content: question }],
     });
     return msg.content?.[0]?.text?.trim() || null;
@@ -841,6 +845,7 @@ async function sendRule(to, rule) {
 }
 
 async function send(to, payload) {
+  crm.logOutbound(to, payload); // CRM: attach this reply to the pending interaction
   try {
     await axios.post(GRAPH_URL, payload, {
       headers: { Authorization: `Bearer ${WHATSAPP_TOKEN}`, "Content-Type": "application/json" },
@@ -1071,10 +1076,21 @@ async function handleMtzStep(from, text) {
 app.post("/webhook", async (req, res) => {
   res.sendStatus(200);
   try {
-    const message = req.body.entry?.[0]?.changes?.[0]?.value?.messages?.[0];
+    const value = req.body.entry?.[0]?.changes?.[0]?.value;
+    const message = value?.messages?.[0];
     if (!message) return;
 
     const from = message.from;
+
+    // CRM: log who asked what, when. The profile name rides along in the
+    // webhook payload; the reply is attached later via the send() hook.
+    const profileName = value?.contacts?.[0]?.profile?.name || "";
+    const inboundText =
+      message.type === "text" ? message.text.body.trim()
+      : message.type === "interactive" && message.interactive?.type === "button_reply"
+        ? `btn:${message.interactive.button_reply.title || message.interactive.button_reply.id}`
+      : `[${message.type}]`;
+    crm.logInbound({ from, name: profileName, text: inboundText });
 
     // --- Button tap? (interactive reply) ---
     if (message.type === "interactive" && message.interactive?.type === "button_reply") {
@@ -1259,11 +1275,22 @@ app.post("/webhook", async (req, res) => {
       }
       return await sendText(from, `Please reply with a number between 1 and ${options.length}, or type *menu*.`);
     }
+    // Admin: "stats" -> usage summary from the CRM log. Restricted to
+    // ADMIN_NUMBERS (comma-separated env var) when set; otherwise open
+    // (internal tool). Falls through to normal routing for non-admins.
+    if (/^stats$/i.test(text)) {
+      const admins = (process.env.ADMIN_NUMBERS || "").split(",").map((s) => s.trim()).filter(Boolean);
+      if (!admins.length || admins.includes(from)) {
+        console.log(`📊 stats -> ${from}`);
+        return await sendText(from, await crm.statsMessage());
+      }
+    }
+
     // Greeting / "menu" / "help" -> show the welcome menu (numbered list).
     if (isMenuTrigger(text)) {
       console.log(`📋 welcome menu -> ${from}`);
       delete pendingLists[from];
-      const m = welcomeMenu();
+      const m = welcomeMenu(profileName, crm.isKnownContact(from));
       pendingMenu[from] = { options: m.options, ts: Date.now() };
       return await sendText(from, m.text);
     }
@@ -1587,4 +1614,6 @@ app.get("/vrf-health", async (_, res) => {
 });
 
 initVrf({ sendText, sendDocument });
+crm.init({ getSheets });
+crm.warmUp(); // preload contacts so "Welcome back" works from the first message
 app.listen(PORT, () => console.log(`🚀 Listening on ${PORT}`));
