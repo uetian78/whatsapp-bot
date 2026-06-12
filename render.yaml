@@ -1,0 +1,37 @@
+# Render Blueprint — ONE Docker web service running the Node WhatsApp bot
+# plus the co-hosted Python VRF engine (see Dockerfile).
+#
+# Deploy: Render dashboard -> New + -> Blueprint -> pick this repo -> Apply.
+# This pins `runtime: docker`, so the Dockerfile is actually used (a plain
+# "Web Service" can default to Node and silently ignore the Dockerfile).
+#
+# Secrets are `sync: false` -> Render prompts you for them on first apply.
+# VRF_SIDECAR_URL is preset to the in-container engine.
+services:
+  - type: web
+    name: whatsapp-bot
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    branch: main
+    autoDeploy: true
+    healthCheckPath: /
+    envVars:
+      - key: VRF_SIDECAR_URL
+        value: http://127.0.0.1:8000
+      - key: VERIFY_TOKEN
+        sync: false
+      - key: WHATSAPP_TOKEN
+        sync: false
+      - key: PHONE_NUMBER_ID
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GOOGLE_SHEET_ID
+        sync: false
+      - key: GOOGLE_SERVICE_ACCOUNT_JSON
+        sync: false
+      - key: DRIVE_FOLDER_ID
+        sync: false
+      - key: VRF_API_KEY
+        sync: false
