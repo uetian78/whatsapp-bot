@@ -19,6 +19,7 @@ const { PRODUCT_KB, parseListRequest, buildUnitList } = require("./product-facts
 const crm = require("./crm.js");
 const { generateMtzPdf } = require("./mtz-pdf.js");
 const { FAMILY_MENU, rankSplit } = require("./split-engine.js");
+const { generateSplitPdf } = require("./split-pdf.js");
 const { isVrfTrigger } = require("./vrf/trigger.js");
 const {
   initVrf, onVrfKeyword, onVrfMessage, sessions: vrfSessions,
@@ -118,9 +119,13 @@ const MENU_TTL_MS = 15 * 60 * 1000; // a menu reply is only honoured for 15 min
 const pendingMtz = {};  // { [from]: object }
 const MTZ_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
-// Split unit selection sessions: { step, famKey, loadKw, idb, iwb, odb, condition, ts }
+// Split unit selection sessions: { step, brand, ts }
 const pendingSplit = {};
 const SPLIT_TIMEOUT_MS = 10 * 60 * 1000;
+
+// Stores last split results per user for Print (30 min TTL)
+const splitResults = {};
+const SPLIT_RESULT_TTL = 30 * 60 * 1000;
 const VRF_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 
@@ -973,21 +978,42 @@ function parseSplitLine(line) {
   return { loadKw: kw, typeStr, idb, iwb, odb, condition };
 }
 
-// Format single unit result block
-function formatSplitUnit(unitNum, tag, ranked, loadKw, condStr, famLabel) {
-  const f2 = v => v != null ? v.toFixed(2) : "—";
-  const adequate = ranked.filter(r => r.adequate);
+// Rank with auto-split: if load > biggest model, try dividing by 2,3,4
+// Returns { ranked, count, splitNote }
+function rankSplitWithCount(famKey, loadKw, idb, iwb, odb, condition) {
+  for (let n = 1; n <= 4; n++) {
+    const ranked = rankSplit(famKey, loadKw / n, idb, iwb, odb, condition);
+    if (ranked.length && ranked[0].adequate) {
+      const note = n > 1
+        ? `Load ${loadKw} kW exceeds single unit capacity — split into ${n} units of ${(loadKw/n).toFixed(2)} kW each`
+        : null;
+      return { ranked, count: n, splitNote: note };
+    }
+  }
+  // No adequate found even at /4 — return single-unit closest
+  const ranked = rankSplit(famKey, loadKw, idb, iwb, odb, condition);
+  return { ranked, count: 1, splitNote: null };
+}
+
+// Format one unit result as WhatsApp text
+function formatSplitUnit(unitNum, res) {
+  const { ranked, count, loadKw, condStr, famLabel, splitNote } = res;
+  const f2 = v => v != null ? Number(v).toFixed(2) : "—";
   const best = ranked[0];
-  if (!best) return `${unitNum}. ❌ No data for ${famLabel}`;
-  const ok = best.adequate;
-  const margin = best.margin != null ? ` (+${(best.margin * 100).toFixed(0)}%)` : "";
-  const shc = best.shc != null ? ` · SC ${f2(best.shc)} kW` : "";
+  if (!best) return `*Unit ${unitNum}* ❌ No data`;
+  const ok        = best.adequate;
+  const margin    = best.margin != null ? ` (+${(best.margin * 100).toFixed(0)}%)` : "";
+  const shc       = best.shc != null ? ` · SC ${f2(best.shc)} kW` : "";
+  const countTag  = count > 1 ? `${count}× ` : "";
   const statusIcon = ok ? "✅" : "⚠️";
-  let out = `*${statusIcon} Unit ${unitNum}${tag ? " — " + tag : ""}*\n`;
-  out += `${famLabel} · ${condStr}\n`;
-  out += `Load ${loadKw} kW → ⭐ *${best.key}*\n`;
+
+  let out = `*${statusIcon} Unit ${unitNum}* — ${famLabel}\n`;
+  out += `Load ${loadKw} kW · ${condStr}\n`;
+  out += `→ ⭐ *${countTag}${best.key}*\n`;
   out += `TC ${f2(best.tc)} kW${margin}${shc} · Power ${f2(best.p)} kW · EER ${f2(best.eer)}`;
-  if (!ok) out += `\n⚠️ Undersized — next: ${ranked[1] ? ranked[1].key + " (" + f2(ranked[1].tc) + " kW)" : "none"}`;
+  if (count > 1) out += `\n   Combined: TC ${f2(best.tc * count)} kW · Power ${f2(best.p * count)} kW`;
+  if (splitNote) out += `\n   ℹ️ ${splitNote}`;
+  if (!ok) out += `\n⚠️ Still undersized — contact supplier`;
   return out;
 }
 
@@ -1023,7 +1049,7 @@ async function handleSplitStep(from, text) {
     const typeList = b.types.map(t => `• *${t.label.split("(")[0].trim()}*`).join("\n");
     const condNote = brand === "Toshiba"
       ? "Conditions: `DB/WB/Amb` in °C (e.g. `26.7/19.4/46`)\nor presets *T1*, *T3*, *Qatar*."
-      : "Conditions: `Amb` in °C drives T1/T3 rating automatically (≤40°C = T1, >40°C = T3).\nOr write *T1* / *T3* directly.";
+      : "Ambient drives T1/T3 automatically (≤40°C = T1, >40°C = T3).\nOr write *T1* / *T3* directly.";
 
     return sendText(from,
       `✅ *${brand}*\n\n` +
@@ -1033,53 +1059,137 @@ async function handleSplitStep(from, text) {
       `${condNote}\n\n` +
       `*Examples:*\n` +
       (brand === "Toshiba"
-        ? "5 kw, hi wall, 26.7/19.4/46\n3 kw, ducted, 26.7/19.4/46\n7 kw, ducted inverter, T3"
+        ? "5 kw, hi wall, 26.7/19.4/46\n3 kw, ducted, 26.7/19.4/46\n20 kw, ducted inverter, T3"
         : brand === "TCL"
         ? "5 kw, hi wall, 46\n3 kw, hi wall, T3"
         : "5 kw, hi wall, 46\n8 kw, ducted, T3")
     );
   }
 
-  // ── Step 2: multi-unit list → run all and return results ───
+  // ── Step 2: multi-unit list → rank all → output + store for Print ─
   if (s.step === "units") {
     const lines = text.split(/\n/).map(l => l.trim()).filter(Boolean);
     if (!lines.length) {
       return sendText(from, "❌ No units found. Enter at least one line.\nType *cancel* to exit.");
     }
 
-    const results = [];
-    const errors  = [];
+    const unitResults = [];
+    const errors      = [];
 
     lines.forEach((line, i) => {
       const parsed = parseSplitLine(line);
       if (!parsed) {
         errors.push(`Line ${i + 1}: couldn't parse — "${line}"`);
+        unitResults.push({ lineNum: i + 1, error: `Couldn't parse: "${line}"` });
         return;
       }
       const resolved = resolveSplitType(s.brand, parsed.typeStr);
       if (!resolved) {
         errors.push(`Line ${i + 1}: unknown type "${parsed.typeStr}" for ${s.brand}`);
+        unitResults.push({ lineNum: i + 1, error: `Unknown type "${parsed.typeStr}"` });
         return;
       }
-      const ranked = rankSplit(resolved.famKey, parsed.loadKw, parsed.idb, parsed.iwb, parsed.odb, parsed.condition);
-      const famLabel = SPLIT_BRANDS.find(b => b.name === s.brand)?.types.find(t => t.famKey === resolved.famKey)?.label?.split("(")[0]?.trim() ?? resolved.famKey;
-      const condStr  = resolved.kind === "t1t3"
+
+      const { ranked, count, splitNote } = rankSplitWithCount(
+        resolved.famKey, parsed.loadKw, parsed.idb, parsed.iwb, parsed.odb, parsed.condition
+      );
+      const famLabel = SPLIT_BRANDS.find(b => b.name === s.brand)
+        ?.types.find(t => t.famKey === resolved.famKey)
+        ?.label?.split("(")[0]?.trim() ?? resolved.famKey;
+      const condStr = resolved.kind === "t1t3"
         ? parsed.condition
         : `${parsed.idb}/${parsed.iwb}°C @ ${parsed.odb}°C`;
-      results.push(formatSplitUnit(i + 1, null, ranked, parsed.loadKw, condStr, famLabel));
+      const best = ranked[0];
+
+      unitResults.push({
+        lineNum:  i + 1,
+        loadKw:   parsed.loadKw,
+        typeStr:  parsed.typeStr,
+        famLabel, condStr,
+        idb: parsed.idb, iwb: parsed.iwb, odb: parsed.odb,
+        condition: parsed.condition,
+        famKey:   resolved.famKey,
+        kind:     resolved.kind,
+        count,    splitNote,
+        ranked,
+        model:    best?.key ?? "—",
+        tc:       best?.tc,
+        shc:      best?.shc ?? null,
+        p:        best?.p,
+        eer:      best?.eer,
+        margin:   best?.margin,
+        adequate: best?.adequate ?? false,
+      });
     });
 
     delete pendingSplit[from];
 
-    const header = `🧊 *Split Selection — ${s.brand}*  (${results.length} unit${results.length !== 1 ? "s" : ""})\n`;
-    const body   = results.join("\n\n─────────────────\n\n");
-    const errStr = errors.length ? "\n\n⚠️ *Skipped lines:*\n" + errors.join("\n") : "";
+    // Store results for PDF print (30 min TTL)
+    const goodUnits = unitResults.filter(u => !u.error);
+    splitResults[from] = { brand: s.brand, units: unitResults, ts: Date.now() };
+
+    // Build WhatsApp text output
+    const textBlocks = unitResults.map((u, i) =>
+      u.error
+        ? `*❌ Unit ${u.lineNum}* — ${u.error}`
+        : formatSplitUnit(u.lineNum, u)
+    );
+
+    const header = `🧊 *Split Selection — ${s.brand}*  (${goodUnits.length} unit${goodUnits.length !== 1 ? "s" : ""})\n`;
+    const body   = textBlocks.join("\n\n─────────────────\n\n");
+    const errStr = errors.length ? "\n\n⚠️ *Skipped:* " + errors.join(" | ") : "";
 
     await sendText(from,
       header + "\n" + body + errStr + "\n\n" +
-      "_Verify against manufacturer selection software before submittal._\n" +
-      "Type *Split Selection* to run again."
+      "_Verify against manufacturer selection software before submittal._\n\n" +
+      "Reply *Print* for a PDF report · *Split Selection* to run again."
     );
+  }
+}
+
+// Send split PDF report when user replies "Print"
+async function handleSplitPrint(from) {
+  const stored = splitResults[from];
+  if (!stored || Date.now() - stored.ts > SPLIT_RESULT_TTL) {
+    return sendText(from, "❌ No recent split results found. Run *Split Selection* first.");
+  }
+
+  await sendText(from, "⏳ Generating PDF report…");
+
+  let pdfBuffer;
+  try {
+    pdfBuffer = await generateSplitPdf({ brand: stored.brand, units: stored.units });
+  } catch (err) {
+    console.error("❌ Split PDF error:", err.message);
+    return sendText(from, "❌ Failed to generate PDF. Please try again.");
+  }
+
+  try {
+    const fd = new FormData();
+    fd.append("messaging_product", "whatsapp");
+    fd.append("type", "application/pdf");
+    fd.append("file", pdfBuffer, { filename: "Split_Selection.pdf", contentType: "application/pdf" });
+
+    const uploadRes = await axios.post(
+      `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/media`,
+      fd,
+      { headers: { ...fd.getHeaders(), Authorization: `Bearer ${WHATSAPP_TOKEN}` } }
+    );
+    const mediaId = uploadRes.data.id;
+
+    await send(from, {
+      messaging_product: "whatsapp",
+      to: from,
+      type: "document",
+      document: {
+        id: mediaId,
+        filename: `Split_Selection_${stored.brand}.pdf`,
+        caption: `${stored.brand} Split Unit Selection — ${stored.units.filter(u => !u.error).length} units`,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Split PDF send error:", err.message);
+    return sendText(from, "❌ PDF generated but could not be sent. Please try again.");
   }
 }
 
@@ -1460,6 +1570,11 @@ app.post("/webhook", async (req, res) => {
         return await sendDriveFile(from, list[idx]);
       }
       return await sendText(from, `Please reply with a number between 1 and ${list.length}.`);
+    }
+
+    // ── Split PDF print request ─────────────────────────────────
+    if (/^print$/i.test(text.trim()) && splitResults[from]) {
+      return await handleSplitPrint(from);
     }
 
     // ── Split unit multi-step session ──────────────────────────
