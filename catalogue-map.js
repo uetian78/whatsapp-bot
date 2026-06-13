@@ -78,13 +78,18 @@ const CATALOGUE_MAP = [
   // ---- Packaged units ----
   {
     name: "APMR-A",
-    aliases: ["apmr-a", "apmra", "apmr a"],
+    aliases: [
+      "apmr-a", "apmra", "apmr a",
+      // natural-language variants for packaged DX units
+      "package unit", "packaged unit", "packaged ac", "package ac",
+      "rooftop unit", "rooftop ac", "rooftop", "dx unit", "dx packaged",
+    ],
     catalogue: "APMR-A. 2025_catalogue.pdf",
     iom: "APMRA 2025 IOM_IOM.pdf",
   },
   {
     name: "APMR-V",
-    aliases: ["apmr-v", "apmrv", "apmr v"],
+    aliases: ["apmr-v", "apmrv", "apmr v", "vertical packaged", "vertical package unit"],
     catalogue: "APMR-V_catalogue.pdf",
     iom: "APMR-V_IOM.pdf",
   },
@@ -104,19 +109,25 @@ const CATALOGUE_MAP = [
   // ---- Fresh air / DOAS / specialty packaged ----
   {
     name: "PAC4A",
-    aliases: ["pac4a", "pac 4a", "pac-4a"],
+    aliases: [
+      "pac4a", "pac 4a", "pac-4a",
+      // natural-language: fresh air / DOAS / makeup air unit
+      "fresh air unit", "fresh air", "doas unit", "doas",
+      "100% fresh air", "100 fresh air", "outdoor air unit", "oau",
+      "make up air unit", "makeup air", "mau",
+    ],
     catalogue: "PAC4A_catalogue.pdf",
     iom: "PAC4A_IOM.pdf",
   },
   {
     name: "PAC9A",
-    aliases: ["pac9a", "pac 9a", "pac-9a"],
+    aliases: ["pac9a", "pac 9a", "pac-9a", "pac 9", "fresh air 9a"],
     catalogue: "PAC9A_catalogue.pdf",
     iom: null,
   },
   {
     name: "PACF",
-    aliases: ["pacf"],
+    aliases: ["pacf", "pac f", "fan assisted package", "fan assisted"],
     catalogue: null,
     iom: "PACF_IOM.pdf",
   },
@@ -148,31 +159,44 @@ const CATALOGUE_MAP = [
   // ---- Chillers ----
   {
     name: "APCY-P",
-    aliases: ["apcy-p", "apcyp", "apcy p"],
+    aliases: [
+      "apcy-p", "apcyp", "apcy p",
+      "scroll chiller", "air cooled scroll chiller",
+    ],
     catalogue: "APCY-P_catalogue.pdf",
     iom: "APCY-P_IOM.pdf",
   },
   {
     name: "APCY-H",
-    aliases: ["apcy-h", "apcyh", "apcy h"],
+    aliases: [
+      "apcy-h", "apcyh", "apcy h",
+      "magnetic bearing chiller", "magnetic chiller", "inverter chiller",
+    ],
     catalogue: "APCY-H_catalogue.pdf",
     iom: "APCY-H IOM_IOM.pdf",
   },
   {
     name: "APCY-E",
-    aliases: ["apcy-e", "apcye", "apcy e"],
+    aliases: [
+      "apcy-e", "apcye", "apcy e",
+      "screw chiller", "air cooled screw chiller", "air cooled screw",
+    ],
     catalogue: "APCY-E_catalogue.pdf",
     iom: "APCY-E_IOM.pdf",
   },
   {
     name: "ACMR",
-    aliases: ["acmr"],
+    aliases: ["acmr", "air cooled modular", "modular chiller", "modular refrigeration"],
     catalogue: "ACMR_catalogue.pdf",
     iom: "ACMR IOM_IOM.pdf",
   },
   {
     name: "WPCY",
-    aliases: ["wpcy"],
+    aliases: [
+      "wpcy",
+      "water cooled chiller", "water chiller", "water-cooled chiller",
+      "water cooled packaged", "wpcy chiller",
+    ],
     catalogue: "WPCY_catalogue.pdf",
     iom: null,
   },
@@ -180,19 +204,25 @@ const CATALOGUE_MAP = [
   // ---- Condensing units ----
   {
     name: "APCN-S",
-    aliases: ["apcn-s", "apcns", "apcn s"],
+    aliases: [
+      "apcn-s", "apcns", "apcn s",
+      "condensing unit", "skm condensing unit", "scroll condensing",
+    ],
     catalogue: "APCN-S_catalogue.pdf",
     iom: "APCN-S_IOM.pdf",
   },
   {
     name: "APCN-VVH",
-    aliases: ["apcn-vvh", "apcnvvh", "apcn vvh"],
+    aliases: [
+      "apcn-vvh", "apcnvvh", "apcn vvh",
+      "vvh condensing", "variable speed condensing",
+    ],
     catalogue: "APCN-VVH_catalogue.pdf",
     iom: "APCNVVH_IOM.pdf",
   },
   {
     name: "APCNVZ",
-    aliases: ["apcnvz", "apcn-vz", "apcn vz"],
+    aliases: ["apcnvz", "apcn-vz", "apcn vz", "vz condensing"],
     catalogue: "APCNVZ 2025_catalogue.pdf",
     iom: null,
   },
@@ -200,19 +230,19 @@ const CATALOGUE_MAP = [
   // ---- Condensing / outdoor (ACUV / ACUS) ----
   {
     name: "ACUV-D",
-    aliases: ["acuv-d", "acuvd", "acuv d"],
+    aliases: ["acuv-d", "acuvd", "acuv d", "acuv dual"],
     catalogue: null,
     iom: "ACUV-D_IOM.pdf",
   },
   {
     name: "ACUV-S",
-    aliases: ["acuv-s", "acuvs", "acuv s"],
+    aliases: ["acuv-s", "acuvs", "acuv s", "acuv single"],
     catalogue: null,
     iom: "ACUV-S_IOM.pdf",
   },
   {
     name: "ACUS",
-    aliases: ["acus"],
+    aliases: ["acus", "acus unit"],
     catalogue: null,
     iom: "ACUS_IOM.pdf",
   },
@@ -220,7 +250,11 @@ const CATALOGUE_MAP = [
   // ---- Computer room / precision ----
   {
     name: "CRAC",
-    aliases: ["crac"],
+    aliases: [
+      "crac",
+      "computer room ac", "computer room air conditioning", "precision ac",
+      "precision air conditioning", "precision cooling", "server room ac",
+    ],
     catalogue: "CRAC_catalogue.pdf",
     iom: "CRAC_IOM.pdf",
   },
@@ -228,19 +262,30 @@ const CATALOGUE_MAP = [
   // ---- Air handling units ----
   {
     name: "MAH",
-    aliases: ["mah", "modular ahu"],
+    aliases: [
+      "mah", "modular ahu",
+      // bare "ahu" maps to MAH as the primary SKM AHU product
+      "ahu", "air handling unit", "air handler",
+      "modular air handling unit", "modular air handler",
+    ],
     catalogue: "MAH_catalogue.pdf",
     iom: "MAH_IOM.pdf",
   },
   {
     name: "HMAH",
-    aliases: ["hmah"],
+    aliases: [
+      "hmah", "hybrid mah",
+      "horizontal ahu", "horizontal air handling unit",
+    ],
     catalogue: "HMAH_catalogue.pdf",
     iom: "HMAH_IOM.pdf",
   },
   {
     name: "CAH",
-    aliases: ["cah", "comfort ahu"],
+    aliases: [
+      "cah", "comfort ahu",
+      "comfort air handling unit", "comfort air handler", "standard ahu",
+    ],
     catalogue: "CAH_catalogue.pdf",
     iom: "CAH_IOM.pdf",
   },
@@ -248,19 +293,30 @@ const CATALOGUE_MAP = [
   // ---- Fan coil units ----
   {
     name: "FCU",
-    aliases: ["fcu", "skm fcu", "skmfcu", "fan coil", "fan coil unit"],
+    aliases: [
+      "fcu", "skm fcu", "skmfcu", "fan coil", "fan coil unit",
+      // DMP/DCMP are the two FCU series — route to combined catalogue/IOM
+      "dmp", "dcmp", "dmp fcu", "dcmp fcu",
+      "chilled water fan coil", "cwfc",
+    ],
     catalogue: "FCU DMP DCMP _catalogue.pdf",
     iom: "FCU_IOM.pdf",
   },
   {
     name: "FCU Hi-Static",
-    aliases: ["fcu hi-static", "fcu hi static", "hi-static fcu", "hi static fcu", "high static fcu"],
+    aliases: [
+      "fcu hi-static", "fcu hi static", "hi-static fcu", "hi static fcu", "high static fcu",
+      "dyp fcu", "dcyp fcu", "dyp", "dcyp",
+    ],
     catalogue: "FCU_Hi-Static DYP DCYP_catalogue.pdf",
     iom: null,
   },
   {
     name: "FCU Hi-Static EC",
-    aliases: ["fcu hi-static ec", "fcu hi static ec", "hi-static ec", "ec fcu"],
+    aliases: [
+      "fcu hi-static ec", "fcu hi static ec", "hi-static ec", "ec fcu",
+      "dyp ec", "dcyp ec",
+    ],
     catalogue: "FCU_Hi-Static DYP DCYP EC_catalogue.pdf",
     iom: null,
   },
@@ -268,13 +324,19 @@ const CATALOGUE_MAP = [
   // ---- Chilled water terminal units (DFC) ----
   {
     name: "DFC Cassette",
-    aliases: ["dfc cassette", "dfc chilled water cassette", "chilled water cassette", "cassette"],
+    aliases: [
+      "dfc cassette", "dfc chilled water cassette", "chilled water cassette", "cassette",
+      "dfc", "dfc unit",
+    ],
     catalogue: "DFC Chilled Water Cassette Type_catalogue.pdf",
     iom: null,
   },
   {
     name: "DFC Ceiling-Floor",
-    aliases: ["dfc ceiling", "dfc floor", "dfc ceiling-floor", "chilled water ceiling", "ceiling floor mounted"],
+    aliases: [
+      "dfc ceiling", "dfc floor", "dfc ceiling-floor", "chilled water ceiling", "ceiling floor mounted",
+      "ceiling floor unit", "dfc ceiling floor",
+    ],
     catalogue: "DFC Chilled Water Ceiling-Floor Mounted_catalogue.pdf",
     iom: null,
   },
@@ -282,13 +344,16 @@ const CATALOGUE_MAP = [
   // ---- Specialty ----
   {
     name: "Dehumidification Unit",
-    aliases: ["dehumidification", "dehumidifier", "swimpool", "swimming pool", "pool unit"],
+    aliases: [
+      "dehumidification", "dehumidifier", "swimpool", "swimming pool", "pool unit",
+      "pool dehumidifier", "pool ac", "dehumidification unit",
+    ],
     catalogue: "Dehumidification Unit-Swimpool_catalogue.pdf",
     iom: null,
   },
   {
     name: "Ecology Unit",
-    aliases: ["ecology unit", "ecology", "seu", "skm ecology"],
+    aliases: ["ecology unit", "ecology", "seu", "skm ecology", "skm seu"],
     catalogue: "SKM Ecology Unit -SEU_catalogue.pdf",
     iom: null,
   },

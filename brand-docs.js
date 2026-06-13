@@ -110,14 +110,105 @@ const BRAND_DOCS = [
     ],
   },
 
-  // ── Add more brands/files below following the same format ─────────────────
-  // {
-  //   name: "Brand Product",
-  //   keywords: ["keyword1", "keyword2"],
-  //   files: [
-  //     { type: "Catalogue", filename: "Exact Filename.pdf" },
-  //   ],
-  // },
+  // ── GENERIC "CHILLER" CATALOGUE/IOM DISAMBIGUATION ───────────────────────
+  // When user says "chiller catalogue" or "air cooled chiller" without naming a
+  // specific series (APCY-E/H/P), return all three so the user can pick.
+  {
+    name: "Air Cooled Chiller Catalogues",
+    keywords: [
+      "chiller catalogue", "chiller catalog", "chiller brochure",
+      "air cooled chiller catalogue", "air cooled chiller catalog",
+      "chiller iom", "chiller manual", "chiller installation manual",
+      "chiller skm", "skm chiller", "skm chiller catalogue",
+    ],
+    files: [
+      { type: "Catalogue", filename: "APCY-E_catalogue.pdf" },
+      { type: "Catalogue", filename: "APCY-H_catalogue.pdf" },
+      { type: "Catalogue", filename: "APCY-P_catalogue.pdf" },
+    ],
+  },
+
+  // ── TRANE MTZ PACKAGE UNIT ────────────────────────────────────────────────
+  {
+    name: "Trane MTZ Packaged Unit",
+    keywords: [
+      "trane", "trane mtz", "mtz catalogue", "mtz catalog", "mtz brochure",
+      "trane packaged", "trane catalogue", "trane catalog",
+    ],
+    files: [
+      { type: "General", filename: "Trane MTZ Selections.html" },
+    ],
+  },
+
+  // ── TOSHIBA SPLIT / VRF ───────────────────────────────────────────────────
+  {
+    name: "Toshiba Split",
+    keywords: [
+      "toshiba split catalogue", "toshiba catalogue", "toshiba pkv", "toshiba ras",
+      "toshiba rav", "toshiba bsp", "toshiba ducted", "toshiba hi-wall",
+      "toshiba catalog", "toshiba brochure",
+    ],
+    files: [],
+  },
+
+  // ── TCL SPLIT / CATALOGUE ─────────────────────────────────────────────────
+  {
+    name: "TCL Split",
+    keywords: [
+      "tcl catalogue", "tcl catalog", "tcl split", "tcl savein",
+      "tcl hi-wall", "tcl brochure",
+    ],
+    files: [],
+  },
+
+  // ── SKM FCU DMP IOM ───────────────────────────────────────────────────────
+  // The combined FCU IOM covers both DMP and DCMP series.
+  {
+    name: "FCU DMP DCMP IOM",
+    keywords: [
+      "fcu iom", "dmp iom", "dcmp iom", "fan coil iom",
+      "fan coil manual", "fcu manual", "dmp manual", "dcmp manual",
+      "fan coil installation", "fcu installation",
+    ],
+    files: [
+      { type: "IOM", filename: "FCU_IOM.pdf" },
+    ],
+  },
+
+  // ── APMR-A SELECTIONS HTML ────────────────────────────────────────────────
+  {
+    name: "APMR-A Selection Tool",
+    keywords: [
+      "apmr-a selections", "apmra selections", "apmr-a selection tool",
+      "apmr selection html", "apmra selection",
+    ],
+    files: [
+      { type: "General", filename: "APMR-A Selections.html" },
+    ],
+  },
+
+  // ── APMR SELECTIONS HTML ──────────────────────────────────────────────────
+  {
+    name: "APMR Selection Tool",
+    keywords: [
+      "apmr selections", "apmr selection tool", "apmr selection html",
+    ],
+    files: [
+      { type: "General", filename: "APMR Selections.html" },
+    ],
+  },
+
+  // ── PAC4A SELECTIONS HTML ─────────────────────────────────────────────────
+  {
+    name: "PAC4A Selection Tool",
+    keywords: [
+      "pac4a selections", "pac4a selection tool", "fresh air selections",
+      "doas selections", "pac4a selection html",
+    ],
+    files: [
+      { type: "General", filename: "PAC4A Selections.html" },
+    ],
+  },
 
 ];
 
