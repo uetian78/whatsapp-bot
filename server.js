@@ -1430,8 +1430,8 @@ app.post("/webhook", async (req, res) => {
     if (pendingSplit[from]) {
       return await handleSplitStep(from, text);
     }
-    // Trigger word: "split", "toshiba split", "ras split", "rav split", "tcl split", "skm split"
-    if (/\bsplit\b/i.test(text) && !/vrf\s+split|split\s+vrf/i.test(text)) {
+    // Trigger: exact phrase "Split Selection"
+    if (/^split\s+selection$/i.test(text.trim())) {
       pendingSplit[from] = { step: "type", ts: Date.now() };
       const opts = FAMILY_MENU.map((f, i) => `${i + 1}. ${f.label}`).join("\n");
       return await sendText(from,
@@ -1445,10 +1445,10 @@ app.post("/webhook", async (req, res) => {
     if (pendingMtz[from]) {
       return await handleMtzStep(from, text);
     }
-    // Trigger word: "mtz", "trane mtz", "mtz selection" etc.
-    if (/\bmtz\b/i.test(text)) {
-      // Express mode: "MTZ 8.5TR 80/67/115" — all params on one line
-      const expressMatch = text.match(/\bmtz\b\s+(.+)/i);
+    // Trigger: exact phrase "MTZ Selection"
+    if (/^mtz\s+selection$/i.test(text.trim())) {
+      // Express mode: "MTZ Selection 8.5TR 80/67/115" — all params on one line
+      const expressMatch = text.match(/^mtz\s+selection\s+(.+)/i);
       if (expressMatch) {
         const rest = expressMatch[1].trim();
         const loadPart = rest.split(/\s+/)[0];
