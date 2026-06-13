@@ -22,9 +22,9 @@ const fmt = (x, p = 1) =>
  *
  * @returns {Buffer} PDF buffer, or null if no model found.
  */
-async function generateMtzPdf({ reqTC, db, wb, amb, airflow, project, tag }) {
+async function generateMtzPdf({ reqTC, reqSC = 0, db, wb, amb, airflow, project, tag }) {
   // ── 1. Auto-select best model ──────────────────────────────
-  const ranking = rankModels(reqTC, 0, db, wb, amb);
+  const ranking = rankModels(reqTC, reqSC || 0, db, wb, amb);
   if (!ranking || !ranking.length) return null;
   const best = ranking[0];
   const modelKey = best.key;

@@ -18,6 +18,7 @@ const { isMenuTrigger, smallTalkReply, welcomeMenu, tipFor, MENU_HINT } = requir
 const { PRODUCT_KB, parseListRequest, buildUnitList } = require("./product-facts.js");
 const crm = require("./crm.js");
 const { generateMtzPdf } = require("./mtz-pdf.js");
+const { FAMILY_MENU, rankSplit } = require("./split-engine.js");
 const { isVrfTrigger } = require("./vrf/trigger.js");
 const {
   initVrf, onVrfKeyword, onVrfMessage, sessions: vrfSessions,
@@ -116,6 +117,10 @@ const MENU_TTL_MS = 15 * 60 * 1000; // a menu reply is only honoured for 15 min
 // { step, reqTC, db, wb, amb, airflow, project, tag, ts }
 const pendingMtz = {};  // { [from]: object }
 const MTZ_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
+
+// Split unit selection sessions: { step, famKey, loadKw, idb, iwb, odb, condition, ts }
+const pendingSplit = {};
+const SPLIT_TIMEOUT_MS = 10 * 60 * 1000;
 const VRF_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 
@@ -900,36 +905,218 @@ async function sendFileOptions(to, matchedFiles, prompt) {
 
 
 // ============================================================
+//  SPLIT UNIT SELECTION HANDLER (Toshiba / TCL / SKM)
+// ============================================================
+
+// Format a split ranking result as WhatsApp text
+function splitRankText(ranked, loadKw) {
+  const adequate = ranked.filter(r => r.adequate);
+  const show = (adequate.length ? adequate : ranked).slice(0, 3);
+  const f2 = v => v.toFixed(2);
+  return show.map((r, i) => {
+    const label  = i === 0 ? "⭐ " : `${i + 1}. `;
+    const margin = r.margin != null ? ` (+${(r.margin * 100).toFixed(0)}%)` : "";
+    const shc    = r.shc != null ? `SC ${f2(r.shc)} kW · ` : "";
+    return `${label}*${r.key}*\n` +
+           `   TC ${f2(r.tc)} kW${margin}  ·  ${shc}Power ${f2(r.p)} kW  ·  EER ${f2(r.eer)}`;
+  }).join("\n\n");
+}
+
+async function handleSplitStep(from, text) {
+  const s = pendingSplit[from];
+
+  if (Date.now() - s.ts > SPLIT_TIMEOUT_MS) {
+    delete pendingSplit[from];
+    return sendText(from, "⏰ Split session timed out. Type *SPLIT* to start again.");
+  }
+
+  if (/^(cancel|stop|exit|quit|reset)\b/i.test(text.trim())) {
+    delete pendingSplit[from];
+    return sendText(from, "✅ Split selection cancelled. Type *SPLIT* anytime to restart.");
+  }
+
+  // ── Step 1: choose type ─────────────────────────────────────
+  if (s.step === "type") {
+    const n = parseInt(text.trim(), 10);
+    if (!n || n < 1 || n > FAMILY_MENU.length) {
+      const opts = FAMILY_MENU.map((f, i) => `${i + 1}. ${f.label}`).join("\n");
+      return sendText(from, `❌ Reply with a number 1–${FAMILY_MENU.length}:\n\n${opts}`);
+    }
+    const fam = FAMILY_MENU[n - 1];
+    s.famKey = fam.key;
+    s.kind   = fam.kind;
+    s.step   = "load";
+    return sendText(from,
+      `✅ *${fam.label}*\n\n` +
+      "*Step 2/3:* Required total cooling load? (kW)\n" +
+      "e.g. `6.5` or `6.5 kW`"
+    );
+  }
+
+  // ── Step 2: cooling load ────────────────────────────────────
+  if (s.step === "load") {
+    const kw = parseFloat(text.match(/[\d.]+/)?.[0] ?? "");
+    if (!kw || kw <= 0 || kw > 200) {
+      return sendText(from,
+        "❌ Enter load in kW (e.g. `6.5`). Range: 0.1–200 kW.\nType *cancel* to exit."
+      );
+    }
+    s.loadKw = kw;
+    s.step   = "conditions";
+
+    if (s.kind === "t1t3") {
+      return sendText(from,
+        `✅ Load: *${kw} kW*\n\n` +
+        "*Step 3/3:* Select rating condition:\n" +
+        "• *T1* — 27/19°C @ 35°C (standard)\n" +
+        "• *T3* — 29/19°C @ 46°C (Gulf / tropical peak)"
+      );
+    } else {
+      return sendText(from,
+        `✅ Load: *${kw} kW*\n\n` +
+        "*Step 3/3:* Enter on-coil DB / WB and outdoor ambient in °C on one line:\n" +
+        "e.g. `27/19/46`  _(DB°C / WB°C / Amb°C)_\n" +
+        "Presets: *T1* (27/19/35) · *T3* (29/19/46) · *Qatar* (24/17/46)"
+      );
+    }
+  }
+
+  // ── Step 3: conditions → rank and output ───────────────────
+  if (s.step === "conditions") {
+    let idb, iwb, odb, condition;
+
+    if (s.kind === "t1t3") {
+      const t = text.trim().toUpperCase();
+      if (t !== "T1" && t !== "T3") {
+        return sendText(from, "❌ Reply *T1* or *T3*.\nType *cancel* to exit.");
+      }
+      condition = t;
+      // Derive standard on-coil for display purposes (not used in computation for t1t3)
+      const pts = { T1: [27, 19, 35], T3: [29, 19, 46] };
+      [idb, iwb, odb] = pts[t];
+    } else {
+      // Accept "T1", "T3", "Qatar" presets or raw "27/19/46"
+      const t = text.trim().toLowerCase();
+      if (/^t1$/i.test(t))      { idb = 27; iwb = 19; odb = 35; condition = "T1"; }
+      else if (/^t3$/i.test(t)) { idb = 29; iwb = 19; odb = 46; condition = "T3"; }
+      else if (/^qatar/i.test(t)){ idb = 24; iwb = 17; odb = 46; condition = "T3"; }
+      else {
+        const nums = text.match(/[\d.]+/g);
+        if (!nums || nums.length < 3) {
+          return sendText(from,
+            "❌ Enter three values: DB / WB / Ambient in °C, e.g. `27/19/46`\n" +
+            "Or use presets: *T1*, *T3*, *Qatar*\n" +
+            "Type *cancel* to exit."
+          );
+        }
+        idb = parseFloat(nums[0]); iwb = parseFloat(nums[1]); odb = parseFloat(nums[2]);
+        if (idb < 15 || idb > 40 || iwb < 10 || iwb > 35 || iwb > idb || odb < 20 || odb > 60) {
+          return sendText(from,
+            "❌ Values out of range. DB: 15–40 · WB: 10–35 · Amb: 20–60 · WB ≤ DB\n" +
+            "Type *cancel* to exit."
+          );
+        }
+        condition = "T3";
+      }
+    }
+
+    delete pendingSplit[from];
+
+    const ranked = rankSplit(s.famKey, s.loadKw, idb, iwb, odb, condition);
+    if (!ranked.length) {
+      return sendText(from, "❌ No models found for that family. Please try again.");
+    }
+
+    const famLabel = FAMILY_MENU.find(f => f.key === s.famKey)?.label ?? s.famKey;
+    const condStr  = s.kind === "t1t3"
+      ? condition
+      : `DB${idb}/WB${iwb}°C @ ${odb}°C amb`;
+    const adequate = ranked.filter(r => r.adequate);
+    const summary  = splitRankText(ranked, s.loadKw);
+    const bestOk   = adequate.length > 0;
+
+    await sendText(from,
+      `🧊 *Split Selection — ${famLabel}*\n` +
+      `Load: ${s.loadKw} kW  ·  Conditions: ${condStr}\n\n` +
+      `*📊 ${bestOk ? "Adequate models (tightest fit first)" : "No adequate model — closest options"}:*\n\n` +
+      summary + "\n\n" +
+      (bestOk ? "" : "⚠️ No model meets the required load at these conditions.\n") +
+      "_Verify against manufacturer selection software before submittal._\n\n" +
+      "Type *SPLIT* to run another selection."
+    );
+  }
+}
+
+// ============================================================
 //  TRANE MTZ STEP HANDLER
 // ============================================================
 const TR_TO_MBH = 12; // 1 TR = 12 MBtu/h
+const { rankModels: mtzRank } = require("./mtz-engine.js");
 
+// Parse a cooling load like "8.5 TR", "100", "100 MBH"
 function parseMbh(text) {
-  // Accept: "100", "100 MBH", "8 TR", "8.5 ton", "8.5 tons"
   const t = text.toLowerCase().trim();
-  const trMatch = t.match(/^([\d.]+)\s*(?:tr|ton|tons)$/);
+  const trMatch = t.match(/^([\d.]+)\s*(?:tr|ton|tons)\b/);
   if (trMatch) return parseFloat(trMatch[1]) * TR_TO_MBH;
-  const numMatch = t.match(/^([\d.]+)\s*(?:mbh|mbtu\/h|mbtuh)?$/);
+  const numMatch = t.match(/^([\d.]+)\s*(?:mbh|mbtu\/h|mbtuh)?\b/);
   if (numMatch) return parseFloat(numMatch[1]);
   return null;
 }
 
-function parseTempPair(text) {
-  // Accept: "80/67", "80 67", "80,67", "db80 wb67", "80°F / 67°F"
-  const nums = text.match(/[\d.]+/g);
-  if (nums && nums.length >= 2) return { db: parseFloat(nums[0]), wb: parseFloat(nums[1]) };
-  return null;
+// Parse "8.5TR / 7TR sc" → { tc: 102, sc: 84 }  or just "8.5 TR" → { tc: 102, sc: null }
+function parseLoad(text) {
+  const parts = text.split(/[,\/|]+/);
+  const tc = parseMbh(parts[0]);
+  if (!tc) return null;
+  let sc = null;
+  if (parts[1]) {
+    const v = parseMbh(parts[1]);
+    if (v && v < tc) sc = v;
+  }
+  return { tc, sc };
 }
 
-function parseNum(text) {
-  const m = text.match(/[\d.]+/);
-  return m ? parseFloat(m[0]) : null;
+// Parse "80/67/115" or "80 67 115" → { db, wb, amb }
+function parseConditions(text) {
+  const nums = text.match(/[\d.]+/g);
+  if (!nums || nums.length < 3) return null;
+  return { db: parseFloat(nums[0]), wb: parseFloat(nums[1]), amb: parseFloat(nums[2]) };
+}
+
+// Parse "2800 | Project Name | TAG-01" or "rated | Project Name"
+function parseExtras(text) {
+  const parts = text.split(/\|/).map(p => p.trim());
+  const afRaw = parts[0];
+  const useRated = /^(rated|skip|auto)$/i.test(afRaw);
+  const cfm = useRated ? null : parseFloat(afRaw.match(/[\d.]+/)?.[0] ?? "");
+  if (!useRated && (!cfm || cfm < 500 || cfm > 20000)) return null;
+  return {
+    airflow: useRated ? null : cfm,
+    project: parts[1] || "",
+    tag:     parts[2] || "",
+  };
+}
+
+// Build a ranked text summary of top models
+function mtzRankSummary(reqTC, reqSC, db, wb, amb) {
+  const ranked = mtzRank(reqTC, reqSC || 0, db, wb, amb);
+  const adequate = ranked.filter(r => r.adequate);
+  const show = (adequate.length ? adequate : ranked).slice(0, 3);
+  const fmt1 = v => v.toFixed(1);
+  const lines = show.map((r, i) => {
+    const eer = r.r.PI > 0 ? (r.r.TC * 1000 / r.r.PI).toFixed(2) : "—";
+    const margin = r.tcMargin != null ? ` (+${(r.tcMargin * 100).toFixed(0)}%)` : "";
+    const label = i === 0 ? "⭐ " : `${i + 1}. `;
+    return `${label}*${r.key}* — TC ${fmt1(r.r.TC)} MBH (${fmt1(r.r.TC/TR_TO_MBH)} TR)${margin}\n` +
+           `   SC ${fmt1(r.r.SC)} MBH · ${fmt1(r.r.PI)} kW · EER ${eer}\n` +
+           `   Off-coil DB ${fmt1(r.oc.dbOff)}°F / WB ${fmt1(r.oc.wbOff)}°F`;
+  });
+  return lines.join("\n\n");
 }
 
 async function handleMtzStep(from, text) {
   const s = pendingMtz[from];
 
-  // Auto-cancel if session is older than 10 minutes
   if (Date.now() - s.ts > MTZ_TIMEOUT_MS) {
     delete pendingMtz[from];
     return sendText(from, "⏰ MTZ session timed out. Type *MTZ* to start a new selection.");
@@ -941,94 +1128,96 @@ async function handleMtzStep(from, text) {
     return sendText(from, "✅ MTZ selection cancelled. Type *MTZ* anytime to start again.");
   }
 
-  // ── Step 1: required cooling load ───────────────────────────
+  // ── Step 1: cooling load ────────────────────────────────────
   if (s.step === "load") {
-    const mbh = parseMbh(text);
-    if (!mbh || mbh <= 0) {
+    const load = parseLoad(text);
+    if (!load || load.tc <= 0) {
       return sendText(from,
-        "❌ Couldn't parse that. Please enter the required total cooling load.\n" +
-        "Examples: `100` (MBtu/h), `120 MBH`, `8.5 TR`\n" +
+        "❌ Couldn't read that load. Try:\n" +
+        "• `8.5 TR`  or  `100 MBH`\n" +
+        "• With sensible: `8.5TR / 7TR`\n" +
         "Type *cancel* to exit."
       );
     }
-    s.reqTC = mbh;
+    s.reqTC = load.tc;
+    s.reqSC = load.sc;
     s.step  = "conditions";
+    const scNote = load.sc ? ` · sensible ${load.sc.toFixed(1)} MBH (${(load.sc/TR_TO_MBH).toFixed(2)} TR)` : "";
     return sendText(from,
-      `✅ Load: *${mbh.toFixed(1)} MBtu/h* (${(mbh / TR_TO_MBH).toFixed(2)} TR)\n\n` +
-      "*Step 2/4:* What are the *on-coil conditions*?\n" +
-      "Reply with dry-bulb and wet-bulb temperatures in °F — e.g. `80/67`\n" +
-      "_(Typical: DB 80°F / WB 67°F)_"
+      `✅ Load: *${load.tc.toFixed(1)} MBH (${(load.tc/TR_TO_MBH).toFixed(2)} TR)*${scNote}\n\n` +
+      "*Step 2/3:* Enter on-coil *DB / WB* and *outdoor ambient* on one line:\n" +
+      "e.g. `80/67/115`  _(DB°F / WB°F / Amb°F)_\n" +
+      "_(Typical Gulf: 80/67/115)_"
     );
   }
 
-  // ── Step 2: on-coil DB / WB ─────────────────────────────────
+  // ── Step 2: DB / WB / Ambient (combined) ───────────────────
   if (s.step === "conditions") {
-    const pair = parseTempPair(text);
-    if (!pair || pair.db < 60 || pair.db > 100 || pair.wb < 50 || pair.wb > 85 || pair.wb > pair.db) {
+    const c = parseConditions(text);
+    if (!c || c.db < 60 || c.db > 100 || c.wb < 50 || c.wb > 85 || c.wb > c.db || c.amb < 70 || c.amb > 135) {
       return sendText(from,
-        "❌ Couldn't parse that. Enter DB and WB in °F, e.g. `80/67`\n" +
-        "DB range 60–100°F · WB range 50–85°F · WB must be ≤ DB\n" +
+        "❌ Couldn't parse. Enter three numbers: DB / WB / Ambient in °F\n" +
+        "e.g. `80/67/115`\n" +
+        "DB: 60–100 · WB: 50–85 · Amb: 70–135 · WB ≤ DB\n" +
         "Type *cancel* to exit."
       );
     }
-    s.db   = pair.db;
-    s.wb   = pair.wb;
-    s.step = "ambient";
+    s.db   = c.db;
+    s.wb   = c.wb;
+    s.amb  = c.amb;
+    s.step = "extras";
     return sendText(from,
-      `✅ On-coil: *DB ${pair.db}°F / WB ${pair.wb}°F*\n\n` +
-      "*Step 3/4:* What is the *outdoor ambient temperature*? (°F)\n" +
-      "Reply with a number, e.g. `115`\n" +
-      "_(Table range: 85–125°F. Typical Qatar/Gulf: 115–125°F)_"
+      `✅ Conditions: *DB ${c.db}°F / WB ${c.wb}°F · Ambient ${c.amb}°F*\n\n` +
+      "*Step 3/3:* Enter supply *airflow* (CFM), or *rated* for catalogue default.\n" +
+      "Optionally add project name & unit tag separated by `|`:\n" +
+      "• `rated`\n" +
+      "• `2800`\n" +
+      "• `2800 | MOEHE School | PAC-01`\n" +
+      "• `rated | Cooling Tower Project | CU-03`"
     );
   }
 
-  // ── Step 3: ambient ─────────────────────────────────────────
-  if (s.step === "ambient") {
-    const amb = parseNum(text);
-    if (!amb || amb < 70 || amb > 135) {
+  // ── Step 3: airflow + optional project/tag → generate PDF ──
+  if (s.step === "extras") {
+    const ex = parseExtras(text);
+    if (!ex) {
       return sendText(from,
-        "❌ Enter ambient temp in °F, e.g. `115`. Range: 70–135°F.\nType *cancel* to exit."
+        "❌ Enter airflow CFM (500–20000), or *rated*.\n" +
+        "Examples: `2800`  |  `rated`  |  `2800 | Project | TAG`\n" +
+        "Type *cancel* to exit."
       );
     }
-    s.amb  = amb;
-    s.step = "airflow";
-    return sendText(from,
-      `✅ Ambient: *${amb}°F*\n\n` +
-      "*Step 4/4:* What is the *supply airflow*? (CFM)\n" +
-      "Reply with a CFM value, e.g. `2800`\n" +
-      "Or reply *rated* to use each model's catalogue rated airflow."
-    );
-  }
-
-  // ── Step 4: airflow → generate PDF ──────────────────────────
-  if (s.step === "airflow") {
-    const useRated = /^rated$/i.test(text.trim());
-    const cfm = useRated ? null : parseNum(text);
-    if (!useRated && (!cfm || cfm < 500 || cfm > 20000)) {
-      return sendText(from,
-        "❌ Enter airflow in CFM (500–20000), e.g. `2800`\nOr reply *rated* to use catalogue rated airflow.\nType *cancel* to exit."
-      );
-    }
-    s.airflow = cfm;
+    s.airflow = ex.airflow;
+    s.project = ex.project;
+    s.tag     = ex.tag;
     delete pendingMtz[from];
 
+    // Show ranked text preview first
+    let previewText = "";
+    try {
+      previewText = mtzRankSummary(s.reqTC, s.reqSC, s.db, s.wb, s.amb);
+    } catch (_) { /* skip preview on error */ }
+
+    const cfmLabel = ex.airflow ? `${ex.airflow} CFM` : "rated (catalogue)";
     await sendText(from,
-      `✅ Airflow: *${cfm ? cfm + " CFM" : "rated (catalogue)"}*\n\n` +
-      "⏳ Generating your MTZ selection datasheet... please wait a moment."
+      `✅ Airflow: *${cfmLabel}*\n\n` +
+      (previewText ? `*📊 Top Models @ DB${s.db}/WB${s.wb}°F, ${s.amb}°F amb:*\n\n${previewText}\n\n` : "") +
+      "⏳ Generating full datasheet PDF…"
     );
 
-    console.log(`📊 MTZ selection: reqTC=${s.reqTC} DB=${s.db} WB=${s.wb} amb=${s.amb} airflow=${s.airflow}`);
+    console.log(`📊 MTZ selection: reqTC=${s.reqTC} reqSC=${s.reqSC} DB=${s.db} WB=${s.wb} amb=${s.amb} airflow=${s.airflow}`);
 
     let pdfBuffer;
     try {
       pdfBuffer = await generateMtzPdf({
         reqTC:   s.reqTC,
+        reqSC:   s.reqSC || 0,
         db:      s.db,
         wb:      s.wb,
         amb:     s.amb,
         airflow: s.airflow,
-        project: s.project || "",
-        tag:     s.tag     || "",
+        project: s.project,
+        tag:     s.tag,
       });
     } catch (err) {
       console.error("❌ MTZ PDF error:", err.message);
@@ -1039,7 +1228,6 @@ async function handleMtzStep(from, text) {
       return sendText(from, "❌ No MTZ model found for those conditions. Please try different values.");
     }
 
-    // Upload the PDF buffer to WhatsApp media and send as document
     try {
       const fd = new FormData();
       fd.append("messaging_product", "whatsapp");
@@ -1053,14 +1241,15 @@ async function handleMtzStep(from, text) {
       );
       const mediaId = uploadRes.data.id;
 
+      const projLabel = s.project ? ` · ${s.project}${s.tag ? " / " + s.tag : ""}` : "";
       await send(from, {
         messaging_product: "whatsapp",
         to: from,
         type: "document",
         document: {
           id: mediaId,
-          filename: "MTZ_Selection_Datasheet.pdf",
-          caption: `Trane MTZ Selection — ${(s.reqTC / TR_TO_MBH).toFixed(1)} TR @ DB${s.db}/WB${s.wb}°F, ${s.amb}°F amb`,
+          filename: `MTZ_Selection${s.tag ? "_" + s.tag : ""}.pdf`,
+          caption: `Trane MTZ — ${(s.reqTC / TR_TO_MBH).toFixed(1)} TR @ DB${s.db}/WB${s.wb}°F, ${s.amb}°F amb${projLabel}`,
         },
       });
     } catch (err) {
@@ -1237,18 +1426,62 @@ app.post("/webhook", async (req, res) => {
       return await sendText(from, `Please reply with a number between 1 and ${list.length}.`);
     }
 
+    // ── Split unit multi-step session ──────────────────────────
+    if (pendingSplit[from]) {
+      return await handleSplitStep(from, text);
+    }
+    // Trigger word: "split", "toshiba split", "ras split", "rav split", "tcl split", "skm split"
+    if (/\bsplit\b/i.test(text) && !/vrf\s+split|split\s+vrf/i.test(text)) {
+      pendingSplit[from] = { step: "type", ts: Date.now() };
+      const opts = FAMILY_MENU.map((f, i) => `${i + 1}. ${f.label}`).join("\n");
+      return await sendText(from,
+        "🧊 *Split Unit Selector* (Toshiba / TCL / SKM)\n\n" +
+        "Choose the unit type:\n\n" + opts + "\n\n" +
+        "_(Type *cancel* anytime to exit)_"
+      );
+    }
+
     // ── MTZ multi-step session ─────────────────────────────────
     if (pendingMtz[from]) {
       return await handleMtzStep(from, text);
     }
-    // Trigger word: "mtz", "trane mtz", "mtz selection", "mtz selector"
+    // Trigger word: "mtz", "trane mtz", "mtz selection" etc.
     if (/\bmtz\b/i.test(text)) {
+      // Express mode: "MTZ 8.5TR 80/67/115" — all params on one line
+      const expressMatch = text.match(/\bmtz\b\s+(.+)/i);
+      if (expressMatch) {
+        const rest = expressMatch[1].trim();
+        const loadPart = rest.split(/\s+/)[0];
+        const load = parseLoad(loadPart);
+        const nums = rest.match(/[\d.]+/g) || [];
+        if (load && nums.length >= 4) {
+          // nums[0]=load, nums[1]=DB, nums[2]=WB, nums[3]=Amb
+          const db = parseFloat(nums[1]), wb = parseFloat(nums[2]), amb = parseFloat(nums[3]);
+          if (db >= 60 && db <= 100 && wb >= 50 && wb <= 85 && wb <= db && amb >= 70 && amb <= 135) {
+            pendingMtz[from] = {
+              step: "extras", ts: Date.now(),
+              reqTC: load.tc, reqSC: load.sc,
+              db, wb, amb,
+            };
+            const scNote = load.sc ? ` / SC ${load.sc.toFixed(1)} MBH` : "";
+            return await sendText(from,
+              `✅ *${load.tc.toFixed(1)} MBH${scNote} · DB${db}/WB${wb}°F · Amb ${amb}°F*\n\n` +
+              "*Step 3/3:* Enter supply airflow CFM, or *rated*.\n" +
+              "Optionally add project name & tag:\n" +
+              "• `rated`  or  `2800`\n" +
+              "• `2800 | Project Name | TAG-01`"
+            );
+          }
+        }
+      }
       pendingMtz[from] = { step: "load", ts: Date.now() };
       return await sendText(from,
         "🌡️ *Trane MTZ Package Unit Selector*\n\n" +
-        "I'll walk you through 4 quick questions to find the best model and generate a datasheet PDF.\n\n" +
-        "*Step 1/4:* What is your required total cooling load?\n" +
-        "Reply with a number in *MBtu/h* or add TR — e.g. `100` or `8.5 TR`"
+        "3 quick steps → ranked models + PDF datasheet.\n\n" +
+        "*Step 1/3:* Required total cooling load?\n" +
+        "• `8.5 TR`  or  `100 MBH`\n" +
+        "• With sensible: `8.5 TR / 7 TR`\n\n" +
+        "_(Type *cancel* anytime to exit)_"
       );
     }
     // ────────────────────────────────────────────────────────────
