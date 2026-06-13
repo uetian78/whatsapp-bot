@@ -908,18 +908,87 @@ async function sendFileOptions(to, matchedFiles, prompt) {
 //  SPLIT UNIT SELECTION HANDLER (Toshiba / TCL / SKM)
 // ============================================================
 
-// Format a split ranking result as WhatsApp text
-function splitRankText(ranked, loadKw) {
+const SPLIT_BRANDS = [
+  { name: "Toshiba", types: [
+    { label: "Hi-Wall (RAS-18/24/30PKV)",         famKey: "PKV", kind: "grid" },
+    { label: "Ducted Non-Inverter (RAV BSP/ASP)",  famKey: "BSP", kind: "grid" },
+    { label: "Ducted Inverter (RAV SH)",            famKey: "SH",  kind: "grid" },
+  ]},
+  { name: "TCL", types: [
+    { label: "Hi-Wall (SaveIN AI)",                 famKey: "TCL-HW", kind: "t1t3" },
+  ]},
+  { name: "SKM", types: [
+    { label: "Hi-Wall (MSKMP-CVK1C60)",             famKey: "SKM-HW",  kind: "t1t3" },
+    { label: "Ducted (Sierra DDP+RX)",              famKey: "SKM-DCT", kind: "t1t3" },
+  ]},
+];
+
+// Resolve type keyword within a brand to { famKey, kind }
+function resolveSplitType(brand, typeStr) {
+  const t = typeStr.toLowerCase().replace(/[^a-z0-9]/g, "");
+  const b = SPLIT_BRANDS.find(b => b.name.toLowerCase() === brand.toLowerCase());
+  if (!b) return null;
+  if (brand === "TCL") return b.types[0];
+  const isDuctedInv = /sh|inverterd|dinv|ductedinv/.test(t) || (/duct/.test(t) && /inv/.test(t));
+  const isDucted    = /duct|bsp|asp|ddp/.test(t);
+  if (isDuctedInv) return b.types.find(x => /SH/.test(x.famKey)) ?? null;
+  if (isDucted)    return b.types.find(x => /BSP|DCT/.test(x.famKey)) ?? null;
+  // hi-wall / wall / pkv or default
+  return b.types.find(x => /PKV|HW/.test(x.famKey)) ?? b.types[0];
+}
+
+// Convert ambient: if value > 60 assume °F → °C
+function normAmb(v) { return v > 60 ? Math.round((v - 32) * 5 / 9 * 10) / 10 : v; }
+
+// Parse one unit line: "5kw, hi wall, 26.7/19.4/46" or "5kw, hi wall, T3"
+// Returns { loadKw, typeStr, idb, iwb, odb, condition } or null
+function parseSplitLine(line) {
+  const parts = line.split(/,/).map(p => p.trim());
+  if (parts.length < 2) return null;
+
+  // Load
+  const kw = parseFloat(parts[0].match(/[\d.]+/)?.[0] ?? "");
+  if (!kw || kw <= 0) return null;
+
+  // Type string (column 2)
+  const typeStr = parts[1] || "hi wall";
+
+  // Conditions (column 3 — optional, defaults to T3)
+  let idb = 29, iwb = 19, odb = 46, condition = "T3";
+  if (parts[2]) {
+    const cStr = parts[2].trim();
+    if (/^t1$/i.test(cStr))      { idb = 27; iwb = 19; odb = 35; condition = "T1"; }
+    else if (/^t3$/i.test(cStr)) { idb = 29; iwb = 19; odb = 46; condition = "T3"; }
+    else if (/^qatar/i.test(cStr)){ idb = 24; iwb = 17; odb = 46; condition = "T3"; }
+    else {
+      const nums = cStr.match(/[\d.]+/g);
+      if (nums && nums.length >= 3) {
+        idb = parseFloat(nums[0]);
+        iwb = parseFloat(nums[1]);
+        odb = normAmb(parseFloat(nums[2]));
+        condition = odb <= 40 ? "T1" : "T3";
+      }
+    }
+  }
+  return { loadKw: kw, typeStr, idb, iwb, odb, condition };
+}
+
+// Format single unit result block
+function formatSplitUnit(unitNum, tag, ranked, loadKw, condStr, famLabel) {
+  const f2 = v => v != null ? v.toFixed(2) : "—";
   const adequate = ranked.filter(r => r.adequate);
-  const show = (adequate.length ? adequate : ranked).slice(0, 3);
-  const f2 = v => v.toFixed(2);
-  return show.map((r, i) => {
-    const label  = i === 0 ? "⭐ " : `${i + 1}. `;
-    const margin = r.margin != null ? ` (+${(r.margin * 100).toFixed(0)}%)` : "";
-    const shc    = r.shc != null ? `SC ${f2(r.shc)} kW · ` : "";
-    return `${label}*${r.key}*\n` +
-           `   TC ${f2(r.tc)} kW${margin}  ·  ${shc}Power ${f2(r.p)} kW  ·  EER ${f2(r.eer)}`;
-  }).join("\n\n");
+  const best = ranked[0];
+  if (!best) return `${unitNum}. ❌ No data for ${famLabel}`;
+  const ok = best.adequate;
+  const margin = best.margin != null ? ` (+${(best.margin * 100).toFixed(0)}%)` : "";
+  const shc = best.shc != null ? ` · SC ${f2(best.shc)} kW` : "";
+  const statusIcon = ok ? "✅" : "⚠️";
+  let out = `*${statusIcon} Unit ${unitNum}${tag ? " — " + tag : ""}*\n`;
+  out += `${famLabel} · ${condStr}\n`;
+  out += `Load ${loadKw} kW → ⭐ *${best.key}*\n`;
+  out += `TC ${f2(best.tc)} kW${margin}${shc} · Power ${f2(best.p)} kW · EER ${f2(best.eer)}`;
+  if (!ok) out += `\n⚠️ Undersized — next: ${ranked[1] ? ranked[1].key + " (" + f2(ranked[1].tc) + " kW)" : "none"}`;
+  return out;
 }
 
 async function handleSplitStep(from, text) {
@@ -927,122 +996,89 @@ async function handleSplitStep(from, text) {
 
   if (Date.now() - s.ts > SPLIT_TIMEOUT_MS) {
     delete pendingSplit[from];
-    return sendText(from, "⏰ Split session timed out. Type *SPLIT* to start again.");
+    return sendText(from, "⏰ Split session timed out. Type *Split Selection* to start again.");
   }
 
   if (/^(cancel|stop|exit|quit|reset)\b/i.test(text.trim())) {
     delete pendingSplit[from];
-    return sendText(from, "✅ Split selection cancelled. Type *SPLIT* anytime to restart.");
+    return sendText(from, "✅ Split selection cancelled. Type *Split Selection* anytime to restart.");
   }
 
-  // ── Step 1: choose type ─────────────────────────────────────
-  if (s.step === "type") {
-    const n = parseInt(text.trim(), 10);
-    if (!n || n < 1 || n > FAMILY_MENU.length) {
-      const opts = FAMILY_MENU.map((f, i) => `${i + 1}. ${f.label}`).join("\n");
-      return sendText(from, `❌ Reply with a number 1–${FAMILY_MENU.length}:\n\n${opts}`);
+  // ── Step 1: choose brand ────────────────────────────────────
+  if (s.step === "brand") {
+    const t = text.trim();
+    let brand = null;
+    if (/^1$|toshiba/i.test(t))  brand = "Toshiba";
+    else if (/^2$|tcl/i.test(t)) brand = "TCL";
+    else if (/^3$|skm/i.test(t)) brand = "SKM";
+    if (!brand) {
+      return sendText(from,
+        "❌ Reply *1*, *2*, or *3*:\n1. Toshiba\n2. TCL\n3. SKM\n\nType *cancel* to exit."
+      );
     }
-    const fam = FAMILY_MENU[n - 1];
-    s.famKey = fam.key;
-    s.kind   = fam.kind;
-    s.step   = "load";
+    s.brand = brand;
+    s.step  = "units";
+
+    const b = SPLIT_BRANDS.find(b => b.name === brand);
+    const typeList = b.types.map(t => `• *${t.label.split("(")[0].trim()}*`).join("\n");
+    const condNote = brand === "Toshiba"
+      ? "Conditions: `DB/WB/Amb` in °C (e.g. `26.7/19.4/46`)\nor presets *T1*, *T3*, *Qatar*."
+      : "Conditions: `Amb` in °C drives T1/T3 rating automatically (≤40°C = T1, >40°C = T3).\nOr write *T1* / *T3* directly.";
+
     return sendText(from,
-      `✅ *${fam.label}*\n\n` +
-      "*Step 2/3:* Required total cooling load? (kW)\n" +
-      "e.g. `6.5` or `6.5 kW`"
+      `✅ *${brand}*\n\n` +
+      `*Step 2/2:* Enter units — one per line:\n` +
+      "`load kW, type, DB/WB/Amb`\n\n" +
+      `Available types:\n${typeList}\n\n` +
+      `${condNote}\n\n` +
+      `*Examples:*\n` +
+      (brand === "Toshiba"
+        ? "5 kw, hi wall, 26.7/19.4/46\n3 kw, ducted, 26.7/19.4/46\n7 kw, ducted inverter, T3"
+        : brand === "TCL"
+        ? "5 kw, hi wall, 46\n3 kw, hi wall, T3"
+        : "5 kw, hi wall, 46\n8 kw, ducted, T3")
     );
   }
 
-  // ── Step 2: cooling load ────────────────────────────────────
-  if (s.step === "load") {
-    const kw = parseFloat(text.match(/[\d.]+/)?.[0] ?? "");
-    if (!kw || kw <= 0 || kw > 200) {
-      return sendText(from,
-        "❌ Enter load in kW (e.g. `6.5`). Range: 0.1–200 kW.\nType *cancel* to exit."
-      );
+  // ── Step 2: multi-unit list → run all and return results ───
+  if (s.step === "units") {
+    const lines = text.split(/\n/).map(l => l.trim()).filter(Boolean);
+    if (!lines.length) {
+      return sendText(from, "❌ No units found. Enter at least one line.\nType *cancel* to exit.");
     }
-    s.loadKw = kw;
-    s.step   = "conditions";
 
-    if (s.kind === "t1t3") {
-      return sendText(from,
-        `✅ Load: *${kw} kW*\n\n` +
-        "*Step 3/3:* Select rating condition:\n" +
-        "• *T1* — 27/19°C @ 35°C (standard)\n" +
-        "• *T3* — 29/19°C @ 46°C (Gulf / tropical peak)"
-      );
-    } else {
-      return sendText(from,
-        `✅ Load: *${kw} kW*\n\n` +
-        "*Step 3/3:* Enter on-coil DB / WB and outdoor ambient in °C on one line:\n" +
-        "e.g. `27/19/46`  _(DB°C / WB°C / Amb°C)_\n" +
-        "Presets: *T1* (27/19/35) · *T3* (29/19/46) · *Qatar* (24/17/46)"
-      );
-    }
-  }
+    const results = [];
+    const errors  = [];
 
-  // ── Step 3: conditions → rank and output ───────────────────
-  if (s.step === "conditions") {
-    let idb, iwb, odb, condition;
-
-    if (s.kind === "t1t3") {
-      const t = text.trim().toUpperCase();
-      if (t !== "T1" && t !== "T3") {
-        return sendText(from, "❌ Reply *T1* or *T3*.\nType *cancel* to exit.");
+    lines.forEach((line, i) => {
+      const parsed = parseSplitLine(line);
+      if (!parsed) {
+        errors.push(`Line ${i + 1}: couldn't parse — "${line}"`);
+        return;
       }
-      condition = t;
-      // Derive standard on-coil for display purposes (not used in computation for t1t3)
-      const pts = { T1: [27, 19, 35], T3: [29, 19, 46] };
-      [idb, iwb, odb] = pts[t];
-    } else {
-      // Accept "T1", "T3", "Qatar" presets or raw "27/19/46"
-      const t = text.trim().toLowerCase();
-      if (/^t1$/i.test(t))      { idb = 27; iwb = 19; odb = 35; condition = "T1"; }
-      else if (/^t3$/i.test(t)) { idb = 29; iwb = 19; odb = 46; condition = "T3"; }
-      else if (/^qatar/i.test(t)){ idb = 24; iwb = 17; odb = 46; condition = "T3"; }
-      else {
-        const nums = text.match(/[\d.]+/g);
-        if (!nums || nums.length < 3) {
-          return sendText(from,
-            "❌ Enter three values: DB / WB / Ambient in °C, e.g. `27/19/46`\n" +
-            "Or use presets: *T1*, *T3*, *Qatar*\n" +
-            "Type *cancel* to exit."
-          );
-        }
-        idb = parseFloat(nums[0]); iwb = parseFloat(nums[1]); odb = parseFloat(nums[2]);
-        if (idb < 15 || idb > 40 || iwb < 10 || iwb > 35 || iwb > idb || odb < 20 || odb > 60) {
-          return sendText(from,
-            "❌ Values out of range. DB: 15–40 · WB: 10–35 · Amb: 20–60 · WB ≤ DB\n" +
-            "Type *cancel* to exit."
-          );
-        }
-        condition = "T3";
+      const resolved = resolveSplitType(s.brand, parsed.typeStr);
+      if (!resolved) {
+        errors.push(`Line ${i + 1}: unknown type "${parsed.typeStr}" for ${s.brand}`);
+        return;
       }
-    }
+      const ranked = rankSplit(resolved.famKey, parsed.loadKw, parsed.idb, parsed.iwb, parsed.odb, parsed.condition);
+      const famLabel = SPLIT_BRANDS.find(b => b.name === s.brand)?.types.find(t => t.famKey === resolved.famKey)?.label?.split("(")[0]?.trim() ?? resolved.famKey;
+      const condStr  = resolved.kind === "t1t3"
+        ? parsed.condition
+        : `${parsed.idb}/${parsed.iwb}°C @ ${parsed.odb}°C`;
+      results.push(formatSplitUnit(i + 1, null, ranked, parsed.loadKw, condStr, famLabel));
+    });
 
     delete pendingSplit[from];
 
-    const ranked = rankSplit(s.famKey, s.loadKw, idb, iwb, odb, condition);
-    if (!ranked.length) {
-      return sendText(from, "❌ No models found for that family. Please try again.");
-    }
-
-    const famLabel = FAMILY_MENU.find(f => f.key === s.famKey)?.label ?? s.famKey;
-    const condStr  = s.kind === "t1t3"
-      ? condition
-      : `DB${idb}/WB${iwb}°C @ ${odb}°C amb`;
-    const adequate = ranked.filter(r => r.adequate);
-    const summary  = splitRankText(ranked, s.loadKw);
-    const bestOk   = adequate.length > 0;
+    const header = `🧊 *Split Selection — ${s.brand}*  (${results.length} unit${results.length !== 1 ? "s" : ""})\n`;
+    const body   = results.join("\n\n─────────────────\n\n");
+    const errStr = errors.length ? "\n\n⚠️ *Skipped lines:*\n" + errors.join("\n") : "";
 
     await sendText(from,
-      `🧊 *Split Selection — ${famLabel}*\n` +
-      `Load: ${s.loadKw} kW  ·  Conditions: ${condStr}\n\n` +
-      `*📊 ${bestOk ? "Adequate models (tightest fit first)" : "No adequate model — closest options"}:*\n\n` +
-      summary + "\n\n" +
-      (bestOk ? "" : "⚠️ No model meets the required load at these conditions.\n") +
-      "_Verify against manufacturer selection software before submittal._\n\n" +
-      "Type *SPLIT* to run another selection."
+      header + "\n" + body + errStr + "\n\n" +
+      "_Verify against manufacturer selection software before submittal._\n" +
+      "Type *Split Selection* to run again."
     );
   }
 }
@@ -1432,11 +1468,11 @@ app.post("/webhook", async (req, res) => {
     }
     // Trigger: exact phrase "Split Selection"
     if (/^split\s+selection$/i.test(text.trim())) {
-      pendingSplit[from] = { step: "type", ts: Date.now() };
-      const opts = FAMILY_MENU.map((f, i) => `${i + 1}. ${f.label}`).join("\n");
+      pendingSplit[from] = { step: "brand", ts: Date.now() };
       return await sendText(from,
-        "🧊 *Split Unit Selector* (Toshiba / TCL / SKM)\n\n" +
-        "Choose the unit type:\n\n" + opts + "\n\n" +
+        "🧊 *Split Unit Selector*\n\n" +
+        "*Step 1/2:* Choose brand:\n" +
+        "1. Toshiba\n2. TCL\n3. SKM\n\n" +
         "_(Type *cancel* anytime to exit)_"
       );
     }
