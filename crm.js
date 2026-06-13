@@ -15,7 +15,7 @@
 const { parseDatasheetRequest, buildSelectionInteractive, parseSeriesRequest, interpretCode } = require("./products.js");
 const { routeChillerText } = require("./chillers.js");
 const { parseListRequest } = require("./product-facts.js");
-const { isMenuTrigger } = require("./menu.js");
+const { isMenuTrigger, smallTalkReply } = require("./menu.js");
 const { isVrfTrigger } = require("./vrf/trigger.js");
 
 const CRM_SHEET_ID = process.env.CRM_SHEET_ID || "1EbAXIZrjaelovg8APOaWhdg7FVnLxyO6-I2bMzIE2JM";
@@ -44,6 +44,7 @@ function classify(text) {
   if (t.startsWith("btn:")) return "button-tap";
   if (/^\d+$/.test(t)) return "numbered-reply";
   if (isMenuTrigger(t)) return "menu";
+  if (smallTalkReply(t)) return "small-talk";
   if (/^stats$/i.test(t)) return "admin-stats";
   if (isVrfTrigger(t)) return "vrf-selection";
   if (/\bmtz\b/i.test(t)) return "mtz-selection";

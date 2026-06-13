@@ -22,6 +22,22 @@ function isMenuTrigger(text) {
 // Shown on not-found replies and at the end of the human-handoff tip.
 const MENU_HINT = "💡 Type *menu* anytime to see everything I can do.";
 
+// Conversational closings / acknowledgements (whole-message match only, so it
+// never hijacks a real request). Returns a friendly reply, or null. Used to
+// short-circuit BEFORE the "searching our library" notice and the AI fallback,
+// so "bye" / "exit" / "thanks" don't trigger a document search.
+function smallTalkReply(text) {
+  const t = (text || "").trim().toLowerCase().replace(/[!.,?]+$/g, "").trim();
+  if (!t) return null;
+  if (/^(thanks?|thank you|thankyou|thx|tysm|ty|shukran|shukraan|much appreciated|appreciated|thanks a lot|thank u|great thanks|thank you so much)$/.test(t))
+    return "You're welcome! 😊 Type *menu* anytime you need a catalogue, datasheet, or selection.";
+  if (/^(bye|byee|goodbye|good bye|exit|quit|close|cancel|stop|end|done|finished|nothing|no thanks|no thank you|that'?s all|thats all|good ?night|see you|see ya|cya|take care)$/.test(t))
+    return "👋 Anytime! Type *menu* whenever you need a catalogue, datasheet, or selection.";
+  if (/^(ok|okay|okk|k|cool|great|nice|fine|alright|all right|got it|gotit|understood|noted|perfect|good|sounds good|👍|👌|🙏)$/.test(t))
+    return "👍 Type *menu* anytime you need something.";
+  return null;
+}
+
 // Each option: n (number), title (menu line), tip (sent when picked).
 const MENU_OPTIONS = [
   {
@@ -111,4 +127,4 @@ function tipFor(n, options = MENU_OPTIONS) {
   return opt ? opt.tip : null;
 }
 
-module.exports = { isMenuTrigger, welcomeMenu, tipFor, MENU_HINT, MENU_OPTIONS };
+module.exports = { isMenuTrigger, smallTalkReply, welcomeMenu, tipFor, MENU_HINT, MENU_OPTIONS };

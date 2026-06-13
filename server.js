@@ -14,7 +14,7 @@ const { buildSelectionReply, buildSelectionInteractive, handleButtonTap, interpr
 const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSeries, datasheetCondition, DATASHEET_FOLDERS } = require("./catalogue-map.js");
 const { routeChillerText, handleChillerButton } = require("./chillers.js");
 const { findBrandDocs } = require("./brand-docs.js");
-const { isMenuTrigger, welcomeMenu, tipFor, MENU_HINT } = require("./menu.js");
+const { isMenuTrigger, smallTalkReply, welcomeMenu, tipFor, MENU_HINT } = require("./menu.js");
 const { PRODUCT_KB, parseListRequest, buildUnitList } = require("./product-facts.js");
 const crm = require("./crm.js");
 const { generateMtzPdf } = require("./mtz-pdf.js");
@@ -1293,6 +1293,16 @@ app.post("/webhook", async (req, res) => {
       const m = welcomeMenu(profileName, crm.isKnownContact(from));
       pendingMenu[from] = { options: m.options, ts: Date.now() };
       return await sendText(from, m.text);
+    }
+    // Conversational closing / thanks / ack ("bye", "exit", "thanks", "ok") ->
+    // reply politely and stop. Must run BEFORE the "searching" notice and the
+    // AI fallback so these never trigger a document search.
+    const smalltalk = smallTalkReply(text);
+    if (smalltalk) {
+      console.log(`💬 small talk -> ${from}`);
+      delete pendingMenu[from];
+      delete pendingLists[from];
+      return await sendText(from, smalltalk);
     }
     // ─────────────────────────────────────────────────────────────
 
