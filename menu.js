@@ -56,7 +56,7 @@ const MENU_OPTIONS = [
   },
   {
     n: 2,
-    title: "Quick Selection Tools",
+    title: "Quick Selection Tools (Package / AHU / Chiller)",
     tip:
       "*🛠️ Quick Selection Tools*\n" +
       "Tell me the capacity and I'll pick the model for you.\n\n" +
@@ -66,11 +66,43 @@ const MENU_OPTIONS = [
       "• Chiller: *APCY-H 30 tr*\n" +
       "• Fan coil unit: *DMP 10 tr*  (or type *fcu*)\n\n" +
       "🧭 Guided selectors (step-by-step):\n" +
-      "• Trane MTZ: type *MTZ*\n" +
       "• Toshiba VRF BOQ: type *VRF Selection*",
   },
   {
     n: 3,
+    title: "MTZ Selection (Trane Package Unit)",
+    tip:
+      "*🌡️ Trane MTZ Package Unit Selector*\n" +
+      "Step-by-step selection with interpolated performance + PDF datasheet.\n\n" +
+      "Type: *MTZ Selection*\n\n" +
+      "You'll be asked:\n" +
+      "1️⃣ Required cooling load — e.g. `8.5 TR` or `100 MBH`\n" +
+      "   Add sensible if known: `8.5 TR / 7 TR`\n" +
+      "2️⃣ On-coil + ambient in one line — e.g. `80/67/115` _(DB°F / WB°F / Amb°F)_\n" +
+      "3️⃣ Airflow (CFM) or *rated* · Optional: `| Project | TAG`\n\n" +
+      "⚡ *Express mode* (all on one line):\n" +
+      "`MTZ Selection 8.5TR 80/67/115`\n\n" +
+      "Output: ranked model preview + PDF datasheet.",
+  },
+  {
+    n: 4,
+    title: "Split Selection (Toshiba / TCL / SKM)",
+    tip:
+      "*🧊 Split Unit Selector*\n" +
+      "Select multiple split units at once — hi-wall, ducted, ducted inverter.\n\n" +
+      "Type: *Split Selection*\n\n" +
+      "You'll be asked:\n" +
+      "1️⃣ Brand — Toshiba, TCL, or SKM\n" +
+      "2️⃣ Units list (one per line):\n" +
+      "   `load kW, type, DB/WB/Amb`\n\n" +
+      "👉 Example:\n" +
+      "```\n5 kw, hi wall, 26.7/19.4/46\n3 kw, ducted, 26.7/19.4/46\n20 kw, ducted inverter, T3\n```\n\n" +
+      "• Ambient >60 auto-converts °F → °C\n" +
+      "• Load > biggest model → auto-splits into 2×, 3×, 4× units\n" +
+      "• Reply *Print* after results for a full PDF report",
+  },
+  {
+    n: 5,
     title: "Quick Questions about products",
     tip:
       "*❓ Quick Questions*\n" +
@@ -83,24 +115,26 @@ const MENU_OPTIONS = [
       "💡 If I don't have the answer, I'll point you to the team.",
   },
   {
-    n: 4,
+    n: 6,
     title: "Help (how to use this bot)",
     tip:
       "*🙋 How to use this assistant*\n" +
-      "Just type what you need — three simple ways:\n\n" +
+      "Just type what you need — four ways:\n\n" +
       "1️⃣ *Find a document* — product + *catalogue* / *IOM*, or a model code.\n" +
       "   e.g. *APMR catalogue*, *APMRa 51004*\n\n" +
-      "2️⃣ *Select equipment* — give the capacity (TR or CFM) + type.\n" +
+      "2️⃣ *Quick select* — capacity + type.\n" +
       "   e.g. *package unit 20 tr*, *fresh air 15 tr*\n\n" +
-      "3️⃣ *Ask a question* — in plain words.\n" +
+      "3️⃣ *Guided selectors* — step-by-step with PDF output:\n" +
+      "   *MTZ Selection* · *Split Selection* · *VRF Selection*\n\n" +
+      "4️⃣ *Ask a question* — in plain words.\n" +
       "   e.g. *How many TR is DMP 10?*\n\n" +
       "📋 *See a whole range* — *list APMR units* (also PAC4A, DMP, chillers…)\n\n" +
       "Type *menu* anytime. For anything else: *hassan.saleem@mannai.com.qa*",
   },
 ];
 
-const NUM = ["", "1️⃣", "2️⃣", "3️⃣", "4️⃣"];
-const ICON = ["", "📄", "🛠️", "❓", "🙋"];
+const NUM  = ["", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"];
+const ICON = ["", "📄", "🛠️", "🌡️", "🧊", "❓", "🙋"];
 
 // Build the welcome message (numbered list) + the options array to remember.
 // `name` = WhatsApp profile name (optional); `returning` = seen before (CRM).
@@ -117,7 +151,7 @@ function welcomeMenu(name, returning) {
     "Reply with a *number*:\n\n" +
     MENU_OPTIONS.map(line).join("\n") + "\n" +
     "━━━━━━━━━━━━━━\n" +
-    "💡 Or just type what you need — e.g. *APMR catalogue* · *APMRa 51004*";
+    "💡 Or just type what you need — e.g. *APMR catalogue* · *MTZ Selection* · *Split Selection*";
   return { text, options: MENU_OPTIONS };
 }
 
