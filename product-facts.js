@@ -122,12 +122,12 @@ const tr1 = (v) => Number(v).toFixed(1); // one-decimal TR for tidy columns
 
 // Unit conversions for the Imperial <-> International (SI) list toggle.
 const KW_PER_TR = 3.51685;       // 1 ton refrigeration = 3.51685 kW
-const M3H_PER_CFM = 1.69901;     // 1 CFM = 1.69901 m³/h
+const LPS_PER_CFM = 0.471947;    // 1 CFM = 0.471947 L/s
 const trToKw = (tr) => Math.round(tr * KW_PER_TR * 10) / 10;
-const cfmToM3h = (cfm) => Math.round(cfm * M3H_PER_CFM);
+const cfmToLps = (cfm) => Math.round(cfm * LPS_PER_CFM);
 const kw1 = (v) => Number(v).toFixed(1);
 
-// system: "imp" (TR + CFM) | "si" (kW + m³/h). Default "imp" = legacy output.
+// system: "imp" (TR + CFM) | "si" (kW + L/s). Default "imp" = legacy output.
 function packagedSection(key, system = "imp") {
   const p = PRODUCTS[key];
   const head =
@@ -135,7 +135,7 @@ function packagedSection(key, system = "imp") {
     `${p.models.length} models — cooling T1(35°C) / T3(46°C), supply airflow:\n`;
   const lines = p.models.map((m) =>
     system === "si"
-      ? `• ${m.fullModel} — ${kw1(m.t1_kw)} / ${kw1(m.t3_kw)} kW — ${cfmToM3h(m.cfm)} m³/h`
+      ? `• ${m.fullModel} — ${kw1(m.t1_kw)} / ${kw1(m.t3_kw)} kW — ${cfmToLps(m.cfm)} L/s`
       : `• ${m.fullModel} — ${tr1(m.t1_tr)} / ${tr1(m.t3_tr)} TR — ${m.cfm} CFM`);
   return head + lines.join("\n");
 }
@@ -147,7 +147,7 @@ function freshSection(key, system = "imp") {
     `${p.models.length} models — cooling @46.1°C, fresh airflow:\n`;
   const lines = p.models.map((m) =>
     system === "si"
-      ? `• ${m.fullModel} — ${kw1(m.cap_kw)} kW — ${cfmToM3h(m.cfm)} m³/h`
+      ? `• ${m.fullModel} — ${kw1(m.cap_kw)} kW — ${cfmToLps(m.cfm)} L/s`
       : `• ${m.fullModel} — ${tr1(m.cap_tr)} TR — ${m.cfm} CFM`);
   return head + lines.join("\n");
 }
@@ -165,7 +165,7 @@ function fcuSection(key, system = "imp") {
         : [r3 && `3-row ${tr1(r3.cap_tr)}`, r4 && `4-row ${tr1(r4.cap_tr)}`].filter(Boolean).join(" / ");
     const nom = (r3 || r4).nomCfm;
     const capUnit = system === "si" ? "kW" : "TR";
-    const air = system === "si" ? `${cfmToM3h(nom)} m³/h nom` : `${nom} CFM nom`;
+    const air = system === "si" ? `${cfmToLps(nom)} L/s nom` : `${nom} CFM nom`;
     return `• ${p.namePrefix}${code} — ${cap} ${capUnit} — ${air}`;
   });
   const head = `*${p.label}*\n${codes.length} models — cooling (3-row / 4-row), nominal airflow:\n`;
@@ -183,7 +183,7 @@ function chillerSection(series, system = "imp") {
 }
 
 // Build the full list text for the matched keys, or null.
-// system: "imp" (default, Imperial: TR + CFM) or "si" (International: kW + m³/h).
+// system: "imp" (default, Imperial: TR + CFM) or "si" (International: kW + L/s).
 function buildUnitList(keys, system = "imp") {
   const sections = (keys || [])
     .map((k) => {
