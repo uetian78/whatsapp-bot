@@ -87,6 +87,7 @@ const MENU_OPTIONS = [
       "• `5`  or  `5 kw`  or  `1.5 ton`  → Hi-Wall\n" +
       "• `8 kw ducted`  or  `2 ton d`  → Ducted\n" +
       "Default type is Hi-Wall if you don't specify.\n" +
+      "• Toshiba on-coil (optional): add DB/WB — `5 kw 24/17`\n" +
       "• Auto-splits oversized loads into 2×, 3×, 4× units\n" +
       "• Reply *Print* after results for a PDF report\n" +
       "• Browse the range: *list of split units* (T1/T3 capacities)",

@@ -997,27 +997,43 @@ function parseSplitCondition(text) {
   return null;
 }
 
-// Parse one capacity line in the guided flow: just a capacity, with an
-// OPTIONAL type. Capacity may be kW (default) or tonnage ("ton"/"TR"/trailing
-// "t"). Type defaults to Hi-Wall; "ducted"/"D"/"duc" selects ducted.
-//   "5", "5 kw", "1.5 ton", "8 kw ducted", "2 ton d", "5 hw"
-// Returns { loadKw, typeStr } or null.
+// Parse one capacity line in the guided flow: a capacity, with an OPTIONAL
+// type and an OPTIONAL on-coil "DB/WB" (Toshiba only — the grid families
+// interpolate on indoor DB). Capacity may be kW (default) or tonnage
+// ("ton"/"TR"/trailing "t"). Type defaults to Hi-Wall; "ducted"/"D"/"duc"
+// selects ducted. On-coil is null when not given (→ caller uses standard
+// T1/T3 on-coil).
+//   "5", "5 kw", "1.5 ton", "8 kw ducted", "2 ton d", "5 hw",
+//   "5 kw 24/17", "8 kw ducted 26.7/19.4"
+// Returns { loadKw, typeStr, idb, iwb } or null.
 function parseSplitCapacityLine(line) {
   const raw = (line || "").trim().toLowerCase();
-  const numMatch = raw.match(/[\d.]+/);
+
+  // Pull out an on-coil DB/WB token first ("num/num") so its numbers aren't
+  // mistaken for the capacity; strip it before reading the rest.
+  let idb = null, iwb = null;
+  const onCoil = raw.match(/(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)/);
+  let rest = raw;
+  if (onCoil) {
+    idb = parseFloat(onCoil[1]);
+    iwb = parseFloat(onCoil[2]);
+    rest = raw.replace(onCoil[0], " ");
+  }
+
+  const numMatch = rest.match(/[\d.]+/);
   if (!numMatch) return null;
   const val = parseFloat(numMatch[0]);
   if (!val || val <= 0) return null;
 
   // Tonnage if "ton"/"tons"/"tonnage"/"tr" appears, or a number with trailing "t".
-  const isTon = /\bton(s|nage)?\b|\btr\b/.test(raw) || /[\d.]+\s*t\b/.test(raw);
+  const isTon = /\bton(s|nage)?\b|\btr\b/.test(rest) || /[\d.]+\s*t\b/.test(rest);
   const loadKw = isTon ? Math.round(val * SPLIT_TR_KW * 100) / 100 : val;
 
   // Type: ducted aliases first (D / duc / duct / ducted), else default Hi-Wall.
   let typeStr = "hi wall";
-  if (/\bduct(ed)?\b|\bduc\b|(?:^|\s)d(?:\s|$)/.test(raw)) typeStr = "ducted";
+  if (/\bduct(ed)?\b|\bduc\b|(?:^|\s)d(?:\s|$)/.test(rest)) typeStr = "ducted";
 
-  return { loadKw, typeStr };
+  return { loadKw, typeStr, idb, iwb };
 }
 
 // Rank with auto-split: if load > biggest model, try dividing by 2,3,4
@@ -1110,6 +1126,13 @@ async function handleSplitStep(from, text) {
 
     const b = SPLIT_BRANDS.find(b => b.name === s.brand);
     const hasDucted = b.types.some(x => /BSP|DCT|SH/.test(x.famKey));
+    const hasGrid   = b.types.some(x => x.kind === "grid"); // Toshiba only
+
+    const coilHint = hasGrid
+      ? "\n\n*On-coil (optional, Toshiba):* add `DB/WB` to a line —\n" +
+        "• `5 kw 24/17`  → on-coil 24/17°C\n" +
+        `Omit it to use the standard *${cond}* on-coil (${s.idb}/${s.iwb}°C).`
+      : "";
 
     return sendText(from,
       `✅ *${s.brand} · ${cond}* (${s.odb}°C ambient)\n\n` +
@@ -1122,7 +1145,8 @@ async function handleSplitStep(from, text) {
       (hasDucted
         ? "Default type is *Hi-Wall* if you don't specify one."
         : `${s.brand} splits are *Hi-Wall* only.`) +
-      "\n\n_Aliases — Hi-Wall: HW · WM · Wall · Split   |   Ducted: D · Duc_"
+      "\n\n_Aliases — Hi-Wall: HW · WM · Wall · Split   |   Ducted: D · Duc_" +
+      coilHint
     );
   }
 
@@ -1153,17 +1177,31 @@ async function handleSplitStep(from, text) {
       // falls back to Hi-Wall — surface that so the result isn't surprising.
       const askedDucted = parsed.typeStr === "ducted";
       const gotDucted   = /BSP|DCT|SH/.test(resolved.famKey);
-      const typeNote = askedDucted && !gotDucted
+      let note = askedDucted && !gotDucted
         ? `${s.brand} has no ducted split — used Hi-Wall instead`
         : null;
 
+      // On-coil DB/WB only affects the grid (Toshiba) families. Use the
+      // line's on-coil if given; otherwise the standard T1/T3 on-coil. For
+      // non-grid (TCL/SKM, fixed-point) ratings, a supplied on-coil is ignored.
+      const isGrid = resolved.kind === "grid";
+      const customCoil = isGrid && parsed.idb != null;
+      const useIdb = customCoil ? parsed.idb : s.idb;
+      const useIwb = customCoil ? (parsed.iwb ?? s.iwb) : s.iwb;
+      if (parsed.idb != null && !isGrid) {
+        const n2 = `on-coil ignored — ${s.brand} uses fixed ${s.condition} ratings`;
+        note = note ? `${note}; ${n2}` : n2;
+      }
+
       const { ranked, count, splitNote } = rankSplitWithCount(
-        resolved.famKey, parsed.loadKw, s.idb, s.iwb, s.odb, s.condition
+        resolved.famKey, parsed.loadKw, useIdb, useIwb, s.odb, s.condition
       );
       const famLabel = SPLIT_BRANDS.find(b => b.name === s.brand)
         ?.types.find(t => t.famKey === resolved.famKey)
         ?.label?.split("(")[0]?.trim() ?? resolved.famKey;
-      const condStr = `${s.condition} (${s.odb}°C)`;
+      const condStr = customCoil
+        ? `${s.condition} · on-coil ${useIdb}/${useIwb}°C @ ${s.odb}°C`
+        : `${s.condition} (${s.odb}°C)`;
       const best = ranked[0];
 
       unitResults.push({
@@ -1171,7 +1209,7 @@ async function handleSplitStep(from, text) {
         loadKw:   parsed.loadKw,
         typeStr:  parsed.typeStr,
         famLabel, condStr,
-        idb: s.idb, iwb: s.iwb, odb: s.odb,
+        idb: useIdb, iwb: useIwb, odb: s.odb,
         condition: s.condition,
         famKey:   resolved.famKey,
         kind:     resolved.kind,
@@ -1184,7 +1222,7 @@ async function handleSplitStep(from, text) {
         eer:      best?.eer,
         margin:   best?.margin,
         adequate: best?.adequate ?? false,
-        typeNote,
+        typeNote: note,
       });
     });
 
