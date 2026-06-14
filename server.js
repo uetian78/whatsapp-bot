@@ -126,6 +126,11 @@ const SPLIT_TIMEOUT_MS = 10 * 60 * 1000;
 // Stores last split results per user for Print (30 min TTL)
 const splitResults = {};
 const SPLIT_RESULT_TTL = 30 * 60 * 1000;
+
+// Remembers the last unit list shown so the user can toggle Imperial <-> SI
+// via a button. kind = "split" | "product"; keys = the builder's key array.
+const pendingUnitList = {}; // { [from]: { kind, keys, system, ts } }
+const UNIT_LIST_TTL = 30 * 60 * 1000;
 const VRF_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 // ── Message deduplication ────────────────────────────────────────────────────
@@ -704,6 +709,26 @@ async function sendButtons(to, bodyText, buttons) {
       action: { buttons: trimmed },
     },
   });
+}
+
+// Send a unit list (split or product) in the chosen unit system, then a small
+// button message offering to switch Imperial <-> International. The list itself
+// can exceed the 1024-char interactive-body limit, so it goes as plain text
+// (sendLongText) and the toggle rides in a separate button message.
+//   system: "si"  = International (kW, m³/h) · "imp" = Imperial (TR, CFM)
+async function sendListWithToggle(from, kind, keys, system) {
+  const body = kind === "split" ? listSplits(keys, system) : buildUnitList(keys, system);
+  if (!body) return;
+  await sendLongText(from, body);
+  pendingUnitList[from] = { kind, keys, system, ts: Date.now() };
+  const other = system === "si" ? "imp" : "si";
+  const curName = system === "si" ? "International (kW)" : "Imperial (TR)";
+  const otherTitle = other === "si" ? "International (kW)" : "Imperial (TR)";
+  await sendButtons(
+    from,
+    `📐 Showing in *${curName}*. Tap to switch units:`,
+    [{ id: `units|${other}`, title: otherTitle }]
+  );
 }
 
 // Download a file (e.g. from Google Drive) and re-upload it to WhatsApp's
@@ -1483,6 +1508,18 @@ app.post("/webhook", async (req, res) => {
       const chillerBtn = handleChillerButton(btnId);
       if (chillerBtn) return await sendChillerResponse(from, chillerBtn);
 
+      // Unit toggle (units|si / units|imp) -> re-render the last list in the
+      // chosen system. State remembers which list it was.
+      if (btnId.startsWith("units|")) {
+        const system = btnId.split("|")[1] === "imp" ? "imp" : "si";
+        const st = pendingUnitList[from];
+        if (!st || Date.now() - st.ts > UNIT_LIST_TTL) {
+          return await sendText(from,
+            "That list has expired — just ask for it again (e.g. *list of split units* or *APMR list*).");
+        }
+        return await sendListWithToggle(from, st.kind, st.keys, system);
+      }
+
       const action = handleButtonTap(btnId);
       if (action?.type === "interactive") {
         return await sendButtons(from, action.text, action.buttons);
@@ -1754,8 +1791,7 @@ app.post("/webhook", async (req, res) => {
     const splitListReq = parseSplitListRequest(text);
     if (splitListReq) {
       console.log(`📋 split list: ${splitListReq.join(", ")}`);
-      const body = listSplits(splitListReq);
-      if (body) return await sendLongText(from, body);
+      return await sendListWithToggle(from, "split", splitListReq, "si");
     }
 
     // ── List units in a series ───────────────────────────────────
@@ -1764,8 +1800,7 @@ app.post("/webhook", async (req, res) => {
     const listReq = parseListRequest(text);
     if (listReq) {
       console.log(`📋 unit list: ${listReq.join(", ")}`);
-      const body = buildUnitList(listReq);
-      if (body) return await sendLongText(from, body);
+      return await sendListWithToggle(from, "product", listReq, "imp");
     }
 
     // ── Quick Questions about products ───────────────────────────

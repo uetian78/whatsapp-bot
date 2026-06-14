@@ -120,54 +120,77 @@ function parseListRequest(text) {
 
 const tr1 = (v) => Number(v).toFixed(1); // one-decimal TR for tidy columns
 
-function packagedSection(key) {
+// Unit conversions for the Imperial <-> International (SI) list toggle.
+const KW_PER_TR = 3.51685;       // 1 ton refrigeration = 3.51685 kW
+const M3H_PER_CFM = 1.69901;     // 1 CFM = 1.69901 m³/h
+const trToKw = (tr) => Math.round(tr * KW_PER_TR * 10) / 10;
+const cfmToM3h = (cfm) => Math.round(cfm * M3H_PER_CFM);
+const kw1 = (v) => Number(v).toFixed(1);
+
+// system: "imp" (TR + CFM) | "si" (kW + m³/h). Default "imp" = legacy output.
+function packagedSection(key, system = "imp") {
   const p = PRODUCTS[key];
   const head =
     `*${p.label}*${p.refrigerant ? ` (${p.refrigerant})` : ""}\n` +
     `${p.models.length} models — cooling T1(35°C) / T3(46°C), supply airflow:\n`;
-  const lines = p.models.map((m) => `• ${m.fullModel} — ${tr1(m.t1_tr)} / ${tr1(m.t3_tr)} TR — ${m.cfm} CFM`);
+  const lines = p.models.map((m) =>
+    system === "si"
+      ? `• ${m.fullModel} — ${kw1(m.t1_kw)} / ${kw1(m.t3_kw)} kW — ${cfmToM3h(m.cfm)} m³/h`
+      : `• ${m.fullModel} — ${tr1(m.t1_tr)} / ${tr1(m.t3_tr)} TR — ${m.cfm} CFM`);
   return head + lines.join("\n");
 }
 
-function freshSection(key) {
+function freshSection(key, system = "imp") {
   const p = PRODUCTS[key];
   const head =
     `*${p.label}*${p.refrigerant ? ` (${p.refrigerant})` : ""}\n` +
     `${p.models.length} models — cooling @46.1°C, fresh airflow:\n`;
-  const lines = p.models.map((m) => `• ${m.fullModel} — ${tr1(m.cap_tr)} TR — ${m.cfm} CFM`);
+  const lines = p.models.map((m) =>
+    system === "si"
+      ? `• ${m.fullModel} — ${kw1(m.cap_kw)} kW — ${cfmToM3h(m.cfm)} m³/h`
+      : `• ${m.fullModel} — ${tr1(m.cap_tr)} TR — ${m.cfm} CFM`);
   return head + lines.join("\n");
 }
 
-function fcuSection(key) {
+function fcuSection(key, system = "imp") {
   const p = PRODUCTS[key];
   const codes = [];
   for (const m of p.models) if (!codes.includes(m.code)) codes.push(m.code);
   const lines = codes.map((code) => {
     const r3 = p.models.find((m) => m.code === code && m.rows === 3);
     const r4 = p.models.find((m) => m.code === code && m.rows === 4);
-    const cap = [r3 && `3-row ${tr1(r3.cap_tr)}`, r4 && `4-row ${tr1(r4.cap_tr)}`].filter(Boolean).join(" / ");
+    const cap =
+      system === "si"
+        ? [r3 && `3-row ${kw1(r3.cap_kw)}`, r4 && `4-row ${kw1(r4.cap_kw)}`].filter(Boolean).join(" / ")
+        : [r3 && `3-row ${tr1(r3.cap_tr)}`, r4 && `4-row ${tr1(r4.cap_tr)}`].filter(Boolean).join(" / ");
     const nom = (r3 || r4).nomCfm;
-    return `• ${p.namePrefix}${code} — ${cap} TR — ${nom} CFM nom`;
+    const capUnit = system === "si" ? "kW" : "TR";
+    const air = system === "si" ? `${cfmToM3h(nom)} m³/h nom` : `${nom} CFM nom`;
+    return `• ${p.namePrefix}${code} — ${cap} ${capUnit} — ${air}`;
   });
   const head = `*${p.label}*\n${codes.length} models — cooling (3-row / 4-row), nominal airflow:\n`;
   return head + lines.join("\n");
 }
 
-function chillerSection(series) {
+function chillerSection(series, system = "imp") {
   const models = (chillers.MODELS || []).filter((m) => m.series === series);
   const head = `*${series} Air-Cooled Screw Chillers* (R-134a)\n${models.length} models — cooling capacity, EER:\n`;
-  const lines = models.map((m) => `• ${m.model} — ${m.capacityTR} TR${m.eer != null ? ` — EER ${m.eer}` : ""}`);
+  const lines = models.map((m) => {
+    const cap = system === "si" ? `${kw1(trToKw(m.capacityTR))} kW` : `${m.capacityTR} TR`;
+    return `• ${m.model} — ${cap}${m.eer != null ? ` — EER ${m.eer}` : ""}`;
+  });
   return head + lines.join("\n");
 }
 
 // Build the full list text for the matched keys, or null.
-function buildUnitList(keys) {
+// system: "imp" (default, Imperial: TR + CFM) or "si" (International: kW + m³/h).
+function buildUnitList(keys, system = "imp") {
   const sections = (keys || [])
     .map((k) => {
-      if (k === "apmr" || k === "apmr-a") return packagedSection(k);
-      if (k === "pac4a") return freshSection(k);
-      if (k === "fcu-dmp" || k === "fcu-dcmp") return fcuSection(k);
-      if (k.startsWith("chiller:")) return chillerSection(k.split(":")[1]);
+      if (k === "apmr" || k === "apmr-a") return packagedSection(k, system);
+      if (k === "pac4a") return freshSection(k, system);
+      if (k === "fcu-dmp" || k === "fcu-dcmp") return fcuSection(k, system);
+      if (k.startsWith("chiller:")) return chillerSection(k.split(":")[1], system);
       return null;
     })
     .filter(Boolean);

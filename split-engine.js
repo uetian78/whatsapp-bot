@@ -170,39 +170,52 @@ function parseSplitListRequest(text) {
   return keys.length ? keys : FAMILY_MENU.map((f) => f.key);
 }
 
-// One model line: "• RAS-18PKV — 5.3 / 4.55 kW — EER 3.63 / 2.45".
-function splitModelLine(famKey, modelKey) {
+// 1 ton refrigeration = 3.51685 kW (for the Imperial unit toggle).
+const KW_PER_TR = 3.51685;
+
+// One model line. system "si" -> kW; "imp" -> TR (tons). EER is unitless.
+//   "• RAS-18PKV — 5.30 / 4.55 kW — EER 3.63 / 2.45"   (si)
+//   "• RAS-18PKV — 1.51 / 1.29 TR — EER 3.63 / 2.45"   (imp)
+function splitModelLine(famKey, modelKey, system = "si") {
   const t1 = rate(famKey, modelKey, T1_COND.idb, T1_COND.iwb, T1_COND.odb, "T1");
   const t3 = rate(famKey, modelKey, T3_COND.idb, T3_COND.iwb, T3_COND.odb, "T3");
   const f2 = (v) => (v != null ? Number(v).toFixed(2) : "—");
+  const cap = (v) => (v == null ? null : system === "imp" ? v / KW_PER_TR : v);
   const label = (FAMILIES[famKey].models[modelKey].label || modelKey).split("/")[0].trim();
-  const tcStr = `${f2(t1 && t1.tc)} / ${f2(t3 && t3.tc)} kW`;
+  const unit = system === "imp" ? "TR" : "kW";
+  const tcStr = `${f2(cap(t1 && t1.tc))} / ${f2(cap(t3 && t3.tc))} ${unit}`;
   const eerStr = `EER ${f2(t1 && t1.eer)} / ${f2(t3 && t3.eer)}`;
   return `• ${label} — ${tcStr} — ${eerStr}`;
 }
 
 // Build one family's section.
-function splitFamilySection(famKey) {
+function splitFamilySection(famKey, system = "si") {
   const fam = FAMILIES[famKey];
   if (!fam) return null;
   const menu = FAMILY_MENU.find((f) => f.key === famKey);
   const title = menu ? menu.label : `${fam.brand} ${fam.name}`;
   const modelKeys = Object.keys(fam.models);
+  const t1Label = system === "imp" ? "T1(95°F)" : "T1(35°C)";
+  const t3Label = system === "imp" ? "T3(115°F)" : "T3(46°C)";
   const head =
     `*${title}*\n` +
-    `${modelKeys.length} model${modelKeys.length !== 1 ? "s" : ""} — total cooling T1(35°C) / T3(46°C), EER:`;
-  const lines = modelKeys.map((mk) => splitModelLine(famKey, mk));
+    `${modelKeys.length} model${modelKeys.length !== 1 ? "s" : ""} — total cooling ${t1Label} / ${t3Label}, EER:`;
+  const lines = modelKeys.map((mk) => splitModelLine(famKey, mk, system));
   return head + "\n" + lines.join("\n");
 }
 
 // Build the full list text for the matched family keys, or null.
-function listSplits(keys) {
-  const sections = (keys || []).map(splitFamilySection).filter(Boolean);
+// system: "si" (default, kW) or "imp" (TR/tons).
+function listSplits(keys, system = "si") {
+  const sections = (keys || []).map((k) => splitFamilySection(k, system)).filter(Boolean);
   if (!sections.length) return null;
+  const capNote = system === "imp"
+    ? "_Capacities are total cooling (TR); airflow/CFM is not in this dataset._"
+    : "_Capacities are total cooling (kW); airflow/CFM is not in this dataset._";
   return (
     "🧊 *Split Units*\n" +
     sections.join("\n\n") +
-    "\n\n_Capacities are total cooling (kW); airflow/CFM is not in this dataset._\n" +
+    "\n\n" + capNote + "\n" +
     "Type *Split Selection* to size a unit for a specific load."
   );
 }
