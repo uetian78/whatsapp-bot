@@ -16,6 +16,7 @@ Auth
 
 import json
 import os
+import subprocess
 import tempfile
 import uuid
 
@@ -28,10 +29,49 @@ from typing import List, Optional
 import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "engine"))
 from build_boq import build  # noqa: E402
+from run_selection import run_from_text  # noqa: E402
 
 API_KEY = os.environ.get("VRF_API_KEY", "")
 
 app = FastAPI(title="VRF Selection Sidecar", version="1.0.0")
+
+
+def recalc_xlsx(path: str) -> str:
+    """Run LibreOffice headless to compute all formula values in the workbook.
+
+    build_boq writes live VLOOKUP/SUM formulas but does NOT evaluate them —
+    cached cell values are blank until a spreadsheet app opens the file.
+    This step forces recalculation so the user receives a file with totals
+    already populated (even before they fill the Prices tab).
+
+    Returns the path to the recalculated file (same filename, same dir).
+    Falls back to the original path if LibreOffice is not installed.
+    """
+    out_dir = os.path.dirname(path)
+    try:
+        result = subprocess.run(
+            [
+                "soffice", "--headless", "--calc",
+                "--convert-to", "xlsx",
+                "--outdir", out_dir,
+                path,
+            ],
+            capture_output=True,
+            timeout=60,
+        )
+        if result.returncode != 0:
+            # LibreOffice exited non-zero — log stderr but keep original file.
+            print(f"[recalc] LibreOffice error: {result.stderr.decode(errors='replace')}")
+            return path
+        # LibreOffice writes <basename>.xlsx in out_dir — which is the same
+        # name, so the output path equals the input path. Return it as-is.
+        return path
+    except FileNotFoundError:
+        # LibreOffice not installed in this environment — skip recalc.
+        return path
+    except subprocess.TimeoutExpired:
+        print("[recalc] LibreOffice timed out — sending unrecalculated file.")
+        return path
 
 
 class Row(BaseModel):
@@ -47,6 +87,12 @@ class SelectRequest(BaseModel):
     project: str = "VRF Project"
     discount: Optional[float] = None    # None -> engine default (0.25)
     rows: List[Row] = Field(..., min_items=1)
+
+
+class SelectTextRequest(BaseModel):
+    project: str = "VRF Project"
+    discount: Optional[float] = 0.25
+    raw_text: str  # raw CSV/TSV/pasted schedule text
 
 
 def _check_key(provided: Optional[str]):
@@ -84,11 +130,49 @@ def select(req: SelectRequest, x_api_key: Optional[str] = Header(default=None)):
     except Exception as e:
         return JSONResponse(status_code=400, content={"error": str(e)})
 
+    out_path = recalc_xlsx(out_path)
+
     # Engine summary travels in a header so the body can be the file itself.
     headers = {"X-Summary": json.dumps(summary)}
     return FileResponse(
         out_path,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         filename=os.path.basename(out_path),
+        headers=headers,
+    )
+
+
+@app.post("/select-text")
+def select_text(req: SelectTextRequest, x_api_key: Optional[str] = Header(default=None)):
+    _check_key(x_api_key)
+
+    if not req.raw_text or not req.raw_text.strip():
+        return JSONResponse(status_code=400, content={"error": "raw_text is empty"})
+
+    out_dir = tempfile.gettempdir()
+
+    try:
+        result = run_from_text(
+            req.raw_text,
+            project=req.project,
+            discount=req.discount if req.discount is not None else 0.25,
+            out_dir=out_dir,
+            price_list_path=None,
+        )
+    except Exception as e:
+        return JSONResponse(status_code=400, content={"error": str(e)})
+
+    recalc_xlsx(result["output"])
+
+    meta = {
+        "summary": result["summary"],
+        "warnings": result["warnings"],
+        "excluded": result["excluded"],
+    }
+    headers = {"X-Meta": json.dumps(meta)}
+    return FileResponse(
+        result["output"],
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        filename=os.path.basename(result["output"]),
         headers=headers,
     )

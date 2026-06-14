@@ -30,6 +30,9 @@ from openpyxl.utils import get_column_letter
 from vrf_data import DEFAULT_DISCOUNT, ACCESSORIES
 from engine import (normalize_type, select_idu, select_odu,
                     CASSETTE_TYPES, HI_WALL_TYPE, HIGH_STATIC_TYPE)
+from container_calc import calc_containers
+from container_data import (CONTAINERS, DEFAULT_CONTAINER, STOWAGE_FACTOR,
+                            DIMS, ODU_DIMS)
 
 NAVY = "1F3864"; LIGHT = "D9E1F2"; GREY = "F2F2F2"; ACC = "FCE4D6"; SUM = "E2EFDA"
 thin = Side(style="thin", color="BBBBBB")
@@ -203,14 +206,10 @@ def build(inp, out_path, discount=None, price_list_path=None):
                 if len(selected) > 1:
                     tag = f"{tag}-{iu_counter}"
                 room = src.get("room", "")
-                # Use the SELECTED unit's type, not the source type: a standard
-                # duct load can be escalated to a high static unit inside
-                # select_idu, and the BOQ row + accessories must reflect that.
-                sel_type = sel["type"]
                 line_kw = sel["cap_kw"] * qty
                 total_idu += qty; total_idu_kw += line_kw
                 sys_required_t3 += sel["req_kw"] * qty
-                vals = [tag, room, sel_type, round(sel["req_kw"], 2), qty,
+                vals = [tag, room, ctype, round(sel["req_kw"], 2), qty,
                         sel["model"], sel["cap_kw"], round(line_kw, 2),
                         sel["hp"], "", ""]
                 for j, v in enumerate(vals, start=1):
@@ -221,11 +220,11 @@ def build(inp, out_path, discount=None, price_list_path=None):
                 if price_formulas(r, sel["model"]):
                     line_rows.append(r); equip_rows.append(r)
                 r += 1
-                if sel_type != HI_WALL_TYPE:
+                if ctype != HI_WALL_TYPE:
                     n_therm += qty
-                if sel_type in CASSETTE_TYPES:
+                if ctype in CASSETTE_TYPES:
                     n_panel += qty
-                if sel_type == HIGH_STATIC_TYPE:
+                if ctype == HIGH_STATIC_TYPE:
                     n_drain += qty; n_bfilt += qty
 
         odus = select_odu(sys_required_t3)  # NO diversity
@@ -495,6 +494,120 @@ def build(inp, out_path, discount=None, price_list_path=None):
         pw.column_dimensions["D"].width = 16
         pw.sheet_state = "visible"
 
+    # ---------------- CONTAINER LOADING TAB ----------------
+    # ODU single modules cannot be stacked (floor-lane driven); IDU can be
+    # stacked (volume driven). Containers = max(ODU floor, IDU volume, weight).
+    # used_models already holds single MAP* module qtys + IDU qtys; accessories
+    # have no shipping dims and are skipped automatically.
+    container_summary = None
+    ship_qtys = {m: info["qty"] for m, info in used_models.items() if m in DIMS}
+    if ship_qtys:
+        container_summary = calc_containers(ship_qtys, DEFAULT_CONTAINER,
+                                            STOWAGE_FACTOR)
+        cw = wb.create_sheet("Container Loading")
+        # Title
+        cw.merge_cells("A1:G1")
+        t = cw.cell(1, 1, f"Container Loading  \u2014  {project}")
+        t.font = Font(bold=True, color="FFFFFF", size=14)
+        t.fill = PatternFill("solid", fgColor=NAVY)
+        t.alignment = Alignment(horizontal="center", vertical="center")
+        cw.row_dimensions[1].height = 26
+        cw.merge_cells("A2:G2")
+        cw.cell(2, 1, "ODU modules CANNOT be stacked (floor-lane driven) \u00b7 "
+                      "IDU CAN be stacked (volume driven) \u00b7 weight always "
+                      "checked. Containers = max of the three drivers.").font = \
+            Font(italic=True, size=9, color="808080")
+
+        # Reference block (editable yellow inputs)
+        rr = 4
+        cw.cell(rr, 1, "Container type").font = BOLD
+        ct = cw.cell(rr, 3, DEFAULT_CONTAINER); ct.font = BOLD
+        ct.fill = PatternFill("solid", fgColor="FFF2CC"); ct.alignment = CENTER
+        rr += 1
+        cw.cell(rr, 1, "Stowage / pack factor (IDU)").font = BOLD
+        sf = cw.cell(rr, 3, STOWAGE_FACTOR); sf.number_format = "0%"; sf.font = BOLD
+        sf.fill = PatternFill("solid", fgColor="FFF2CC"); sf.alignment = CENTER
+        rr += 1
+        cont = CONTAINERS[DEFAULT_CONTAINER]
+        cw.cell(rr, 1, "Interior L \u00d7 W \u00d7 H (mm)").font = NORMAL
+        cw.cell(rr, 3, f"{cont['len']} \u00d7 {cont['wid']} \u00d7 {cont['hgt']}").alignment = CENTER
+        rr += 1
+        cw.cell(rr, 1, "Usable volume / container (m\u00b3)").font = NORMAL
+        cw.cell(rr, 3, container_summary["usable_vol_per_container_m3"]).alignment = CENTER
+        rr += 1
+        cw.cell(rr, 1, "Max payload / container (kg)").font = NORMAL
+        cw.cell(rr, 3, container_summary["payload_per_container_kg"]).alignment = CENTER
+        rr += 2
+
+        # Manifest table
+        mh = ["Group", "Model", "Qty", "Stack?", "Unit Vol (m\u00b3)",
+              "Unit Wt (kg)", "Total Wt (kg)"]
+        for j, h in enumerate(mh, start=1):
+            hc = cw.cell(rr, j, h); hc.font = HDR_FONT
+            hc.fill = PatternFill("solid", fgColor=NAVY); hc.alignment = CENTER; hc.border = BORDER
+        rr += 1
+        for model, qty in ship_qtys.items():
+            d = DIMS[model]
+            is_odu = model in ODU_DIMS
+            vals = ["ODU module" if is_odu else "Indoor", model, qty,
+                    "No" if is_odu else "Yes", d["vol"], d["wt"], d["wt"] * qty]
+            for j, v in enumerate(vals, start=1):
+                c = cw.cell(rr, j, v); c.font = NORMAL; c.border = BORDER
+                c.alignment = LEFT if j in (1, 2) else CENTER
+                if is_odu:
+                    c.fill = PatternFill("solid", fgColor=LIGHT)
+            rr += 1
+        rr += 1
+
+        # Drivers + result
+        cw.merge_cells(start_row=rr, start_column=1, end_row=rr, end_column=7)
+        d0 = cw.cell(rr, 1, "CONTAINER DRIVERS"); d0.font = Font(bold=True, color="FFFFFF", size=11)
+        d0.fill = PatternFill("solid", fgColor="2F5496"); d0.alignment = LEFT
+        rr += 1
+
+        def drv(label, val, note="", governing=False):
+            nonlocal rr
+            lc = cw.cell(rr, 1, label); lc.font = BOLD if governing else NORMAL
+            cw.merge_cells(start_row=rr, start_column=1, end_row=rr, end_column=4)
+            vc = cw.cell(rr, 5, val); vc.alignment = CENTER
+            vc.font = BOLD if governing else NORMAL; vc.number_format = "0.000"
+            cw.merge_cells(start_row=rr, start_column=6, end_row=rr, end_column=7)
+            nc = cw.cell(rr, 6, note); nc.font = Font(size=9, color="808080"); nc.alignment = LEFT
+            fill = "C6EFCE" if governing else "F2F2F2"
+            for j in range(1, 8):
+                cw.cell(rr, j).border = BORDER
+                cw.cell(rr, j).fill = PatternFill("solid", fgColor=fill)
+            rr += 1
+
+        g = container_summary["governing_driver"]
+        drv("Containers by ODU floor lanes",
+            container_summary["containers_by_odu_floor"],
+            f"{container_summary['odu_modules']} ODU modules, non-stackable",
+            g == "odu_floor")
+        drv("Containers by IDU volume",
+            container_summary["containers_by_idu_volume"],
+            f"{container_summary['idu_units']} indoor units, stacked",
+            g == "idu_volume")
+        drv("Containers by weight",
+            container_summary["containers_by_weight"],
+            f"{container_summary['total_weight_kg']:.0f} kg total",
+            g == "weight")
+        rr += 1
+        cw.merge_cells(start_row=rr, start_column=1, end_row=rr, end_column=4)
+        rl = cw.cell(rr, 1, f"CONTAINERS REQUIRED ({DEFAULT_CONTAINER})")
+        rl.font = Font(bold=True, color="FFFFFF", size=13); rl.alignment = LEFT
+        cw.merge_cells(start_row=rr, start_column=5, end_row=rr, end_column=7)
+        rv = cw.cell(rr, 5, container_summary["containers_required"])
+        rv.font = Font(bold=True, color="FFFFFF", size=13); rv.alignment = CENTER
+        for j in range(1, 8):
+            cw.cell(rr, j).border = BORDER
+            cw.cell(rr, j).fill = PatternFill("solid", fgColor="538135")
+        cw.row_dimensions[rr].height = 24
+
+        for col, w in zip("ABCDEFG", [16, 22, 8, 8, 12, 12, 14]):
+            cw.column_dimensions[col].width = w
+        cw.sheet_state = "visible"
+
     wb.save(out_path)
     return {
         "project": project, "systems": len(systems),
@@ -507,6 +620,7 @@ def build(inp, out_path, discount=None, price_list_path=None):
         "total_outdoor_units": n_odu, "n_systems": len(systems),
         "models_used": len(used_models),
         "models_missing_price": missing,
+        "container_loading": container_summary,
         "flags": flags, "output": out_path,
     }
 

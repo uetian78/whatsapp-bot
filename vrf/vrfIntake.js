@@ -57,7 +57,10 @@ function guidedPrompt(stage) {
         'Send each unit on one line:',
         '`type | capacity | qty | system | room`',
         'e.g. `4 way cassette | 5 | 1 | S1 | Office`',
+        '',
         'Capacity is kW by default — write e.g. `2 TR` if your schedule is in tons.',
+        '',
+        '*Unit types:* ducted · slim duct · high static · 4 way cassette · compact cassette · 2 way cassette · 1 way cassette · hi-wall · ceiling · floor standing',
         '',
         'Only type and capacity are required. Send *done* when finished.',
       ].join('\n');

@@ -8,7 +8,7 @@
 // Replace the two TODO stubs (sendWhatsApp, uploadToDrive) with your existing
 // functions. Everything else is wired.
 
-const { runVrfSelection, summaryToWhatsApp, warmUpSidecar } = require('./vrfClient');
+const { runVrfSelection, runVrfFromText, summaryToWhatsApp, warmUpSidecar } = require('./vrfClient');
 const {
   startGuided, guidedStep,
   rowsFromWorkbook, rowsFromImageOrPdf,
@@ -31,6 +31,15 @@ async function sendWhatsApp(userId, text) {
 
 const sessions = new Map(); // userId -> { mode:'vrf', guided, pending? }
 
+// A pasted schedule has at least 2 lines and each line contains a comma or tab
+// (delimiter) plus at least one digit — distinguishes it from a project name or
+// a single typed row.
+function isPastedSchedule(text) {
+  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+  if (lines.length < 2) return false;
+  return lines.filter((l) => (l.includes(',') || l.includes('\t')) && /\d/.test(l)).length >= 2;
+}
+
 // Call from your keyword router when message text === 'vrf' (or contains it).
 async function onVrfKeyword(userId) {
   const guided = startGuided();
@@ -39,11 +48,14 @@ async function onVrfKeyword(userId) {
   // time the user sends a schedule and confirms. Best-effort, never blocks.
   warmUpSidecar().catch(() => {});
   await sendWhatsApp(userId,
-    'VRF selection. You can either:\n' +
-    '1) Send a *photo / PDF / xlsx* of the schedule, or\n' +
-    '2) Type rows manually.\n\n' +
-    'To type manually, first tell me the *project name*.\n' +
-    'Or just send the schedule file now.');
+    '*VRF Selection* — Toshiba SMMSe BOQ builder.\n\n' +
+    'You can:\n' +
+    '1️⃣ *Paste a CSV schedule* — paste your schedule table now (project name first if you want)\n' +
+    '2️⃣ *Send a file* — photo, PDF, or xlsx of the schedule\n' +
+    '3️⃣ *Type rows manually* — line by line\n\n' +
+    'For manual entry, start by telling me the *project name*.\n' +
+    'Or paste / upload your schedule now and I\'ll start building.\n\n' +
+    '_Type *exit* at any time to cancel._');
 }
 
 // Call for every inbound message while session.mode === 'vrf'.
@@ -84,6 +96,29 @@ async function onVrfMessage(userId, text, attachment) {
         return true;
       }
       await sendWhatsApp(userId, 'Reply *yes* to build, *no* to redo, or *exit* to cancel.');
+      return true;
+    }
+
+    // ---- detect pasted CSV/TSV schedule (multi-line with delimiters) ----
+    if (!attachment && text && isPastedSchedule(text)) {
+      const project = s.guided.project || 'VRF Project';
+      await sendWhatsApp(userId, 'Detected a pasted schedule — building BOQ now...');
+      await sendWhatsApp(userId, 'Running selection… this can take a moment on first use, please hold on.');
+      const onProgress = (sec) =>
+        sendWhatsApp(userId, `⏳ Still working… engine waking up (${sec}s). Your BOQ is on the way.`);
+      const { xlsxBuffer, summary, warnings, excluded } = await runVrfFromText(
+        project, text, s.guided.discount, onProgress
+      );
+      const filename = `${(summary.project || 'VRF').replace(/[^\w]+/g, '_')}_VRF_BOQ.xlsx`;
+      await deps.sendDocument(userId, xlsxBuffer, filename);
+      await sendWhatsApp(userId, summaryToWhatsApp(summary));
+      if (warnings && warnings.length) {
+        await sendWhatsApp(userId, `⚠️ *Warnings:*\n${warnings.join('\n')}`);
+      }
+      if (excluded && excluded.length) {
+        await sendWhatsApp(userId, `ℹ️ *Excluded rows* (non-VRF):\n${excluded.join(', ')}`);
+      }
+      sessions.delete(userId);
       return true;
     }
 

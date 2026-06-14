@@ -76,26 +76,29 @@ def _idu_models(ctype):
     return rows
 
 
+DUCTED_TYPES = {"Standard duct type", "High static pressure duct type"}
+HSD_PROMOTION_KW = 16.0  # ducted units required above this -> High Static
+
+
 def select_idu(ctype, required_kw):
     """Return a list of selected indoor unit dicts covering required_kw.
 
     Each element: {model, type, t1, t3, hp, cap_kw}. Normally length 1.
     Length > 1 only when required_kw exceeds the largest model of the type;
     in that case it splits into N near-even loads and selects each.
+
+    RULE: any ducted indoor unit (Standard or High Static) with a required
+    capacity strictly above 16 kW is ALWAYS promoted to High Static Ducted.
+    Standard Ducted tops out at 16 kW and would otherwise be split into
+    multiple units, which is incorrect for this workflow.
     """
+    if ctype in DUCTED_TYPES and required_kw > HSD_PROMOTION_KW + 1e-9:
+        ctype = HIGH_STATIC_TYPE
     models = _idu_models(ctype)
     if not models:
         return [{"model": "Model Not Found", "type": ctype, "t1": 0, "t3": 0,
                  "hp": 0, "cap_kw": 0, "req_kw": required_kw}]
     largest = models[-1]
-    # Escalation: a standard duct load larger than the biggest standard duct
-    # model (16 kW) is served by a single high static pressure duct unit
-    # (which extends to 22.4 / 28 kW), not by splitting into multiple standard
-    # ducts. Only standard duct escalates; other types keep their own split.
-    if (ctype == DEFAULT_TYPE
-            and required_kw > largest["t1"] + 1e-9
-            and _idu_models(HIGH_STATIC_TYPE)):
-        return select_idu(HIGH_STATIC_TYPE, required_kw)
     if required_kw <= largest["t1"]:
         chosen = next(m for m in models if m["t1"] >= required_kw - 1e-9)
         return [{"model": chosen["model"], "type": ctype, "t1": chosen["t1"],

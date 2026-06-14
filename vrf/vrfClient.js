@@ -172,6 +172,79 @@ async function runVrfSelection(input, onProgress) {
 }
 
 /**
+ * Raw text/CSV path — pass a pasted schedule directly to the engine.
+ * Returns { xlsxBuffer, summary, warnings, excluded }.
+ */
+async function runVrfFromText(project, rawText, discount, onProgress) {
+  if (!VRF_SIDECAR_URL || !VRF_API_KEY) {
+    throw new Error('VRF_SIDECAR_URL / VRF_API_KEY not configured');
+  }
+  if (!rawText || !rawText.trim()) {
+    throw new Error('rawText is empty');
+  }
+
+  const ready = await waitForSidecarReady(READY_BUDGET_MS, onProgress);
+  if (!ready) {
+    throw new Error('the selection engine is not responding. Please try again in a minute.');
+  }
+
+  const body = JSON.stringify({
+    project: project || 'VRF Project',
+    discount: discount != null ? discount : 0.25,
+    raw_text: rawText,
+  });
+
+  const maxAttempts = RETRY_DELAYS_MS.length + 1;
+  let lastTransient = '';
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    let res;
+    try {
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), REQUEST_TIMEOUT_MS);
+      try {
+        res = await fetch(`${VRF_SIDECAR_URL}/select-text`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-API-Key': VRF_API_KEY },
+          body,
+          signal: ctrl.signal,
+        });
+      } finally {
+        clearTimeout(t);
+      }
+    } catch (e) {
+      lastTransient = e.name === 'AbortError' ? 'request timed out' : e.message;
+      if (attempt < maxAttempts - 1) { await sleep(RETRY_DELAYS_MS[attempt]); continue; }
+      throw new Error(`sidecar unreachable after ${maxAttempts} tries (${lastTransient}).`);
+    }
+
+    if (RETRY_STATUSES.has(res.status)) {
+      lastTransient = `status ${res.status}`;
+      if (attempt < maxAttempts - 1) { await sleep(RETRY_DELAYS_MS[attempt]); continue; }
+      throw new Error(`sidecar not responding after ${maxAttempts} tries (${lastTransient}).`);
+    }
+
+    if (!res.ok) {
+      let detail = '';
+      try { detail = JSON.stringify(await res.json()); } catch (_) {}
+      throw new Error(`sidecar ${res.status}: ${detail}`);
+    }
+
+    const metaHeader = res.headers.get('x-meta');
+    const meta = metaHeader ? JSON.parse(metaHeader) : {};
+    const arrayBuf = await res.arrayBuffer();
+    return {
+      xlsxBuffer: Buffer.from(arrayBuf),
+      summary: meta.summary || {},
+      warnings: meta.warnings || [],
+      excluded: meta.excluded || [],
+    };
+  }
+
+  throw new Error(`sidecar selection failed (${lastTransient || 'unknown'})`);
+}
+
+/**
  * Build the tight WhatsApp reply text from the engine summary.
  * Keep it short — colleagues read this on a phone.
  */
@@ -186,14 +259,32 @@ function summaryToWhatsApp(summary, driveLink) {
     `Models used: ${summary.models_used}`,
     `Discount: ${Math.round((summary.discount || 0) * 100)}%`,
   ];
+
+  // Container loading (if engine returned it)
+  const cl = summary.container_loading;
+  if (cl && cl.containers_required != null) {
+    const driverLabels = {
+      odu_floor: 'ODU floor lanes',
+      idu_volume: 'IDU volume',
+      weight: 'weight',
+    };
+    const driver = driverLabels[cl.governing_driver] || cl.governing_driver;
+    lines.push(``, `📦 *Container Loading (${cl.container || "40'HC"})*`);
+    lines.push(`Containers required: *${cl.containers_required}*  _(governed by ${driver})_`);
+    lines.push(`ODU modules: ${cl.odu_modules}  |  Indoor units: ${cl.idu_units}  |  Total weight: ${cl.total_weight_kg} kg`);
+    if (cl.unknown_models && cl.unknown_models.length) {
+      lines.push(`⚠️ No dims for: ${cl.unknown_models.join(', ')} (excluded from loading calc)`);
+    }
+  }
+
   if (summary.flags && summary.flags.length) {
-    lines.push(``, `Flags: ${summary.flags.join('; ')}`);
+    lines.push(``, `⚠️ *Flags:* ${summary.flags.join('; ')}`);
   }
   if (driveLink) {
     lines.push(``, `BOQ: ${driveLink}`);
   }
-  lines.push(``, `(Open the Prices tab to fill unit prices — totals repopulate automatically.)`);
+  lines.push(``, `_(Open the Prices tab to fill unit prices — totals repopulate automatically. See Container Loading tab for shipping details.)_`);
   return lines.join('\n');
 }
 
-module.exports = { runVrfSelection, summaryToWhatsApp, warmUpSidecar, waitForSidecarReady, sidecarProbe };
+module.exports = { runVrfSelection, runVrfFromText, summaryToWhatsApp, warmUpSidecar, waitForSidecarReady, sidecarProbe };
