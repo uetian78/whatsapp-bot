@@ -64,45 +64,33 @@ const MENU_OPTIONS = [
       "• Packaged unit: *package unit 20 tr t3*  or  *5000 cfm package unit*\n" +
       "• Fresh air / DOAS: *fresh air 15 tr*\n" +
       "• Chiller: *APCY-H 30 tr*\n" +
-      "• Fan coil unit: *DMP 10 tr*  (or type *fcu*)\n\n" +
-      "🧭 Guided selectors (step-by-step):\n" +
-      "• Toshiba VRF BOQ: type *VRF Selection*",
+      "• Fan coil unit: *DMP 10 tr*  (or type *fcu*)",
   },
   {
     n: 3,
-    title: "MTZ Selection (Trane Package Unit)",
+    title: "Guided Selectors (VRF / MTZ / Split)",
     tip:
-      "*🌡️ Trane MTZ Package Unit Selector*\n" +
-      "Step-by-step selection with interpolated performance + PDF datasheet.\n\n" +
-      "Type: *MTZ Selection*\n\n" +
-      "You'll be asked:\n" +
-      "1️⃣ Required cooling load — e.g. `8.5 TR` or `100 MBH`\n" +
-      "   Add sensible if known: `8.5 TR / 7 TR`\n" +
-      "2️⃣ On-coil + ambient in one line — e.g. `80/67/115` _(DB°F / WB°F / Amb°F)_\n" +
-      "3️⃣ Airflow (CFM) or *rated* · Optional: `| Project | TAG`\n\n" +
-      "⚡ *Express mode* (all on one line):\n" +
-      "`MTZ Selection 8.5TR 80/67/115`\n\n" +
-      "Output: ranked model preview + PDF datasheet.",
+      "*🧭 Guided Selectors — Step-by-step with PDF output*\n\n" +
+      "━━━━━━━━━━━━━━\n" +
+      "🏢 *VRF Selection* — Toshiba VRF BOQ\n" +
+      "Type: *VRF Selection*\n" +
+      "Upload a schedule or enter room loads → full BOQ + PDF report.\n\n" +
+      "━━━━━━━━━━━━━━\n" +
+      "🌡️ *MTZ Selection* — Trane Package Unit\n" +
+      "Type: *MTZ Selection*\n" +
+      "Steps: load → conditions (DB/WB/Amb) → airflow → ranked models + PDF.\n" +
+      "⚡ Express: `MTZ Selection 8.5TR 80/67/115`\n\n" +
+      "━━━━━━━━━━━━━━\n" +
+      "🧊 *Split Selection* — Toshiba / TCL / SKM\n" +
+      "Type: *Split Selection*\n" +
+      "Steps: brand → unit list (one per line):\n" +
+      "`load kW, type, DB/WB/Amb`\n" +
+      "e.g. `5 kw, hi wall, 26.7/19.4/46`\n" +
+      "• Auto-splits oversized loads into 2×, 3×, 4× units\n" +
+      "• Reply *Print* after results for a PDF report",
   },
   {
     n: 4,
-    title: "Split Selection (Toshiba / TCL / SKM)",
-    tip:
-      "*🧊 Split Unit Selector*\n" +
-      "Select multiple split units at once — hi-wall, ducted, ducted inverter.\n\n" +
-      "Type: *Split Selection*\n\n" +
-      "You'll be asked:\n" +
-      "1️⃣ Brand — Toshiba, TCL, or SKM\n" +
-      "2️⃣ Units list (one per line):\n" +
-      "   `load kW, type, DB/WB/Amb`\n\n" +
-      "👉 Example:\n" +
-      "```\n5 kw, hi wall, 26.7/19.4/46\n3 kw, ducted, 26.7/19.4/46\n20 kw, ducted inverter, T3\n```\n\n" +
-      "• Ambient >60 auto-converts °F → °C\n" +
-      "• Load > biggest model → auto-splits into 2×, 3×, 4× units\n" +
-      "• Reply *Print* after results for a full PDF report",
-  },
-  {
-    n: 5,
     title: "Quick Questions about products",
     tip:
       "*❓ Quick Questions*\n" +
@@ -115,7 +103,7 @@ const MENU_OPTIONS = [
       "💡 If I don't have the answer, I'll point you to the team.",
   },
   {
-    n: 6,
+    n: 5,
     title: "Help (how to use this bot)",
     tip:
       "*🙋 How to use this assistant*\n" +
@@ -125,7 +113,7 @@ const MENU_OPTIONS = [
       "2️⃣ *Quick select* — capacity + type.\n" +
       "   e.g. *package unit 20 tr*, *fresh air 15 tr*\n\n" +
       "3️⃣ *Guided selectors* — step-by-step with PDF output:\n" +
-      "   *MTZ Selection* · *Split Selection* · *VRF Selection*\n\n" +
+      "   *VRF Selection* · *MTZ Selection* · *Split Selection*\n\n" +
       "4️⃣ *Ask a question* — in plain words.\n" +
       "   e.g. *How many TR is DMP 10?*\n\n" +
       "📋 *See a whole range* — *list APMR units* (also PAC4A, DMP, chillers…)\n\n" +
@@ -133,8 +121,8 @@ const MENU_OPTIONS = [
   },
 ];
 
-const NUM  = ["", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"];
-const ICON = ["", "📄", "🛠️", "🌡️", "🧊", "❓", "🙋"];
+const NUM  = ["", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
+const ICON = ["", "📄", "🛠️", "🧭", "❓", "🙋"];
 
 // Build the welcome message (numbered list) + the options array to remember.
 // `name` = WhatsApp profile name (optional); `returning` = seen before (CRM).
