@@ -87,7 +87,8 @@ const MENU_OPTIONS = [
       "`load kW, type, DB/WB/Amb`\n" +
       "e.g. `5 kw, hi wall, 26.7/19.4/46`\n" +
       "• Auto-splits oversized loads into 2×, 3×, 4× units\n" +
-      "• Reply *Print* after results for a PDF report",
+      "• Reply *Print* after results for a PDF report\n" +
+      "• Browse the range: *list of split units* (T1/T3 capacities)",
   },
   {
     n: 4,

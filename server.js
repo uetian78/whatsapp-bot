@@ -18,7 +18,7 @@ const { isMenuTrigger, smallTalkReply, welcomeMenu, tipFor, MENU_HINT } = requir
 const { PRODUCT_KB, parseListRequest, buildUnitList } = require("./product-facts.js");
 const crm = require("./crm.js");
 const { generateMtzPdf } = require("./mtz-pdf.js");
-const { FAMILY_MENU, rankSplit } = require("./split-engine.js");
+const { FAMILY_MENU, rankSplit, parseSplitListRequest, listSplits } = require("./split-engine.js");
 const { generateSplitPdf } = require("./split-pdf.js");
 const { isVrfTrigger } = require("./vrf/trigger.js");
 const {
@@ -1722,6 +1722,17 @@ app.post("/webhook", async (req, res) => {
       announcedSearch = true;
       try { await sendText(from, label || "🔍 Searching our library, one moment…"); } catch (_) {}
     };
+
+    // ── List split units ─────────────────────────────────────────
+    // "list of split units", "show toshiba splits", "list hi-wall splits" ->
+    // every split model with total cooling at T1/T3 + EER. Checked before the
+    // packaged-unit list and the AI gate so it never hits the API.
+    const splitListReq = parseSplitListRequest(text);
+    if (splitListReq) {
+      console.log(`📋 split list: ${splitListReq.join(", ")}`);
+      const body = listSplits(splitListReq);
+      if (body) return await sendLongText(from, body);
+    }
 
     // ── List units in a series ───────────────────────────────────
     // "give me list of APMR units", "list all DMP models", "what chillers do
