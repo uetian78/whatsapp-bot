@@ -959,40 +959,40 @@ function resolveSplitType(brand, typeStr) {
   return b.types.find(x => /PKV|HW/.test(x.famKey)) ?? b.types[0];
 }
 
-// Convert ambient: if value > 60 assume °F → °C
-function normAmb(v) { return v > 60 ? Math.round((v - 32) * 5 / 9 * 10) / 10 : v; }
 
-// Parse one unit line: "5kw, hi wall, 26.7/19.4/46" or "5kw, hi wall, T3"
-// Returns { loadKw, typeStr, idb, iwb, odb, condition } or null
-function parseSplitLine(line) {
-  const parts = line.split(/,/).map(p => p.trim());
-  if (parts.length < 2) return null;
+// 1 ton refrigeration = 3.51685 kW (matches products.js / vrfIntake.js).
+const SPLIT_TR_KW = 3.51685;
 
-  // Load
-  const kw = parseFloat(parts[0].match(/[\d.]+/)?.[0] ?? "");
-  if (!kw || kw <= 0) return null;
+// Parse the rating-condition reply in the guided flow. Accepts T1/T3, bare
+// 1/3, or the ambient (35/46). Returns "T1", "T3", or null.
+function parseSplitCondition(text) {
+  const t = (text || "").trim().toLowerCase();
+  if (/^t?\s*1$/.test(t) || /\bt1\b/.test(t) || /\b35\b/.test(t)) return "T1";
+  if (/^t?\s*3$/.test(t) || /\bt3\b/.test(t) || /\b46\b/.test(t)) return "T3";
+  return null;
+}
 
-  // Type string (column 2)
-  const typeStr = parts[1] || "hi wall";
+// Parse one capacity line in the guided flow: just a capacity, with an
+// OPTIONAL type. Capacity may be kW (default) or tonnage ("ton"/"TR"/trailing
+// "t"). Type defaults to Hi-Wall; "ducted"/"D"/"duc" selects ducted.
+//   "5", "5 kw", "1.5 ton", "8 kw ducted", "2 ton d", "5 hw"
+// Returns { loadKw, typeStr } or null.
+function parseSplitCapacityLine(line) {
+  const raw = (line || "").trim().toLowerCase();
+  const numMatch = raw.match(/[\d.]+/);
+  if (!numMatch) return null;
+  const val = parseFloat(numMatch[0]);
+  if (!val || val <= 0) return null;
 
-  // Conditions (column 3 — optional, defaults to T3)
-  let idb = 29, iwb = 19, odb = 46, condition = "T3";
-  if (parts[2]) {
-    const cStr = parts[2].trim();
-    if (/^t1$/i.test(cStr))      { idb = 27; iwb = 19; odb = 35; condition = "T1"; }
-    else if (/^t3$/i.test(cStr)) { idb = 29; iwb = 19; odb = 46; condition = "T3"; }
-    else if (/^qatar/i.test(cStr)){ idb = 24; iwb = 17; odb = 46; condition = "T3"; }
-    else {
-      const nums = cStr.match(/[\d.]+/g);
-      if (nums && nums.length >= 3) {
-        idb = parseFloat(nums[0]);
-        iwb = parseFloat(nums[1]);
-        odb = normAmb(parseFloat(nums[2]));
-        condition = odb <= 40 ? "T1" : "T3";
-      }
-    }
-  }
-  return { loadKw: kw, typeStr, idb, iwb, odb, condition };
+  // Tonnage if "ton"/"tons"/"tonnage"/"tr" appears, or a number with trailing "t".
+  const isTon = /\bton(s|nage)?\b|\btr\b/.test(raw) || /[\d.]+\s*t\b/.test(raw);
+  const loadKw = isTon ? Math.round(val * SPLIT_TR_KW * 100) / 100 : val;
+
+  // Type: ducted aliases first (D / duc / duct / ducted), else default Hi-Wall.
+  let typeStr = "hi wall";
+  if (/\bduct(ed)?\b|\bduc\b|(?:^|\s)d(?:\s|$)/.test(raw)) typeStr = "ducted";
+
+  return { loadKw, typeStr };
 }
 
 // Rank with auto-split: if load > biggest model, try dividing by 2,3,4
@@ -1030,6 +1030,7 @@ function formatSplitUnit(unitNum, res) {
   out += `TC ${f2(best.tc)} kW${margin}${shc} · Power ${f2(best.p)} kW · EER ${f2(best.eer)}`;
   if (count > 1) out += `\n   Combined: TC ${f2(best.tc * count)} kW · Power ${f2(best.p * count)} kW`;
   if (splitNote) out += `\n   ℹ️ ${splitNote}`;
+  if (res.typeNote) out += `\n   ℹ️ ${res.typeNote}`;
   if (!ok) out += `\n⚠️ Still undersized — contact supplier`;
   return out;
 }
@@ -1047,7 +1048,7 @@ async function handleSplitStep(from, text) {
     return sendText(from, "✅ Split selection cancelled. Type *Split Selection* anytime to restart.");
   }
 
-  // ── Step 1: choose brand ────────────────────────────────────
+  // ── Step 1/3: choose brand ──────────────────────────────────
   if (s.step === "brand") {
     const t = text.trim();
     let brand = null;
@@ -1060,62 +1061,84 @@ async function handleSplitStep(from, text) {
       );
     }
     s.brand = brand;
-    s.step  = "units";
-
-    const b = SPLIT_BRANDS.find(b => b.name === brand);
-    const typeList = b.types.map(t => `• *${t.label.split("(")[0].trim()}*`).join("\n");
-    const condNote = brand === "Toshiba"
-      ? "Conditions: `DB/WB/Amb` in °C (e.g. `26.7/19.4/46`)\nor presets *T1*, *T3*, *Qatar*."
-      : "Ambient drives T1/T3 automatically (≤40°C = T1, >40°C = T3).\nOr write *T1* / *T3* directly.";
+    s.step  = "condition";
 
     return sendText(from,
       `✅ *${brand}*\n\n` +
-      `*Step 2/2:* Enter units — one per line:\n` +
-      "`load kW, type, DB/WB/Amb`\n\n" +
-      `Available types:\n${typeList}\n\n` +
-      `${condNote}\n\n` +
-      `*Examples:*\n` +
-      (brand === "Toshiba"
-        ? "5 kw, hi wall, 26.7/19.4/46\n3 kw, ducted, 26.7/19.4/46\n20 kw, ducted inverter, T3"
-        : brand === "TCL"
-        ? "5 kw, hi wall, 46\n3 kw, hi wall, T3"
-        : "5 kw, hi wall, 46\n8 kw, ducted, T3")
+      "*Step 2/3:* Rating condition?\n" +
+      "• *T1* — 35°C ambient\n" +
+      "• *T3* — 46°C ambient\n\n" +
+      "Reply *T1* or *T3*."
     );
   }
 
-  // ── Step 2: multi-unit list → rank all → output + store for Print ─
-  if (s.step === "units") {
+  // ── Step 2/3: rating condition (T1 / T3) ────────────────────
+  if (s.step === "condition") {
+    const cond = parseSplitCondition(text);
+    if (!cond) {
+      return sendText(from, "❌ Reply *T1* (35°C) or *T3* (46°C).\nType *cancel* to exit.");
+    }
+    s.condition = cond;
+    if (cond === "T1") { s.idb = 27; s.iwb = 19; s.odb = 35; }
+    else               { s.idb = 29; s.iwb = 19; s.odb = 46; }
+    s.step = "capacities";
+
+    const b = SPLIT_BRANDS.find(b => b.name === s.brand);
+    const hasDucted = b.types.some(x => /BSP|DCT|SH/.test(x.famKey));
+
+    return sendText(from,
+      `✅ *${s.brand} · ${cond}* (${s.odb}°C ambient)\n\n` +
+      "*Step 3/3:* Enter capacities — one per line.\n" +
+      "kW or tonnage; unit type optional:\n" +
+      "• `5`  or  `5 kw`  → Hi-Wall\n" +
+      "• `1.5 ton`  → Hi-Wall\n" +
+      (hasDucted ? "• `8 kw ducted`  or  `2 ton d`  → Ducted\n" : "") +
+      "\n" +
+      (hasDucted
+        ? "Default type is *Hi-Wall* if you don't specify one."
+        : `${s.brand} splits are *Hi-Wall* only.`) +
+      "\n\n_Aliases — Hi-Wall: HW · WM · Wall · Split   |   Ducted: D · Duc_"
+    );
+  }
+
+  // ── Step 3/3: capacities list → rank all → output + store for Print ─
+  if (s.step === "capacities") {
     const lines = text.split(/\n/).map(l => l.trim()).filter(Boolean);
     if (!lines.length) {
-      return sendText(from, "❌ No units found. Enter at least one line.\nType *cancel* to exit.");
+      return sendText(from, "❌ No capacities found. Enter at least one line.\nType *cancel* to exit.");
     }
 
     const unitResults = [];
     const errors      = [];
 
     lines.forEach((line, i) => {
-      const parsed = parseSplitLine(line);
+      const parsed = parseSplitCapacityLine(line);
       if (!parsed) {
-        errors.push(`Line ${i + 1}: couldn't parse — "${line}"`);
-        unitResults.push({ lineNum: i + 1, error: `Couldn't parse: "${line}"` });
+        errors.push(`Line ${i + 1}: couldn't read a capacity — "${line}"`);
+        unitResults.push({ lineNum: i + 1, error: `Couldn't read: "${line}"` });
         return;
       }
       const resolved = resolveSplitType(s.brand, parsed.typeStr);
       if (!resolved) {
-        errors.push(`Line ${i + 1}: unknown type "${parsed.typeStr}" for ${s.brand}`);
-        unitResults.push({ lineNum: i + 1, error: `Unknown type "${parsed.typeStr}"` });
+        errors.push(`Line ${i + 1}: no "${parsed.typeStr}" type for ${s.brand}`);
+        unitResults.push({ lineNum: i + 1, error: `No ${parsed.typeStr} for ${s.brand}` });
         return;
       }
+      // If a ducted unit was asked but the brand has none, resolveSplitType
+      // falls back to Hi-Wall — surface that so the result isn't surprising.
+      const askedDucted = parsed.typeStr === "ducted";
+      const gotDucted   = /BSP|DCT|SH/.test(resolved.famKey);
+      const typeNote = askedDucted && !gotDucted
+        ? `${s.brand} has no ducted split — used Hi-Wall instead`
+        : null;
 
       const { ranked, count, splitNote } = rankSplitWithCount(
-        resolved.famKey, parsed.loadKw, parsed.idb, parsed.iwb, parsed.odb, parsed.condition
+        resolved.famKey, parsed.loadKw, s.idb, s.iwb, s.odb, s.condition
       );
       const famLabel = SPLIT_BRANDS.find(b => b.name === s.brand)
         ?.types.find(t => t.famKey === resolved.famKey)
         ?.label?.split("(")[0]?.trim() ?? resolved.famKey;
-      const condStr = resolved.kind === "t1t3"
-        ? parsed.condition
-        : `${parsed.idb}/${parsed.iwb}°C @ ${parsed.odb}°C`;
+      const condStr = `${s.condition} (${s.odb}°C)`;
       const best = ranked[0];
 
       unitResults.push({
@@ -1123,8 +1146,8 @@ async function handleSplitStep(from, text) {
         loadKw:   parsed.loadKw,
         typeStr:  parsed.typeStr,
         famLabel, condStr,
-        idb: parsed.idb, iwb: parsed.iwb, odb: parsed.odb,
-        condition: parsed.condition,
+        idb: s.idb, iwb: s.iwb, odb: s.odb,
+        condition: s.condition,
         famKey:   resolved.famKey,
         kind:     resolved.kind,
         count,    splitNote,
@@ -1136,6 +1159,7 @@ async function handleSplitStep(from, text) {
         eer:      best?.eer,
         margin:   best?.margin,
         adequate: best?.adequate ?? false,
+        typeNote,
       });
     });
 
@@ -1146,13 +1170,13 @@ async function handleSplitStep(from, text) {
     splitResults[from] = { brand: s.brand, units: unitResults, ts: Date.now() };
 
     // Build WhatsApp text output
-    const textBlocks = unitResults.map((u, i) =>
+    const textBlocks = unitResults.map((u) =>
       u.error
         ? `*❌ Unit ${u.lineNum}* — ${u.error}`
         : formatSplitUnit(u.lineNum, u)
     );
 
-    const header = `🧊 *Split Selection — ${s.brand}*  (${goodUnits.length} unit${goodUnits.length !== 1 ? "s" : ""})\n`;
+    const header = `🧊 *Split Selection — ${s.brand} · ${s.condition}*  (${goodUnits.length} unit${goodUnits.length !== 1 ? "s" : ""})\n`;
     const body   = textBlocks.join("\n\n─────────────────\n\n");
     const errStr = errors.length ? "\n\n⚠️ *Skipped:* " + errors.join(" | ") : "";
 
@@ -1609,7 +1633,7 @@ app.post("/webhook", async (req, res) => {
       pendingSplit[from] = { step: "brand", ts: Date.now() };
       return await sendText(from,
         "🧊 *Split Unit Selector*\n\n" +
-        "*Step 1/2:* Choose brand:\n" +
+        "*Step 1/3:* Choose brand:\n" +
         "1. Toshiba\n2. TCL\n3. SKM\n\n" +
         "_(Type *cancel* anytime to exit)_"
       );
