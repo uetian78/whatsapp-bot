@@ -128,6 +128,23 @@ const splitResults = {};
 const SPLIT_RESULT_TTL = 30 * 60 * 1000;
 const VRF_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
+// ── Message deduplication ────────────────────────────────────────────────────
+// WhatsApp retries the webhook when the server is cold-starting and the 200 OK
+// arrives late. Each retry carries the same message.id. We track seen IDs for
+// 5 minutes so duplicates are silently dropped without sending extra replies.
+const _seenMsgIds = new Map(); // messageId -> timestamp
+const MSG_DEDUP_TTL = 5 * 60 * 1000; // 5 minutes
+function isDuplicate(msgId) {
+  const now = Date.now();
+  // Purge expired entries (keep the map small)
+  for (const [id, ts] of _seenMsgIds) {
+    if (now - ts > MSG_DEDUP_TTL) _seenMsgIds.delete(id);
+  }
+  if (_seenMsgIds.has(msgId)) return true;
+  _seenMsgIds.set(msgId, now);
+  return false;
+}
+
 
 async function listFolderFiles() {
   if (!DRIVE_FOLDER_ID) return [];
@@ -1414,6 +1431,12 @@ app.post("/webhook", async (req, res) => {
     const value = req.body.entry?.[0]?.changes?.[0]?.value;
     const message = value?.messages?.[0];
     if (!message) return;
+
+    // Drop WhatsApp retries (same message.id re-delivered during cold start).
+    if (message.id && isDuplicate(message.id)) {
+      console.log(`⚡ Duplicate message ${message.id} — skipped`);
+      return;
+    }
 
     const from = message.from;
 
