@@ -37,80 +37,77 @@ async function generateSplitPdf({ brand, project, units }) {
     const L  = 40;
     const W  = PW - 80;
 
-    // ── Brand accent colour ────────────────────────────────────
-    const ACCENT = brand === "Toshiba" ? "#c8102e"
-                 : brand === "TCL"     ? "#e4032e"
-                 :                       "#003087"; // SKM blue
+    // ── Palette (matches HTML --ink / --mut / --ok / --warn) ──
+    const INK    = "#10171d";   // dark navy — all headers
+    const MUT    = "#69767e";   // muted grey for labels
+    const OK     = "#1f7a4d";   // adequate status
+    const WARN   = "#b25e00";   // undersized status
+    const BORDER = "#d0d0d0";
 
-    // ── Header bar ────────────────────────────────────────────
-    doc.rect(L, 40, W, 60).fill(ACCENT);
+    // ── Header bar (dark ink, no brand accent) ─────────────────
+    doc.rect(L, 40, W, 60).fill(INK);
     doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(7)
        .text(`${brand.toUpperCase()} · SPLIT UNIT SELECTION REPORT`, L + 12, 48, { characterSpacing: 1.2 });
     doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(26)
        .text("Split Unit Selection", L + 12, 56);
 
     const dateStr = new Date().toLocaleDateString("en-US", { year: "numeric", month: "short", day: "numeric" });
-    doc.fillColor("rgba(255,255,255,0.75)").font("Helvetica").fontSize(8)
+    doc.fillColor("rgba(255,255,255,0.65)").font("Helvetica").fontSize(8)
        .text(`${project ? project + "  ·  " : ""}Generated: ${dateStr}`, L + 12, 88, { width: W - 24 });
 
     let y = 118;
 
-    // ── Section header helper ──────────────────────────────────
+    // ── Section header helper (dark, no accent) ────────────────
     const section = (title) => {
-      doc.rect(L, y, W, 16).fill("#1a1a1a");
+      doc.rect(L, y, W, 16).fill(INK);
       doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(7)
          .text(title.toUpperCase(), L + 6, y + 4, { characterSpacing: 0.8 });
       y += 20;
     };
 
-    // ── Two-column row helper ──────────────────────────────────
+    // ── Two-column row helpers ─────────────────────────────────
     const cw = W / 4;
     const row4 = (l1, v1, l2, v2, l3, v3, l4, v4, shade) => {
       if (shade) doc.rect(L, y, W, 18).fill("#f7f7f7");
       const cols = [[l1,v1],[l2,v2],[l3,v3],[l4,v4]];
       cols.forEach(([lbl, val], i) => {
         const x = L + i * cw;
-        doc.fillColor("#888888").font("Helvetica").fontSize(7).text(lbl, x + 5, y + 2, { width: cw - 6 });
+        doc.fillColor(MUT).font("Helvetica").fontSize(7).text(lbl, x + 5, y + 2, { width: cw - 6 });
         doc.fillColor("#111111").font("Helvetica-Bold").fontSize(9).text(String(val ?? "—"), x + 5, y + 10, { width: cw - 6 });
       });
-      doc.rect(L, y, W, 18).stroke("#e0e0e0");
+      doc.rect(L, y, W, 18).stroke(BORDER);
       y += 18;
     };
 
-    const row2 = (l1, v1, l2, v2, shade) => {
-      if (shade) doc.rect(L, y, W, 18).fill("#f7f7f7");
-      [[l1,v1],[l2,v2]].forEach(([lbl, val], i) => {
-        const x = L + i * (W / 2);
-        doc.fillColor("#888888").font("Helvetica").fontSize(7).text(lbl, x + 5, y + 2, { width: W/2 - 6 });
-        doc.fillColor("#111111").font("Helvetica-Bold").fontSize(9).text(String(val ?? "—"), x + 5, y + 10, { width: W/2 - 6 });
-      });
-      doc.rect(L, y, W, 18).stroke("#e0e0e0");
-      y += 18;
-    };
-
-    // ── Summary row helper for the table ──────────────────────
-    const tableRow = (cells, widths, isHeader, ok) => {
-      const rowH = isHeader ? 18 : 22;
-      if (isHeader) {
-        doc.rect(L, y, W, rowH).fill("#1a1a1a");
+    // ── Summary table row helper ───────────────────────────────
+    const tableRow = (cells, widths, kind, ok) => {
+      // kind: "header" | "data" | "total"
+      const rowH = kind === "header" ? 18 : 22;
+      if (kind === "header") {
+        doc.rect(L, y, W, rowH).fill(INK);
+      } else if (kind === "total") {
+        doc.rect(L, y, W, rowH).fill(INK);
       } else {
         doc.rect(L, y, W, rowH).fill(ok === true ? "#f0fff5" : ok === false ? "#fff8f0" : "#ffffff");
       }
       let x = L;
       cells.forEach((cell, i) => {
         const w = widths[i];
-        if (isHeader) {
+        if (kind === "header") {
           doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(6.5)
              .text(cell.toUpperCase(), x + 4, y + 5, { width: w - 6, align: "center", characterSpacing: 0.5 });
+        } else if (kind === "total") {
+          doc.fillColor(cell ? "#ffffff" : "rgba(255,255,255,0.35)")
+             .font("Helvetica-Bold").fontSize(8)
+             .text(String(cell ?? ""), x + 4, y + 6, { width: w - 6, align: i > 2 ? "center" : "left" });
         } else {
-          const isBold = i === 3; // model column
-          doc.fillColor(ok === false ? "#b25e00" : "#111111")
-             .font(isBold ? "Helvetica-Bold" : "Helvetica").fontSize(8)
+          doc.fillColor(ok === false ? WARN : "#111111")
+             .font(i === 3 ? "Helvetica-Bold" : "Helvetica").fontSize(8)
              .text(String(cell ?? "—"), x + 4, y + 6, { width: w - 6, align: i > 2 ? "center" : "left" });
         }
         x += w;
       });
-      doc.rect(L, y, W, rowH).stroke("#d0d0d0");
+      doc.rect(L, y, W, rowH).stroke(BORDER);
       y += rowH;
     };
 
@@ -127,12 +124,12 @@ async function generateSplitPdf({ brand, project, units }) {
 
     const COL_W = [22, 70, 55, 80, 34, 34, 34, 34, 34, 37];
     const COL_H = ["#", "Type", "Required", "Model Selected", "Count", "TC kW", "SC kW", "Power kW", "EER", "Margin"];
-    tableRow(COL_H, COL_W, true);
+    tableRow(COL_H, COL_W, "header");
 
-    units.filter(u => !u.error).forEach((u, i) => {
+    const goodUnits = units.filter(u => !u.error);
+    goodUnits.forEach((u) => {
       checkPage(24);
       const countLabel = u.count > 1 ? `${u.count}×` : "1×";
-      const tcTotal  = u.count > 1 ? `${f2(u.tc)}×${u.count}` : f2(u.tc);
       const cells = [
         String(u.lineNum),
         u.famLabel ?? u.typeStr,
@@ -145,16 +142,36 @@ async function generateSplitPdf({ brand, project, units }) {
         f2(u.eer),
         pct(u.margin),
       ];
-      tableRow(cells, COL_W, false, u.adequate);
+      tableRow(cells, COL_W, "data", u.adequate);
       y += 2;
     });
+
+    // ── Totals row ─────────────────────────────────────────────
+    if (goodUnits.length) {
+      checkPage(24);
+      const tQty  = goodUnits.reduce((s, u) => s + (u.count || 1), 0);
+      const tTC   = goodUnits.reduce((s, u) => s + (u.tc  || 0) * (u.count || 1), 0);
+      const tSC   = goodUnits.every(u => u.shc != null)
+                  ? goodUnits.reduce((s, u) => s + (u.shc || 0) * (u.count || 1), 0)
+                  : null;
+      const tP    = goodUnits.reduce((s, u) => s + (u.p   || 0) * (u.count || 1), 0);
+      const totCells = [
+        "TOTAL", "", "", `${goodUnits.length} line(s)`,
+        `${tQty}×`,
+        f2(tTC),
+        tSC != null ? f2(tSC) : "—",
+        f2(tP),
+        "", "",
+      ];
+      tableRow(totCells, COL_W, "total");
+    }
 
     // ── Errors / skipped ──────────────────────────────────────
     const errored = units.filter(u => u.error);
     if (errored.length) {
       checkPage(40);
       y += 6;
-      doc.fillColor("#b25e00").font("Helvetica-Bold").fontSize(7)
+      doc.fillColor(WARN).font("Helvetica-Bold").fontSize(7)
          .text("SKIPPED / UNRESOLVED LINES", L, y);
       y += 12;
       errored.forEach(u => {
@@ -167,23 +184,27 @@ async function generateSplitPdf({ brand, project, units }) {
     y += 16;
 
     // ── Per-unit detail cards ──────────────────────────────────
-    units.filter(u => !u.error).forEach((u, i) => {
+    goodUnits.forEach((u, i) => {
       checkPage(120);
 
-      // Card header
-      const cardColor = u.adequate ? "#1f7a4d" : "#b25e00";
-      doc.rect(L, y, W, 20).fill(cardColor);
+      // Card header — always dark ink; status as text pill on the right
+      doc.rect(L, y, W, 20).fill(INK);
       const unitTitle = u.count > 1
-        ? `Unit ${u.lineNum}  ·  ${u.count}× ${u.model}  (${u.count} units required)`
+        ? `Unit ${u.lineNum}  ·  ${u.count}× ${u.model}  (${u.count} units)`
         : `Unit ${u.lineNum}  ·  ${u.model}`;
       doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(10)
-         .text(unitTitle, L + 10, y + 5);
-      const statusLabel = u.adequate ? "✓  ADEQUATE" : "⚠  UNDERSIZED";
-      doc.fillColor("#ffffff").font("Helvetica").fontSize(7)
-         .text(statusLabel, L + 10, y + 14, { align: "right", width: W - 20 });
+         .text(unitTitle, L + 10, y + 5, { width: W - 110 });
+
+      // Status pill on the right
+      const statusLabel = u.adequate ? "ADEQUATE" : "UNDERSIZED";
+      const pillColor   = u.adequate ? OK : WARN;
+      const pillW = 70, pillH = 14, pillX = L + W - pillW - 6, pillY = y + 3;
+      doc.rect(pillX, pillY, pillW, pillH).fill(pillColor);
+      doc.fillColor("#ffffff").font("Helvetica-Bold").fontSize(7)
+         .text(statusLabel, pillX, pillY + 3, { width: pillW, align: "center" });
       y += 24;
 
-      // Inputs
+      // Inputs block
       doc.rect(L, y, W / 2 - 2, 14).fill("#f0f4f2");
       doc.fillColor("#555555").font("Helvetica-Bold").fontSize(7)
          .text("INPUTS", L + 5, y + 3, { characterSpacing: 0.6 });
@@ -192,12 +213,12 @@ async function generateSplitPdf({ brand, project, units }) {
            "On-Coil DB/WB", u.idb != null ? `${u.idb}/${u.iwb}°C` : "—",
            "Ambient", u.odb != null ? `${u.odb}°C` : u.condition, (i % 2 === 0));
       if (u.splitNote) {
-        doc.fillColor("#b25e00").font("Helvetica").fontSize(7.5)
+        doc.fillColor(WARN).font("Helvetica").fontSize(7.5)
            .text(`⚠ ${u.splitNote}`, L + 5, y + 2);
         y += 13;
       }
 
-      // Outputs
+      // Outputs block
       doc.rect(L, y, W / 2 - 2, 14).fill("#f0f4f2");
       doc.fillColor("#555555").font("Helvetica-Bold").fontSize(7)
          .text("OUTPUTS  (per unit)", L + 5, y + 3, { characterSpacing: 0.6 });
@@ -219,7 +240,7 @@ async function generateSplitPdf({ brand, project, units }) {
     y += 8;
     doc.rect(L, y, W, 1).fill("#cccccc");
     y += 6;
-    doc.fillColor("#888888").font("Helvetica").fontSize(7)
+    doc.fillColor(MUT).font("Helvetica").fontSize(7)
        .text(
          `${brand} Split Unit Selection Report  ·  Capacities interpolated from published manufacturer data.  ` +
          `Values outside the catalogue grid are edge-clamped and flagged.  ` +
