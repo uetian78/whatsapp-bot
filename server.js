@@ -107,6 +107,12 @@ function driveFileId(link) {
 let fileIndex = { files: [], ts: 0 };
 const FILE_CACHE_MS = 2 * 60 * 1000; // refresh at most every 2 minutes
 
+// Static Drive-ID map for chiller datasheets (built by build-chiller-ids.js).
+// Key: "code|series" e.g. "5230|APCY-E" -> { id, name }.
+// Allows button taps to skip listFolderFiles() entirely.
+let chillerDriveIds = {};
+try { chillerDriveIds = require('./chiller-drive-ids.json'); } catch (_) {}
+
 // Stores numbered-list selections per user so they can reply "1", "2", etc.
 const pendingLists = {}; // { [from]: File[] }
 
@@ -612,6 +618,12 @@ async function sendChillerResponse(from, r) {
   if (r.type === "text") return await sendText(from, r.text);
   if (r.type === "buttons") return await sendButtons(from, r.text, r.buttons);
   if (r.type === "datasheet") {
+    const cachedFile = chillerDriveIds[`${r.code}|${r.series}`];
+    if (cachedFile) {
+      console.log(`❄️ Chiller datasheet (direct): ${r.series} ${r.code} -> ${cachedFile.name}`);
+      return await sendDriveFile(from, cachedFile);
+    }
+    // Fallback: scan Drive (used when chiller-drive-ids.json hasn't been built yet)
     await sendText(from, "🔍 Looking up that datasheet…");
     const files = await listFolderFiles();
     const matches = findChillerDatasheetFiles(r.series, r.code, files);
