@@ -39,7 +39,30 @@ function classifyCategory(text) {
   return null;
 }
 
+function splitFamilyKey(brand, category) {
+  const b = SPLIT_FAMILY[String(brand || "").toLowerCase()];
+  if (!b) return null;
+  return category === "ducted" ? b.ducted : b.hiwall;
+}
+
+// Match a load (kW) against a split family at the given condition.
+// Returns { label, capKw, marginPct, adequate } or null if family unknown.
+function matchSplit(loadKw, famKey, cond) {
+  if (!FAMILIES[famKey]) return null;
+  const p = COND_POINTS[cond];
+  const ranked = rankSplit(famKey, loadKw, p.idb, p.iwb, p.odb, cond, 0);
+  if (!ranked.length) return null;
+  const best = ranked[0]; // adequate-first, then smallest adequate
+  return {
+    label: best.label,
+    capKw: best.tc,
+    marginPct: Math.round((best.margin || 0) * 100),
+    adequate: !!best.adequate,
+  };
+}
+
 module.exports = {
   KW_PER_TR, MBH_PER_KW, COND_POINTS, SPLIT_FAMILY,
   toKw, toTr, toMbh, classifyCategory,
+  splitFamilyKey, matchSplit,
 };

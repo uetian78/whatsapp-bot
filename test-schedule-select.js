@@ -17,4 +17,16 @@ assert.ok(Math.abs(S.toKw(14.07, "kW") - 14.07) < 0.01);
 assert.ok(Math.abs(S.toTr(14.07) - 4.0) < 0.02);
 assert.ok(Math.abs(S.toMbh(14.07) - 48.0) < 0.2);
 
-console.log("Task 1 OK");
+// --- splitFamilyKey ---
+assert.strictEqual(S.splitFamilyKey("toshiba", "split"), "PKV");
+assert.strictEqual(S.splitFamilyKey("toshiba", "ducted"), "BSP");
+assert.strictEqual(S.splitFamilyKey("skm", "ducted"), "SKM-DCT");
+assert.strictEqual(S.splitFamilyKey("tcl", "ducted"), null); // unsupported
+
+// --- matchSplit: returns the smallest adequate model, with margin ---
+const sm = S.matchSplit(5.0, "PKV", "T3");
+assert.ok(sm && typeof sm.label === "string");
+assert.ok(sm.capKw > 0);
+assert.strictEqual(typeof sm.adequate, "boolean");
+
+console.log("Task 2 OK");
