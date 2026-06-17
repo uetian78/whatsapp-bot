@@ -62,4 +62,24 @@ assert.ok(tr.tons > 0);
 const over = S.matchPackageTrane(10000, "T3");
 assert.strictEqual(over.adequate, false);
 
-console.log("Task 3 OK");
+// --- buildExtractionPrompt mentions the JSON contract ---
+const prompt = S.buildExtractionPrompt();
+assert.match(prompt, /JSON array/i);
+assert.match(prompt, /category/);
+
+// --- normalizeRows: classify, convert, carry qty + raw; skip unreadable ---
+const raw = [
+  { location: "Main Hall", type: "PACKAGE AC", capacity: 48000, unit: "BTU/HR", qty: 8 },
+  { location: "Ladies", type: "SPLIT", capacity: 3, unit: "TR", qty: 2 },
+  { location: "Store", type: "SPLIT", capacity: "", unit: "", qty: 1 }, // unreadable
+];
+const { rows, skipped } = S.normalizeRows(raw);
+assert.strictEqual(rows.length, 2);
+assert.strictEqual(skipped.length, 1);
+assert.strictEqual(rows[0].category, "package");
+assert.ok(Math.abs(rows[0].requiredKw - 14.07) < 0.1);
+assert.strictEqual(rows[0].qty, 8);
+assert.strictEqual(rows[1].category, "split");
+assert.ok(Math.abs(rows[1].requiredKw - 10.55) < 0.1);
+
+console.log("Task 4 OK");

@@ -98,9 +98,59 @@ function matchPackageTrane(loadKw, cond) {
   return { key: best.key, tons: best.tons, tcMbh: best.r.TC, adequate: !!best.adequate };
 }
 
+function buildExtractionPrompt() {
+  return [
+    "You are extracting an HVAC equipment / AC unit schedule. Return ONLY a JSON",
+    "array, no prose, no markdown fences. Each element:",
+    '{"location": <room/area/tag text or "">,',
+    ' "type": <the TYPE cell text exactly as written, e.g. "SPLIT", "PACKAGE AC", "DUCTED">,',
+    ' "category": <"split" | "ducted" | "package" — your best read of the unit kind>,',
+    ' "capacity": <the SPECIFIED/REQUIRED cooling capacity NUMBER exactly as printed>,',
+    ' "unit": <capacity unit EXACTLY as printed: "kW","TR","ton","BTU/HR","MBH","kcal/h"; "" if none>,',
+    ' "qty": <integer, default 1>}',
+    "Use the SPECIFIED/required capacity, not any competitor 'offered' column.",
+    "If the table heading says the units are splits, treat rows as split unless a",
+    "row says ducted. Copy the capacity value and unit EXACTLY; do NOT convert.",
+    "A cell like '48,000x8' means capacity 48000 and qty 8. Do not invent rows. If",
+    "you cannot confidently read a capacity, OMIT that row. Return [] if no schedule.",
+  ].join(" ");
+}
+
+// Vision JSON -> { rows, skipped }. rows are normalized + classified; skipped
+// holds rows we could not read (bad capacity or unknown category).
+function normalizeRows(rawArray) {
+  const rows = [];
+  const skipped = [];
+  for (const r of Array.isArray(rawArray) ? rawArray : []) {
+    if (!r) continue;
+    const category = classifyCategory(r.category || r.type);
+    const value = parseFloat(r.capacity);
+    if (!category || isNaN(value)) {
+      skipped.push({ location: String(r.location || ""), raw: r.type || r.capacity || "" });
+      continue;
+    }
+    const requiredKw = toKw(value, r.unit);
+    if (isNaN(requiredKw)) {
+      skipped.push({ location: String(r.location || ""), raw: `${r.capacity} ${r.unit || ""}` });
+      continue;
+    }
+    rows.push({
+      location: String(r.location || ""),
+      type: String(r.type || ""),
+      category,
+      requiredKw,
+      qty: parseInt(r.qty, 10) || 1,
+      srcValue: value,
+      srcUnit: String(r.unit || ""),
+    });
+  }
+  return { rows, skipped };
+}
+
 module.exports = {
   KW_PER_TR, MBH_PER_KW, COND_POINTS, SPLIT_FAMILY,
   toKw, toTr, toMbh, classifyCategory,
   splitFamilyKey, matchSplit,
   matchPackageSkm, matchPackageTrane,
+  buildExtractionPrompt, normalizeRows,
 };
