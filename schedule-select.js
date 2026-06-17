@@ -64,6 +64,7 @@ function matchSplit(loadKw, famKey, cond) {
 // SKM package match against APMR, with auto fall-back to APMR-A when the load
 // exceeds the APMR range. seriesKey is "apmr" or "apmr-a".
 function matchPackageSkm(loadKw, seriesKey, cond) {
+  if (!COND_POINTS[cond]) throw new RangeError(`matchPackageSkm: unknown condition "${cond}"`);
   const field = cond === "T1" ? "t1_kw" : "t3_kw";
   const pick = (key) => {
     const models = [...PRODUCTS[key].models].sort((a, b) => a[field] - b[field]);
@@ -74,8 +75,10 @@ function matchPackageSkm(loadKw, seriesKey, cond) {
   let hit = pick(seriesKey);
   let fellBack = false;
   if (!hit && seriesKey === "apmr") {
+    series = "apmr-a";
+    fellBack = true;
     const a = pick("apmr-a");
-    if (a) { series = "apmr-a"; hit = a; fellBack = true; }
+    if (a) hit = a;
   }
   if (!hit) {
     const models = [...PRODUCTS[series].models].sort((a, b) => a[field] - b[field]);
@@ -87,6 +90,7 @@ function matchPackageSkm(loadKw, seriesKey, cond) {
 
 // Trane MTZ package match. Indoor rated DB80/WB67 assumed; ambient from cond.
 function matchPackageTrane(loadKw, cond) {
+  if (!COND_POINTS[cond]) throw new RangeError(`matchPackageTrane: unknown condition "${cond}"`);
   const reqTC = toMbh(loadKw);
   const amb = COND_POINTS[cond].ambF;
   const ranked = rankModels(reqTC, 0, 80, 67, amb);

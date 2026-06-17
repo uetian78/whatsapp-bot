@@ -50,10 +50,16 @@ assert.strictEqual(aa.fellBack, false);
 // --- beyond APMR-A max (282.2): undersized largest model ---
 const huge = S.matchPackageSkm(400, "apmr", "T3");
 assert.strictEqual(huge.adequate, false);
+assert.strictEqual(huge.series, "apmr-a");
+assert.ok(Math.abs(huge.capKw - 282.2) < 0.1);
 
 // --- Trane ---
 const tr = S.matchPackageTrane(30, "T3");
 assert.ok(tr && typeof tr.key === "string");
 assert.ok(tr.tcMbh > 0);
+assert.strictEqual(typeof tr.adequate, "boolean");
+assert.ok(tr.tons > 0);
+const over = S.matchPackageTrane(10000, "T3");
+assert.strictEqual(over.adequate, false);
 
 console.log("Task 3 OK");
