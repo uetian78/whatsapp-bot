@@ -46,16 +46,20 @@ inlining in `server.js` (already ~2100 lines, hard to test).
 
 ## Trigger & session flow
 
-1. Exact keyword **`Schedule Selection`** → bot: "📋 Send the equipment schedule as
-   an image or PDF."
+1. Any of three exact keywords — **`Image Selection`**, **`BOQ Selection`**, or
+   **`Schedule Selection`** → bot: "📋 Send the equipment schedule as an image or
+   PDF."
 2. User sends image/PDF → `downloadWhatsAppMedia` → vision extraction.
-3. Bot asks only the brand questions that apply to the rows found:
+3. Bot asks the **rating condition once per schedule**: "Rate capacities at? 1.T1
+   (35°C) 2.T3 (46°C)". This selects the outdoor condition all rows are matched at;
+   the bot does not infer it from the schedule header.
+4. Bot then asks only the brand questions that apply to the rows found:
    - Split rows present → "Which split brand? 1.Toshiba 2.TCL 3.SKM" (once, applies
      to all split rows).
    - Package rows present → "Package line? 1.SKM 2.Trane" → if SKM → "1.APMR
      2.APMR-A".
-4. Bot returns the per-row selection summary.
-5. 20-minute session timeout (same as VRF). `cancel` exits.
+5. Bot returns the per-row selection summary.
+6. 20-minute session timeout (same as VRF). `cancel` exits.
 
 ## Vision extraction
 
@@ -71,7 +75,8 @@ fabricated:
   "package"/"floor stand" → package.
 - `capacity.value` + `capacity.unit`: the **specified/required** capacity and its
   unit, read from the column header (e.g. "...CAPACITY (BTU/HR @46 DEG)") or a
-  per-cell suffix (`50TR`, `17.6 kW`). The `@46°` basis corresponds to T3.
+  per-cell suffix (`50TR`, `17.6 kW`). The rating condition the capacity represents
+  (T1/T3) is chosen by the user in the session, not inferred from the header.
 - `qty`: parsed from a `48,000×8` style cell or the QTY column.
 - `raw`: the original cell text, retained for the audit trail in the output.
 
@@ -91,25 +96,29 @@ source unit, e.g. `req 4.0 TR (14.1 kW)`.
 
 ## Matching rules
 
-All capacity comparisons use the **T3 (46°C)** rating, matching the schedule basis.
+All capacity comparisons use the **user-selected rating condition** — T1 (outdoor
+35°C) or T3 (outdoor 46°C), asked once per schedule. Let `cond` be that choice,
+`odb` = 35 (T1) or 46 (T3), and the model capacity field `t1_kw` or `t3_kw`
+accordingly. The split engine carries both hi-wall and ducted families.
 
-- **Split / ducted**: `rankSplit(famKey, loadKw, 29, 19, 46, "T3")` on the chosen
-  brand's hi-wall family (or ducted family when `category = ducted`). Pick the
-  smallest model whose T3 capacity ≥ load. If none meets, show the largest with a
-  "⚠️ undersized" note.
-- **Package — SKM / APMR**: pick the smallest APMR model with `t3_kw ≥ loadKw`. If
-  the load exceeds the largest APMR, **auto-fall back to APMR-A** for that row and
-  tag it `↪ APMR-A (APMR range exceeded)`.
+- **Split / ducted**: `rankSplit(famKey, loadKw, 27|29, 19, odb, cond)` on the
+  chosen brand's hi-wall family (or ducted family when `category = ducted`; standard
+  indoor DB is 27°C at T1 / 29°C at T3). Pick the smallest model whose capacity at
+  `cond` ≥ load. If none meets, show the largest with a "⚠️ undersized" note.
+- **Package — SKM / APMR**: pick the smallest APMR model with `model[capField] ≥
+  loadKw`. If the load exceeds the largest APMR, **auto-fall back to APMR-A** for
+  that row and tag it `↪ APMR-A (APMR range exceeded)`.
 - **Package — SKM / APMR-A**: match against APMR-A directly.
-- **Package — Trane**: hand to the MTZ engine at rated/standard conditions
-  (schedules rarely give DB/WB/ambient); tag the row "rated conditions assumed."
+- **Package — Trane**: hand to the MTZ engine using the chosen condition as the
+  outdoor ambient (35/46°C) with rated indoor DB/WB assumed (schedules rarely give
+  DB/WB); tag the row "rated indoor assumed."
 
 ## Output format
 
 Per-row summary via the existing `sendLongText` chunker. Example:
 
 ```
-📋 Schedule Selection — 7 rows
+📋 Schedule Selection — 7 rows · rated at T3 (46°C)
 
 🏢 PACKAGE (SKM APMR)
 • Main Praying Hall — req 4.0 TR (14.1 kW) ×8
@@ -138,7 +147,7 @@ Selection is per-unit; `qty` is shown but does not change which model is picked.
 ## Testing
 
 - Unit-normalization: BTU/hr, kW, TR, MBH inputs → expected kW (table-driven).
-- Matching: a load just under / just over a model boundary picks the right model;
-  APMR→APMR-A fallback fires when the load exceeds the APMR range.
+- Matching: a load just under / just over a model boundary picks the right model at
+  both T1 and T3; APMR→APMR-A fallback fires when the load exceeds the APMR range.
 - Classification: TYPE/heading variants → correct category.
 - Extraction is validated against the sample Midea schedule (manual/fixture).
