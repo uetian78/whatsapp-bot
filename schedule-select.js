@@ -163,7 +163,8 @@ function capStr(kw) {
 // pkgSeries }. skipped is the verify list from normalizeRows.
 function buildReply(rows, skipped, choices) {
   const { cond, splitBrand, pkgVendor, pkgSeries } = choices;
-  const lines = [`📋 *Schedule Selection* — ${rows.length} rows · rated at ${cond}`];
+  const rowWord = rows.length === 1 ? "row" : "rows";
+  const lines = [`📋 *Schedule Selection* — ${rows.length} ${rowWord} · rated at ${cond}`];
 
   const pkgRows = rows.filter((r) => r.category === "package");
   const splitRows = rows.filter((r) => r.category === "split" || r.category === "ducted");
@@ -191,7 +192,8 @@ function buildReply(rows, skipped, choices) {
   }
 
   if (splitRows.length) {
-    const brandTitle = splitBrand.charAt(0).toUpperCase() + splitBrand.slice(1);
+    const BRAND_DISPLAY = { toshiba: "Toshiba", tcl: "TCL", skm: "SKM" };
+    const brandTitle = BRAND_DISPLAY[splitBrand] || (splitBrand.charAt(0).toUpperCase() + splitBrand.slice(1));
     lines.push("", `❄️ *SPLIT (${brandTitle})*`);
     for (const r of splitRows) {
       const famKey = splitFamilyKey(splitBrand, r.category);
@@ -201,6 +203,11 @@ function buildReply(rows, skipped, choices) {
         continue;
       }
       const m = matchSplit(r.requiredKw, famKey, cond);
+      if (!m) {
+        lines.push(`• ${r.location} — req ${capStr(r.requiredKw)} ×${r.qty}`,
+          `   → ⚠️ ${brandTitle} ${r.category} — selection error, verify`);
+        continue;
+      }
       const flag = m.adequate ? "✅" : "⚠️ undersized";
       const kind = r.category === "ducted" ? "ducted" : "hi-wall";
       lines.push(`• ${r.location} (${kind}) — req ${capStr(r.requiredKw)} ×${r.qty}`,
