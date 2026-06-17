@@ -100,4 +100,8 @@ assert.match(reply, /SPLIT/);
 assert.match(reply, /APMR/);
 assert.match(reply, /T3/);
 
-console.log("Task 5 OK");
+// --- rowsFromScheduleImage exists and is async ---
+assert.strictEqual(typeof S.rowsFromScheduleImage, "function");
+assert.strictEqual(S.rowsFromScheduleImage.constructor.name, "AsyncFunction");
+
+console.log("Task 6 OK");

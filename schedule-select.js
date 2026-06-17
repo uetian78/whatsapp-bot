@@ -7,6 +7,8 @@ const { PRODUCTS } = require("./products.js");
 const { rankModels } = require("./mtz-engine.js");
 const { capacityToKw } = require("./vrf/vrfIntake.js");
 
+const EXTRACT_MODEL = process.env.SCHEDULE_EXTRACT_MODEL || "claude-sonnet-4-6";
+
 const KW_PER_TR = 3.51685;
 const MBH_PER_KW = 3.412142;
 
@@ -222,11 +224,46 @@ function buildReply(rows, skipped, choices) {
   return lines.join("\n");
 }
 
+// Send an image/PDF to Claude vision and return normalized { rows, skipped }.
+async function rowsFromScheduleImage(base64Data, mediaType) {
+  const isPdf = mediaType === "application/pdf";
+  const block = isPdf
+    ? { type: "document", source: { type: "base64", media_type: "application/pdf", data: base64Data } }
+    : { type: "image", source: { type: "base64", media_type: mediaType, data: base64Data } };
+
+  const res = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "x-api-key": process.env.ANTHROPIC_API_KEY,
+      "anthropic-version": "2023-06-01",
+    },
+    body: JSON.stringify({
+      model: EXTRACT_MODEL,
+      max_tokens: 4000,
+      messages: [{ role: "user", content: [block, { type: "text", text: buildExtractionPrompt() }] }],
+    }),
+  });
+  if (!res.ok) {
+    let detail = "";
+    try { detail = JSON.stringify(await res.json()); } catch (_) {}
+    throw new Error(`schedule extraction API ${res.status}: ${detail}`);
+  }
+  const data = await res.json();
+  const text = (data.content || [])
+    .filter((b) => b.type === "text").map((b) => b.text).join("")
+    .replace(/```json|```/g, "").trim();
+  let parsed;
+  try { parsed = JSON.parse(text); }
+  catch (_) { throw new Error("Could not parse the schedule. Try a clearer photo or PDF."); }
+  return normalizeRows(parsed);
+}
+
 module.exports = {
   KW_PER_TR, MBH_PER_KW, COND_POINTS, SPLIT_FAMILY,
   toKw, toTr, toMbh, classifyCategory,
   splitFamilyKey, matchSplit,
   matchPackageSkm, matchPackageTrane,
   buildExtractionPrompt, normalizeRows,
-  summarize, buildReply,
+  summarize, buildReply, rowsFromScheduleImage,
 };
