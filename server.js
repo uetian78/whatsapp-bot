@@ -1276,10 +1276,12 @@ async function handleScheduleStep(from, s, message, vText) {
     else if (message.type === "document" && message.document?.id) media = message.document.id;
     if (!media) return await sendText(from, "Please send the schedule as an *image* or *PDF*.");
 
+    s.step = "processing"; // guard against a second image launching a duplicate extraction
     let dl;
     try { dl = await downloadWhatsAppMedia(media); }
     catch (err) {
       console.error("❌ Schedule media download error:", err.response?.data || err.message);
+      s.step = "awaitImage";
       return await sendText(from, "I couldn't download that file. Try again, or send a clearer photo.");
     }
     const mediaType = message.type === "document"
@@ -1290,17 +1292,23 @@ async function handleScheduleStep(from, s, message, vText) {
     try { extracted = await schedule.rowsFromScheduleImage(dl.buffer.toString("base64"), mediaType); }
     catch (err) {
       console.error("❌ Schedule extraction error:", err.message);
+      s.step = "awaitImage";
       return await sendText(from, "Sorry, I couldn't read that schedule. Try a clearer image or a PDF.");
     }
     if (!extracted.rows.length) {
-      scheduleSessions.delete(from);
-      return await sendText(from, "I didn't find any schedule rows. Please resend a clearer image.");
+      s.step = "awaitImage";
+      return await sendText(from, "I didn't find any schedule rows. Please resend a clearer image, or type *cancel* to exit.");
     }
     s.rows = extracted.rows;
     s.skipped = extracted.skipped;
     s.step = "awaitCondition";
     return await sendText(from,
       `I read *${extracted.rows.length}* rows.\n\n*Rate capacities at?*\n1. T1 (35°C)\n2. T3 (46°C)`);
+  }
+
+  // While an extraction is in flight, a second file just gets a wait notice.
+  if (s.step === "processing") {
+    return await sendText(from, "⏳ Still reading the previous file — one moment…");
   }
 
   // 2) Rating condition.
@@ -1800,7 +1808,7 @@ app.post("/webhook", async (req, res) => {
       }
       s.ts = Date.now();
       const vText = message.type === "text" ? message.text.body.trim() : "";
-      if (/^cancel$/i.test(vText)) {
+      if (/^(cancel|stop|exit|quit|reset)\b/i.test(vText)) {
         scheduleSessions.delete(from);
         return await sendText(from, "✅ Schedule selection cancelled.");
       }
