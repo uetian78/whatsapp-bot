@@ -256,6 +256,7 @@ async function rowsFromScheduleImage(base64Data, mediaType) {
   let parsed;
   try { parsed = JSON.parse(text); }
   catch (_) { throw new Error("Could not parse the schedule. Try a clearer photo or PDF."); }
+  if (!Array.isArray(parsed)) throw new Error("Schedule extractor returned an unexpected format. Please try again.");
   return normalizeRows(parsed);
 }
 
