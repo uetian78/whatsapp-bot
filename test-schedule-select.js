@@ -29,4 +29,31 @@ assert.ok(sm && typeof sm.label === "string");
 assert.ok(sm.capKw > 0);
 assert.strictEqual(typeof sm.adequate, "boolean");
 
-console.log("Task 2 OK");
+// --- matchPackageSkm: 14.1 kW T3 -> first APMR >= load (51060, 15.4) ---
+const pk = S.matchPackageSkm(14.1, "apmr", "T3");
+assert.strictEqual(pk.series, "apmr");
+assert.strictEqual(pk.code, "51060");
+assert.strictEqual(pk.adequate, true);
+assert.strictEqual(pk.fellBack, false);
+
+// --- fallback: 120 kW exceeds APMR max (87.6) -> APMR-A ---
+const fb = S.matchPackageSkm(120, "apmr", "T3");
+assert.strictEqual(fb.series, "apmr-a");
+assert.strictEqual(fb.fellBack, true);
+assert.strictEqual(fb.adequate, true);
+
+// --- direct APMR-A request, no fallback flag ---
+const aa = S.matchPackageSkm(14.0, "apmr-a", "T3");
+assert.strictEqual(aa.series, "apmr-a");
+assert.strictEqual(aa.fellBack, false);
+
+// --- beyond APMR-A max (282.2): undersized largest model ---
+const huge = S.matchPackageSkm(400, "apmr", "T3");
+assert.strictEqual(huge.adequate, false);
+
+// --- Trane ---
+const tr = S.matchPackageTrane(30, "T3");
+assert.ok(tr && typeof tr.key === "string");
+assert.ok(tr.tcMbh > 0);
+
+console.log("Task 3 OK");
