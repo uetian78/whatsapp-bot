@@ -18,6 +18,7 @@ const { isMenuTrigger, smallTalkReply, welcomeMenu, tipFor, MENU_HINT } = requir
 const { PRODUCT_KB, parseListRequest, buildUnitList } = require("./product-facts.js");
 const crm = require("./crm.js");
 const { generateMtzPdf } = require("./mtz-pdf.js");
+const schedule = require("./schedule-select.js");
 const { FAMILY_MENU, rankSplit, parseSplitListRequest, listSplits } = require("./split-engine.js");
 const { generateSplitPdf } = require("./split-pdf.js");
 const { isVrfTrigger } = require("./vrf/trigger.js");
@@ -128,6 +129,10 @@ const MTZ_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 // Split unit selection sessions: { step, brand, ts }
 const pendingSplit = {};
 const SPLIT_TIMEOUT_MS = 10 * 60 * 1000;
+
+// Schedule / BOQ image selection sessions
+const scheduleSessions = new Map(); // from -> { step, ts, rows, skipped, cond, splitBrand, pkgVendor, pkgSeries }
+const SCHEDULE_TIMEOUT_MS = 10 * 60 * 1000;
 
 // Stores last split results per user for Print (30 min TTL)
 const splitResults = {};
@@ -1263,6 +1268,93 @@ async function handleSplitStep(from, text) {
   }
 }
 
+async function handleScheduleStep(from, s, message, vText) {
+  // 1) Waiting for the image/PDF.
+  if (s.step === "awaitImage") {
+    let media = null;
+    if (message.type === "image" && message.image?.id) media = message.image.id;
+    else if (message.type === "document" && message.document?.id) media = message.document.id;
+    if (!media) return await sendText(from, "Please send the schedule as an *image* or *PDF*.");
+
+    let dl;
+    try { dl = await downloadWhatsAppMedia(media); }
+    catch (err) {
+      console.error("❌ Schedule media download error:", err.response?.data || err.message);
+      return await sendText(from, "I couldn't download that file. Try again, or send a clearer photo.");
+    }
+    const mediaType = message.type === "document"
+      ? (message.document.mime_type || dl.mediaType) : dl.mediaType;
+
+    await sendText(from, "🔍 Reading the schedule, one moment…");
+    let extracted;
+    try { extracted = await schedule.rowsFromScheduleImage(dl.buffer.toString("base64"), mediaType); }
+    catch (err) {
+      console.error("❌ Schedule extraction error:", err.message);
+      return await sendText(from, "Sorry, I couldn't read that schedule. Try a clearer image or a PDF.");
+    }
+    if (!extracted.rows.length) {
+      scheduleSessions.delete(from);
+      return await sendText(from, "I didn't find any schedule rows. Please resend a clearer image.");
+    }
+    s.rows = extracted.rows;
+    s.skipped = extracted.skipped;
+    s.step = "awaitCondition";
+    return await sendText(from,
+      `I read *${extracted.rows.length}* rows.\n\n*Rate capacities at?*\n1. T1 (35°C)\n2. T3 (46°C)`);
+  }
+
+  // 2) Rating condition.
+  if (s.step === "awaitCondition") {
+    if (vText === "1") s.cond = "T1";
+    else if (vText === "2") s.cond = "T3";
+    else return await sendText(from, "Reply *1* for T1 (35°C) or *2* for T3 (46°C).");
+    return await advanceScheduleQuestions(from, s);
+  }
+
+  // 3) Split brand.
+  if (s.step === "awaitSplitBrand") {
+    const map = { "1": "toshiba", "2": "tcl", "3": "skm" };
+    if (!map[vText]) return await sendText(from, "Reply *1* Toshiba, *2* TCL, or *3* SKM.");
+    s.splitBrand = map[vText];
+    return await advanceScheduleQuestions(from, s);
+  }
+
+  // 4) Package vendor.
+  if (s.step === "awaitPkgVendor") {
+    if (vText === "1") { s.pkgVendor = "skm"; s.step = "awaitPkgSeries";
+      return await sendText(from, "*APMR or APMR-A?*\n1. APMR\n2. APMR-A"); }
+    if (vText === "2") { s.pkgVendor = "trane"; s.pkgSeries = null;
+      return await advanceScheduleQuestions(from, s); }
+    return await sendText(from, "Reply *1* SKM or *2* Trane.");
+  }
+
+  // 5) Package SKM series.
+  if (s.step === "awaitPkgSeries") {
+    if (vText === "1") s.pkgSeries = "apmr";
+    else if (vText === "2") s.pkgSeries = "apmr-a";
+    else return await sendText(from, "Reply *1* APMR or *2* APMR-A.");
+    return await advanceScheduleQuestions(from, s);
+  }
+}
+
+// Ask the next needed question, or produce the result when all answered.
+async function advanceScheduleQuestions(from, s) {
+  const sum = schedule.summarize(s.rows);
+  if (sum.hasSplit && !s.splitBrand) {
+    s.step = "awaitSplitBrand";
+    return await sendText(from, "*Which split brand?*\n1. Toshiba\n2. TCL\n3. SKM");
+  }
+  if (sum.hasPackage && !s.pkgVendor) {
+    s.step = "awaitPkgVendor";
+    return await sendText(from, "*Package line?*\n1. SKM (APMR)\n2. Trane (MTZ)");
+  }
+  const reply = schedule.buildReply(s.rows, s.skipped, {
+    cond: s.cond, splitBrand: s.splitBrand, pkgVendor: s.pkgVendor, pkgSeries: s.pkgSeries,
+  });
+  scheduleSessions.delete(from);
+  return await sendLongText(from, reply);
+}
+
 // Send split PDF report when user replies "Print"
 async function handleSplitPrint(from) {
   const stored = splitResults[from];
@@ -1689,6 +1781,30 @@ app.post("/webhook", async (req, res) => {
     // ── VRF trigger: exact phrase "VRF Selection" only ──
     if (message.type === "text" && isVrfTrigger(message.text.body)) {
       return await onVrfKeyword(from);
+    }
+
+    // ── Schedule / BOQ image selection ───────────────────────────
+    // Trigger: exact "Image Selection" / "BOQ Selection" / "Schedule Selection".
+    if (message.type === "text" &&
+        /^(image|boq|schedule)\s+selection$/i.test(message.text.body.trim())) {
+      scheduleSessions.set(from, { step: "awaitImage", ts: Date.now() });
+      return await sendText(from,
+        "📋 *Schedule / BOQ Selection*\n\nSend the equipment schedule as an *image* or *PDF*.\n_(Type *cancel* anytime to exit)_");
+    }
+
+    if (scheduleSessions.has(from)) {
+      const s = scheduleSessions.get(from);
+      if (Date.now() - (s.ts || 0) > SCHEDULE_TIMEOUT_MS) {
+        scheduleSessions.delete(from);
+        return await sendText(from, "⏰ Schedule session timed out. Type *Schedule Selection* to start again.");
+      }
+      s.ts = Date.now();
+      const vText = message.type === "text" ? message.text.body.trim() : "";
+      if (/^cancel$/i.test(vText)) {
+        scheduleSessions.delete(from);
+        return await sendText(from, "✅ Schedule selection cancelled.");
+      }
+      return await handleScheduleStep(from, s, message, vText);
     }
 
     if (message.type !== "text") return;
