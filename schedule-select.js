@@ -147,10 +147,79 @@ function normalizeRows(rawArray) {
   return { rows, skipped };
 }
 
+function summarize(rows) {
+  return {
+    count: rows.length,
+    hasSplit: rows.some((r) => r.category === "split" || r.category === "ducted"),
+    hasPackage: rows.some((r) => r.category === "package"),
+  };
+}
+
+function capStr(kw) {
+  return `${toTr(kw).toFixed(1)} TR (${kw.toFixed(1)} kW)`;
+}
+
+// Build the final WhatsApp reply. choices: { cond, splitBrand, pkgVendor,
+// pkgSeries }. skipped is the verify list from normalizeRows.
+function buildReply(rows, skipped, choices) {
+  const { cond, splitBrand, pkgVendor, pkgSeries } = choices;
+  const lines = [`📋 *Schedule Selection* — ${rows.length} rows · rated at ${cond}`];
+
+  const pkgRows = rows.filter((r) => r.category === "package");
+  const splitRows = rows.filter((r) => r.category === "split" || r.category === "ducted");
+
+  if (pkgRows.length) {
+    const vendorLabel = pkgVendor === "trane" ? "Trane MTZ"
+      : `SKM ${pkgSeries === "apmr-a" ? "APMR-A" : "APMR"}`;
+    lines.push("", `🏢 *PACKAGE (${vendorLabel})*`);
+    for (const r of pkgRows) {
+      if (pkgVendor === "trane") {
+        const m = matchPackageTrane(r.requiredKw, cond);
+        const flag = m.adequate ? "✅" : "⚠️ undersized";
+        lines.push(`• ${r.location} — req ${capStr(r.requiredKw)} ×${r.qty}`,
+          `   → MTZ ${m.key} · ${m.tons} TR · ${flag} _(rated indoor 80/67°F)_`);
+      } else {
+        const m = matchPackageSkm(r.requiredKw, pkgSeries, cond);
+        const name = `${m.series === "apmr-a" ? "APMR-A" : "APMR"} ${m.code}`;
+        const tags = [];
+        if (m.fellBack) tags.push("↪ APMR-A (APMR range exceeded)");
+        tags.push(m.adequate ? "✅" : "⚠️ undersized");
+        lines.push(`• ${r.location} — req ${capStr(r.requiredKw)} ×${r.qty}`,
+          `   → ${name} · ${m.capKw.toFixed(1)} kW ${cond} · ${tags.join(" · ")}`);
+      }
+    }
+  }
+
+  if (splitRows.length) {
+    const brandTitle = splitBrand.charAt(0).toUpperCase() + splitBrand.slice(1);
+    lines.push("", `❄️ *SPLIT (${brandTitle})*`);
+    for (const r of splitRows) {
+      const famKey = splitFamilyKey(splitBrand, r.category);
+      if (!famKey) {
+        lines.push(`• ${r.location} — req ${capStr(r.requiredKw)} ×${r.qty}`,
+          `   → ⚠️ ${brandTitle} ${r.category} not in catalogue — verify`);
+        continue;
+      }
+      const m = matchSplit(r.requiredKw, famKey, cond);
+      const flag = m.adequate ? "✅" : "⚠️ undersized";
+      const kind = r.category === "ducted" ? "ducted" : "hi-wall";
+      lines.push(`• ${r.location} (${kind}) — req ${capStr(r.requiredKw)} ×${r.qty}`,
+        `   → ${m.label} · ${m.capKw.toFixed(1)} kW ${cond} · ${flag}`);
+    }
+  }
+
+  if (skipped && skipped.length) {
+    lines.push("", `⚠️ *Verify: ${skipped.length} row(s) couldn't be read*`);
+    for (const s of skipped) lines.push(`• ${s.location || s.raw || "(unreadable)"}`);
+  }
+  return lines.join("\n");
+}
+
 module.exports = {
   KW_PER_TR, MBH_PER_KW, COND_POINTS, SPLIT_FAMILY,
   toKw, toTr, toMbh, classifyCategory,
   splitFamilyKey, matchSplit,
   matchPackageSkm, matchPackageTrane,
   buildExtractionPrompt, normalizeRows,
+  summarize, buildReply,
 };

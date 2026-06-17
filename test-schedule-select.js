@@ -82,4 +82,22 @@ assert.strictEqual(rows[0].qty, 8);
 assert.strictEqual(rows[1].category, "split");
 assert.ok(Math.abs(rows[1].requiredKw - 10.55) < 0.1);
 
-console.log("Task 4 OK");
+// --- summarize flags which questions are needed ---
+const sumRows = S.normalizeRows([
+  { location: "Hall", type: "PACKAGE AC", capacity: 48000, unit: "BTU/HR", qty: 1 },
+  { location: "Office", type: "SPLIT", capacity: 18000, unit: "BTU/HR", qty: 1 },
+]).rows;
+const sum = S.summarize(sumRows);
+assert.strictEqual(sum.hasPackage, true);
+assert.strictEqual(sum.hasSplit, true);
+
+// --- buildReply renders a row per category + the verify list ---
+const reply = S.buildReply(sumRows, [], {
+  cond: "T3", splitBrand: "toshiba", pkgVendor: "skm", pkgSeries: "apmr",
+});
+assert.match(reply, /PACKAGE/);
+assert.match(reply, /SPLIT/);
+assert.match(reply, /APMR/);
+assert.match(reply, /T3/);
+
+console.log("Task 5 OK");
