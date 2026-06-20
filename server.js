@@ -1301,6 +1301,13 @@ async function handleScheduleStep(from, s, message, vText) {
     }
     s.rows = extracted.rows;
     s.skipped = extracted.skipped;
+    if (extracted.scheduleCondition) {
+      s.cond = extracted.scheduleCondition;
+      const label = s.cond === "T1" ? "T1 (35°C)" : "T3 (46°C)";
+      await sendText(from,
+        `I read *${extracted.rows.length}* rows. Detected rating *${label}* from the schedule.`);
+      return await advanceScheduleQuestions(from, s);
+    }
     s.step = "awaitCondition";
     return await sendText(from,
       `I read *${extracted.rows.length}* rows.\n\n*Rate capacities at?*\n1. T1 (35°C)\n2. T3 (46°C)`);
