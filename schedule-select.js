@@ -67,10 +67,13 @@ function splitFamilyKey(brand, category) {
 
 // Match a load (kW) against a split family at the given condition.
 // Returns { label, capKw, marginPct, adequate } or null if family unknown.
-function matchSplit(loadKw, famKey, cond) {
+function matchSplit(loadKw, famKey, cond, onCoil = null) {
   if (!FAMILIES[famKey]) return null;
   const p = COND_POINTS[cond];
-  const ranked = rankSplit(famKey, loadKw, p.idb, p.iwb, p.odb, cond, 0);
+  const hasOC = !!(onCoil && onCoil.db != null && onCoil.wb != null);
+  const idb = hasOC ? onCoil.db : p.idb;
+  const iwb = hasOC ? onCoil.wb : p.iwb;
+  const ranked = rankSplit(famKey, loadKw, idb, iwb, p.odb, cond, 0);
   if (!ranked.length) return null;
   const best = ranked[0]; // adequate-first, then smallest adequate
   return {
@@ -78,6 +81,7 @@ function matchSplit(loadKw, famKey, cond) {
     capKw: best.tc,
     marginPct: Math.round((best.margin || 0) * 100),
     adequate: !!best.adequate,
+    usedOnCoil: hasOC,
   };
 }
 
@@ -241,7 +245,9 @@ function buildReply(rows, skipped, choices) {
           `   → ⚠️ ${brandTitle} ${r.category} not in catalogue — verify`);
         continue;
       }
-      const m = matchSplit(r.requiredKw, famKey, cond);
+      const oc = (splitBrand === "toshiba" && r.onCoilDb != null && r.onCoilWb != null)
+        ? { db: r.onCoilDb, wb: r.onCoilWb } : null;
+      const m = matchSplit(r.requiredKw, famKey, cond, oc);
       if (!m) {
         lines.push(`• ${r.location} — req ${capStr(r.requiredKw)} ×${r.qty}`,
           `   → ⚠️ ${brandTitle} ${r.category} — selection error, verify`);
@@ -249,8 +255,9 @@ function buildReply(rows, skipped, choices) {
       }
       const flag = m.adequate ? "✅" : "⚠️ undersized";
       const kind = r.category === "ducted" ? "ducted" : "hi-wall";
+      const ocTag = m.usedOnCoil ? ` · (on-coil ${r.onCoilDb}/${r.onCoilWb}°C from schedule)` : "";
       lines.push(`• ${r.location} (${kind}) — req ${capStr(r.requiredKw)} ×${r.qty}`,
-        `   → ${m.label} · ${m.capKw.toFixed(1)} kW ${cond} · ${flag}`);
+        `   → ${m.label} · ${m.capKw.toFixed(1)} kW ${cond} · ${flag}${ocTag}`);
     }
   }
 

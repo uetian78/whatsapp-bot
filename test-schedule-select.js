@@ -154,3 +154,25 @@ const none = S.summarize([
 ]);
 assert.strictEqual(none.scheduleCondition, null);
 console.log("Task 2 OK");
+
+// --- Task 3: matchSplit accepts optional on-coil and flags usage ---
+const stdSplit = S.matchSplit(5.0, "PKV", "T3");
+assert.strictEqual(stdSplit.usedOnCoil, false);
+const ocSplit = S.matchSplit(5.0, "PKV", "T3", { db: 27, wb: 19 });
+assert.strictEqual(ocSplit.usedOnCoil, true);
+assert.ok(ocSplit.capKw > 0);
+// partial on-coil (wb missing) → treated as standard
+const partial = S.matchSplit(5.0, "PKV", "T3", { db: 27, wb: null });
+assert.strictEqual(partial.usedOnCoil, false);
+
+// --- Task 3: buildReply tags on-coil for Toshiba split rows ---
+const ocRows = S.normalizeRows([
+  { location: "Office", type: "SPLIT", capacity: 18000, unit: "BTU/HR", qty: 1,
+    onCoilDb: 27, onCoilWb: 19 },
+]).rows;
+const tReply = S.buildReply(ocRows, [], { cond: "T3", splitBrand: "toshiba" });
+assert.match(tReply, /on-coil/i);
+// SKM split with the same row must NOT use on-coil
+const sReply = S.buildReply(ocRows, [], { cond: "T3", splitBrand: "skm" });
+assert.doesNotMatch(sReply, /on-coil/i);
+console.log("Task 3 OK");
