@@ -68,9 +68,17 @@ const MENU_OPTIONS = [
   },
   {
     n: 3,
-    title: "Guided Selectors (VRF / MTZ / Split)",
+    title: "Guided Selectors (Schedule / VRF / MTZ / Split)",
     tip:
       "*🧭 Guided Selectors — Step-by-step with PDF output*\n\n" +
+      "━━━━━━━━━━━━━━\n" +
+      "📋 *Schedule / BOQ Selection* — whole schedule at once\n" +
+      "Type: *Schedule Selection*  (or *BOQ Selection*)\n" +
+      "Send a photo/PDF of an equipment schedule → I read every row,\n" +
+      "size each Package & Split unit from our range, and reply with a\n" +
+      "per-row summary (required vs proposed, T1/T3).\n" +
+      "• Reply *Print* or *Datasheet* for a PDF report — plus the\n" +
+      "  selected SKM package datasheets and Trane MTZ datasheets.\n\n" +
       "━━━━━━━━━━━━━━\n" +
       "🏢 *VRF Selection* — Toshiba VRF BOQ\n" +
       "Type: *VRF Selection*\n" +
@@ -116,7 +124,7 @@ const MENU_OPTIONS = [
       "2️⃣ *Quick select* — capacity + type.\n" +
       "   e.g. *package unit 20 tr*, *fresh air 15 tr*\n\n" +
       "3️⃣ *Guided selectors* — step-by-step with PDF output:\n" +
-      "   *VRF Selection* · *MTZ Selection* · *Split Selection*\n\n" +
+      "   *Schedule Selection* · *VRF Selection* · *MTZ Selection* · *Split Selection*\n\n" +
       "4️⃣ *Ask a question* — in plain words.\n" +
       "   e.g. *How many TR is DMP 10?*\n\n" +
       "📋 *See a whole range* — *list APMR units* (also PAC4A, DMP, chillers…)\n\n" +
@@ -142,7 +150,7 @@ function welcomeMenu(name, returning) {
     "Reply with a *number*:\n\n" +
     MENU_OPTIONS.map(line).join("\n") + "\n" +
     "━━━━━━━━━━━━━━\n" +
-    "💡 Or just type what you need — e.g. *APMR catalogue* · *MTZ Selection* · *Split Selection*";
+    "💡 Or just type what you need — e.g. *APMR catalogue* · *Schedule Selection* · *Split Selection*";
   return { text, options: MENU_OPTIONS };
 }
 

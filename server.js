@@ -1943,6 +1943,23 @@ app.post("/webhook", async (req, res) => {
       return; // unknown button
     }
 
+    // ── Global escape: a bare greeting / "menu" / "help" ALWAYS shows the menu
+    // and clears any in-flight session, so a stuck or half-finished flow can
+    // never trap the user with no reply. Runs BEFORE every session check.
+    // isMenuTrigger only matches whole-message greetings/menu words, so it never
+    // hijacks a real request like "hi can I get the APMR catalogue".
+    if (message.type === "text" && isMenuTrigger(message.text.body)) {
+      vrfSessions.delete(from);
+      scheduleSessions.delete(from);
+      delete pendingSplit[from];
+      delete pendingMtz[from];
+      delete pendingLists[from];
+      console.log(`📋 welcome menu (global escape) -> ${from}`);
+      const m = welcomeMenu(profileName, crm.isKnownContact(from));
+      pendingMenu[from] = { options: m.options, ts: Date.now() };
+      return await sendText(from, m.text);
+    }
+
     // ── VRF Selection session (handles text, image, and document messages) ──
     if (vrfSessions.has(from)) {
       const s = vrfSessions.get(from);
