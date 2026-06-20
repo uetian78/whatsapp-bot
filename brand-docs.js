@@ -140,7 +140,7 @@ const BRAND_DOCS = [
     ],
   },
 
-  // ── TOSHIBA SPLIT / VRF ───────────────────────────────────────────────────
+  // ── TOSHIBA SPLIT ─────────────────────────────────────────────────────────
   {
     name: "Toshiba Split",
     keywords: [
@@ -148,7 +148,21 @@ const BRAND_DOCS = [
       "toshiba rav", "toshiba bsp", "toshiba ducted", "toshiba hi-wall",
       "toshiba catalog", "toshiba brochure",
     ],
-    files: [],
+    files: [
+      { type: "Catalogue", filename: "Toshiba Hi Wall Split PKCV and Ducted Split BSP - Catalogue.pdf" },
+    ],
+  },
+
+  // ── TOSHIBA VRF SMMSe ─────────────────────────────────────────────────────
+  {
+    name: "Toshiba VRF SMMSe",
+    keywords: [
+      "toshiba vrf", "toshiba smmse", "smmse", "toshiba vrf catalogue",
+      "toshiba vrf catalog", "smmse catalogue",
+    ],
+    files: [
+      { type: "Catalogue", filename: "Toshiba VRF SMMSe Catalogue.pdf" },
+    ],
   },
 
   // ── TCL SPLIT / CATALOGUE ─────────────────────────────────────────────────
@@ -156,9 +170,13 @@ const BRAND_DOCS = [
     name: "TCL Split",
     keywords: [
       "tcl catalogue", "tcl catalog", "tcl split", "tcl savein",
-      "tcl hi-wall", "tcl brochure",
+      "tcl hi-wall", "tcl brochure", "tcl iom", "tcl manual",
+      "tcl installation manual", "tcl installation",
     ],
-    files: [],
+    files: [
+      { type: "Catalogue", filename: "TCL - Hi Wall Split Units Catalogue - ZGI.pdf" },
+      { type: "IOM", filename: "TCL Hi Wall Splits IOM.pdf" },
+    ],
   },
 
   // ── SKM FCU DMP IOM ───────────────────────────────────────────────────────
