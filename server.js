@@ -15,6 +15,7 @@
 require("dns").setDefaultResultOrder("ipv4first");
 
 const express = require("express");
+const crypto = require("crypto");
 const axios = require("axios");
 const { google } = require("googleapis");
 const Anthropic = require("@anthropic-ai/sdk");
@@ -61,9 +62,6 @@ const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 //   2) "Knowledge" -> Topic | Info   (the AI's knowledge base)
 //   3) "Allowed"   -> Number        (optional whitelist; empty = reply to all)
 // ============================================================
-let sheetsClient = null;
-let driveClient = null;
-
 // Parse the service-account credentials from GOOGLE_SERVICE_ACCOUNT_JSON.
 // Accepts EITHER raw JSON or a base64-encoded JSON. Base64 is recommended on
 // hosting dashboards because it has no quotes/newlines/backslashes to get
@@ -80,20 +78,66 @@ function parseServiceAccount() {
   return creds;
 }
 
-async function getGoogleAuth() {
-  const credentials = parseServiceAccount();
-  return new google.auth.GoogleAuth({
-    credentials,
-    scopes: [
-      "https://www.googleapis.com/auth/spreadsheets", // read rules/knowledge + write CRM log
-      "https://www.googleapis.com/auth/drive.readonly",
-    ],
-  });
+// ── Access-token minting via axios (NOT gaxios/node-fetch) ───────────────────
+// google-auth-library's own token fetch rides on gaxios 6 → node-fetch 2, whose
+// POST handling fails reliably on modern Node with "Invalid response body while
+// trying to fetch https://www.googleapis.com/oauth2/v4/token: Premature close".
+// gaxios never retries POSTs, so the token exchange can never recover and every
+// Drive/Sheets call dies before it starts. We instead sign the JWT ourselves and
+// exchange it for an access token over axios (native http — the same transport
+// our WhatsApp Graph calls use, which work fine), then hand that token to the
+// google SDK so it only ever issues GET API calls. Token cached until ~1 min
+// before expiry.
+const GOOGLE_SCOPES = [
+  "https://www.googleapis.com/auth/spreadsheets", // read rules/knowledge + write CRM log
+  "https://www.googleapis.com/auth/drive.readonly",
+].join(" ");
+let googleToken = { value: null, exp: 0 };
+
+async function getGoogleAccessToken() {
+  if (googleToken.value && Date.now() < googleToken.exp - 60_000) return googleToken.value;
+  const creds = parseServiceAccount();
+  const now = Math.floor(Date.now() / 1000);
+  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+  const unsigned =
+    b64({ alg: "RS256", typ: "JWT" }) + "." +
+    b64({
+      iss: creds.client_email,
+      scope: GOOGLE_SCOPES,
+      aud: "https://oauth2.googleapis.com/token",
+      iat: now,
+      exp: now + 3600,
+    });
+  const sig = crypto.createSign("RSA-SHA256").update(unsigned).sign(creds.private_key, "base64url");
+  const jwt = `${unsigned}.${sig}`;
+
+  const res = await axios.post(
+    "https://oauth2.googleapis.com/token",
+    new URLSearchParams({
+      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
+      assertion: jwt,
+    }).toString(),
+    { headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 20_000 }
+  );
+  googleToken = {
+    value: res.data.access_token,
+    exp: Date.now() + (res.data.expires_in || 3600) * 1000,
+  };
+  console.log("🔑 Google access token minted (axios), expires in", res.data.expires_in, "s");
+  return googleToken.value;
 }
 
-// Google's OAuth2 token endpoint occasionally drops the connection mid-response
-// ("Invalid response body ... Premature close") — a transient network blip,
-// not an auth failure. Retry a couple of times with backoff before giving up.
+// OAuth2 client carrying our self-minted token. We re-set the (cached) token
+// before every use so the SDK never attempts its own refresh.
+let oauthClient = null;
+async function getAuthedClient() {
+  const token = await getGoogleAccessToken();
+  if (!oauthClient) oauthClient = new google.auth.OAuth2();
+  oauthClient.setCredentials({ access_token: token });
+  return oauthClient;
+}
+
+// Retry helper for genuine transient blips on the GET API calls.
 async function withRetry(fn, attempts = 3, baseDelayMs = 500) {
   let lastErr;
   for (let i = 0; i < attempts; i++) {
@@ -108,19 +152,11 @@ async function withRetry(fn, attempts = 3, baseDelayMs = 500) {
 }
 
 async function getSheets() {
-  if (sheetsClient) return sheetsClient;
-  const auth = await getGoogleAuth();
-  const client = await withRetry(() => auth.getClient());
-  sheetsClient = google.sheets({ version: "v4", auth: client });
-  return sheetsClient;
+  return google.sheets({ version: "v4", auth: await getAuthedClient() });
 }
 
 async function getDrive() {
-  if (driveClient) return driveClient;
-  const auth = await getGoogleAuth();
-  const client = await withRetry(() => auth.getClient());
-  driveClient = google.drive({ version: "v3", auth: client });
-  return driveClient;
+  return google.drive({ version: "v3", auth: await getAuthedClient() });
 }
 
 // Extract a Drive file ID from any Drive link.
