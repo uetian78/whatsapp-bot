@@ -82,17 +82,35 @@ async function getGoogleAuth() {
   });
 }
 
+// Google's OAuth2 token endpoint occasionally drops the connection mid-response
+// ("Invalid response body ... Premature close") — a transient network blip,
+// not an auth failure. Retry a couple of times with backoff before giving up.
+async function withRetry(fn, attempts = 3, baseDelayMs = 500) {
+  let lastErr;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fn();
+    } catch (err) {
+      lastErr = err;
+      if (i < attempts - 1) await new Promise((r) => setTimeout(r, baseDelayMs * (i + 1)));
+    }
+  }
+  throw lastErr;
+}
+
 async function getSheets() {
   if (sheetsClient) return sheetsClient;
   const auth = await getGoogleAuth();
-  sheetsClient = google.sheets({ version: "v4", auth: await auth.getClient() });
+  const client = await withRetry(() => auth.getClient());
+  sheetsClient = google.sheets({ version: "v4", auth: client });
   return sheetsClient;
 }
 
 async function getDrive() {
   if (driveClient) return driveClient;
   const auth = await getGoogleAuth();
-  driveClient = google.drive({ version: "v3", auth: await auth.getClient() });
+  const client = await withRetry(() => auth.getClient());
+  driveClient = google.drive({ version: "v3", auth: client });
   return driveClient;
 }
 
@@ -190,14 +208,14 @@ async function listFolderFiles() {
     foldersVisited++;
     let pageToken;
     do {
-      const res = await drive.files.list({
+      const res = await withRetry(() => drive.files.list({
         q: `'${folderId}' in parents and trashed = false`,
         fields: "nextPageToken, files(id, name, mimeType)",
         pageSize: 100,
         pageToken,
         supportsAllDrives: true,
         includeItemsFromAllDrives: true,
-      });
+      }));
       for (const f of res.data.files || []) {
         if (f.mimeType === "application/vnd.google-apps.folder") {
           // Build full path so nested folders inherit their ancestors' names
