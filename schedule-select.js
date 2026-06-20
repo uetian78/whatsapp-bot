@@ -31,6 +31,24 @@ function toKw(value, unitHint) {
 }
 function toTr(kw) { return kw / KW_PER_TR; }
 function toMbh(kw) { return kw * MBH_PER_KW; }
+function lsToCfm(v) { return v * 2.11888; }
+
+// token wins; else map ambient °C to T1/T3; unrecognized → null (never guess)
+function parseCondition(token, ambientC) {
+  const t = String(token || "").trim().toUpperCase();
+  if (t === "T1" || t === "T3") return t;
+  const a = parseFloat(ambientC);
+  if (!isNaN(a)) {
+    if (a >= 42) return "T3";
+    if (a >= 30) return "T1";
+  }
+  return null;
+}
+
+function numOrNull(v) {
+  const n = parseFloat(v);
+  return isNaN(n) ? null : n;
+}
 
 // Map a free-text TYPE cell to a category enum. package > ducted > split.
 function classifyCategory(text) {
@@ -109,8 +127,16 @@ function buildExtractionPrompt() {
     ' "category": <"split" | "ducted" | "package" — your best read of the unit kind>,',
     ' "capacity": <the SPECIFIED/REQUIRED cooling capacity NUMBER exactly as printed>,',
     ' "unit": <capacity unit EXACTLY as printed: "kW","TR","ton","BTU/HR","MBH","kcal/h"; "" if none>,',
-    ' "qty": <integer, default 1>}',
+    ' "qty": <integer, default 1>,',
+    ' "condition": <"T1" or "T3" ONLY if the schedule explicitly prints it, else "">,',
+    ' "ambientC": <outdoor ambient temperature in °C as a NUMBER if printed (e.g. 46), else "">,',
+    ' "onCoilDb": <entering-air dry-bulb to the indoor coil in °C as a NUMBER if printed, else "">,',
+    ' "onCoilWb": <entering-air wet-bulb to the indoor coil in °C as a NUMBER if printed, else "">,',
+    ' "airflow": <air volume NUMBER if printed (package units), else "">,',
+    ' "airflowUnit": <"CFM" or "L/s" exactly as printed, else "">}',
     "Use the SPECIFIED/required capacity, not any competitor 'offered' column.",
+    "Only fill condition / ambientC / onCoilDb / onCoilWb / airflow when they are",
+    "actually printed on the schedule. NEVER guess or invent them; leave \"\" if absent.",
     "If the table heading says the units are splits, treat rows as split unless a",
     "row says ducted. Copy the capacity value and unit EXACTLY; do NOT convert.",
     "A cell like '48,000x8' means capacity 48000 and qty 8. Do not invent rows. If",
@@ -144,6 +170,14 @@ function normalizeRows(rawArray) {
       qty: parseInt(r.qty, 10) || 1,
       srcValue: value,
       srcUnit: String(r.unit || ""),
+      condition: parseCondition(r.condition, r.ambientC),
+      onCoilDb: numOrNull(r.onCoilDb),
+      onCoilWb: numOrNull(r.onCoilWb),
+      airflow: (() => {
+        const a = numOrNull(r.airflow);
+        if (a == null) return null;
+        return String(r.airflowUnit || "").toLowerCase().includes("l/s") ? lsToCfm(a) : a;
+      })(),
     });
   }
   return { rows, skipped };
@@ -262,7 +296,7 @@ async function rowsFromScheduleImage(base64Data, mediaType) {
 
 module.exports = {
   KW_PER_TR, MBH_PER_KW, COND_POINTS, SPLIT_FAMILY,
-  toKw, toTr, toMbh, classifyCategory,
+  toKw, toTr, toMbh, parseCondition, lsToCfm, classifyCategory,
   splitFamilyKey, matchSplit,
   matchPackageSkm, matchPackageTrane,
   buildExtractionPrompt, normalizeRows,

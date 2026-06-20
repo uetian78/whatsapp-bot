@@ -105,3 +105,32 @@ assert.strictEqual(typeof S.rowsFromScheduleImage, "function");
 assert.strictEqual(S.rowsFromScheduleImage.constructor.name, "AsyncFunction");
 
 console.log("Task 6 OK");
+
+// --- Task 1: parseCondition maps token + ambient ---
+assert.strictEqual(S.parseCondition("T3", null), "T3");
+assert.strictEqual(S.parseCondition("t1", null), "T1");
+assert.strictEqual(S.parseCondition("", 46), "T3");
+assert.strictEqual(S.parseCondition("", 35), "T1");
+assert.strictEqual(S.parseCondition("", 22), null);
+assert.strictEqual(S.parseCondition("", null), null);
+
+// --- Task 1: lsToCfm ---
+assert.ok(Math.abs(S.lsToCfm(100) - 211.888) < 0.01);
+
+// --- Task 1: normalizeRows carries new optional fields ---
+const t1rows = S.normalizeRows([
+  { location: "AHU-1", type: "PACKAGE AC", capacity: 12, unit: "TR", qty: 1,
+    condition: "T3", onCoilDb: 27, onCoilWb: 19, airflow: 4500, airflowUnit: "CFM" },
+  { location: "Office", type: "SPLIT", capacity: 18000, unit: "BTU/HR", qty: 1,
+    ambientC: 35, onCoilDb: 27, onCoilWb: 19 },
+  { location: "Store", type: "SPLIT", capacity: 12000, unit: "BTU/HR", qty: 1 },
+]).rows;
+assert.strictEqual(t1rows[0].condition, "T3");
+assert.strictEqual(t1rows[0].onCoilDb, 27);
+assert.strictEqual(t1rows[0].onCoilWb, 19);
+assert.strictEqual(t1rows[0].airflow, 4500);
+assert.strictEqual(t1rows[1].condition, "T1");      // from ambientC 35
+assert.strictEqual(t1rows[2].condition, null);      // nothing printed
+assert.strictEqual(t1rows[2].onCoilDb, null);       // absent → null, row kept
+assert.strictEqual(t1rows[2].airflow, null);
+console.log("Task 1 OK");
