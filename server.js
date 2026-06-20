@@ -1474,12 +1474,31 @@ async function handleSchedulePrint(from) {
   if (!pkgResults.length) return;
 
   await sendText(from, "⏳ Sending package datasheets…");
+
+  // Fetch the Drive file index once up front (not per row) so a single
+  // Drive failure surfaces one clear diagnostic instead of N identical ones.
   let driveFiles = null;
+  let driveError = null;
+  if (pkgResults.some((p) => p.vendor === "skm")) {
+    try {
+      driveFiles = await listFolderFiles();
+      console.log(`📄 SKM datasheet lookup: Drive index has ${driveFiles.length} file(s)`);
+    } catch (err) {
+      driveError = err;
+      console.error("❌ SKM datasheet Drive fetch error:", err.response?.data || err.stack || err.message);
+    }
+  }
+
   for (const { row: r, vendor, match: m } of pkgResults) {
     if (vendor === "skm") {
       const seriesKey = m.series === "apmr-a" ? "APMR-A" : "APMR";
+      if (driveError) {
+        await sendText(from,
+          `❌ Could not reach Drive for the ${seriesKey} ${m.code} datasheet (${driveError.message}). Please try again.`
+        );
+        continue;
+      }
       try {
-        if (!driveFiles) driveFiles = await listFolderFiles();
         const matches = findDatasheetFiles(seriesKey, m.code, driveFiles);
         const exact = matches.find((f) => f.condition === stored.cond);
         const file = exact || matches[0];
@@ -1495,8 +1514,8 @@ async function handleSchedulePrint(from) {
           );
         }
       } catch (err) {
-        console.error("❌ SKM datasheet error:", err.response?.data || err.message);
-        await sendText(from, `❌ Could not fetch the ${seriesKey} ${m.code} datasheet for ${r.location}. Please try again.`);
+        console.error("❌ SKM datasheet error:", err.response?.data || err.stack || err.message);
+        await sendText(from, `❌ Could not fetch the ${seriesKey} ${m.code} datasheet for ${r.location} (${err.message}). Please try again.`);
       }
     } else if (vendor === "trane") {
       try {
