@@ -41,13 +41,20 @@
 - Produces: `listAllFiles(): Promise<Array<{id: string, name: string, folder: string}>>` — recursively lists every PDF under `process.env.DRIVE_FOLDER_ID`, `folder` is the full path (e.g. `"Catalogues/Toshiba Catalogues"`). Reads credentials from `whatsapp-bot-498411-c3f0589ba5aa.json` in the project root if present, else `process.env.GOOGLE_SERVICE_ACCOUNT_JSON`.
 - Consumes (by `build-chiller-ids.js` and the new `build-product-ids.js` in Task 4): `require('./lib/drive-scan.js').listAllFiles`.
 
-- [ ] **Step 1: Record current output for a before/after diff**
+- [ ] **Step 1: Establish a real "before" baseline by running the unmodified script**
+
+Do this BEFORE touching any files. Git's checkout normalizes line endings
+(CRLF) but `fs.writeFileSync` in the script writes raw LF — hashing the
+git-checked-out file and comparing it to a freshly-script-written file would
+show a false mismatch unrelated to the refactor. Generate both "before" and
+"after" hashes the same way (by running the script) to avoid that noise.
 
 ```bash
+node build-chiller-ids.js
 sha256sum chiller-drive-ids.json
 ```
-Expected: `c8876d83ab9faef673b8a7dd69e558aa43b1a96e2d18d42984f85bbb8ac9562c  chiller-drive-ids.json`
-(If Drive has changed since this plan was written, the hash will differ — that's fine, just note the value so Step 5 can compare against it instead of this fixed string.)
+Note the printed hash — Step 5 compares the post-refactor run against this
+value, not against any value written in this plan.
 
 - [ ] **Step 2: Create `lib/drive-scan.js`**
 
