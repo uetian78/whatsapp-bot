@@ -21,6 +21,7 @@ const { generateMtzPdf } = require("./mtz-pdf.js");
 const schedule = require("./schedule-select.js");
 const { FAMILY_MENU, rankSplit, parseSplitListRequest, listSplits } = require("./split-engine.js");
 const { generateSplitPdf } = require("./split-pdf.js");
+const { generateSchedulePdf } = require("./schedule-pdf.js");
 const { isVrfTrigger } = require("./vrf/trigger.js");
 const {
   initVrf, onVrfKeyword, onVrfMessage, sessions: vrfSessions,
@@ -137,6 +138,10 @@ const SCHEDULE_TIMEOUT_MS = 10 * 60 * 1000;
 // Stores last split results per user for Print (30 min TTL)
 const splitResults = {};
 const SPLIT_RESULT_TTL = 30 * 60 * 1000;
+
+// Stores last schedule/BOQ selection results per user for Print (30 min TTL)
+const scheduleResults = {};
+const SCHEDULE_RESULT_TTL = 30 * 60 * 1000;
 
 // Remembers the last unit list shown so the user can toggle Imperial <-> SI
 // via a button. kind = "split" | "product"; keys = the builder's key array.
@@ -1366,8 +1371,15 @@ async function advanceScheduleQuestions(from, s) {
   const reply = schedule.buildReply(s.rows, s.skipped, {
     cond: s.cond, splitBrand: s.splitBrand, pkgVendor: s.pkgVendor, pkgSeries: s.pkgSeries,
   });
+
+  // Store results for PDF print (30 min TTL)
+  scheduleResults[from] = {
+    cond: s.cond, splitBrand: s.splitBrand, pkgVendor: s.pkgVendor, pkgSeries: s.pkgSeries,
+    rows: s.rows, skipped: s.skipped, ts: Date.now(),
+  };
+
   scheduleSessions.delete(from);
-  return await sendLongText(from, reply);
+  return await sendLongText(from, reply + "\n\nReply *Print* for a PDF report · *Schedule Selection* to run again.");
 }
 
 // Send split PDF report when user replies "Print"
@@ -1412,6 +1424,56 @@ async function handleSplitPrint(from) {
     });
   } catch (err) {
     console.error("❌ Split PDF send error:", err.message);
+    return sendText(from, "❌ PDF generated but could not be sent. Please try again.");
+  }
+}
+
+// Send schedule/BOQ PDF report when user replies "Print"
+async function handleSchedulePrint(from) {
+  const stored = scheduleResults[from];
+  if (!stored || Date.now() - stored.ts > SCHEDULE_RESULT_TTL) {
+    return sendText(from, "❌ No recent schedule results found. Run *Schedule Selection* first.");
+  }
+
+  await sendText(from, "⏳ Generating PDF report…");
+
+  let pdfBuffer;
+  try {
+    pdfBuffer = await generateSchedulePdf({
+      cond: stored.cond, splitBrand: stored.splitBrand,
+      pkgVendor: stored.pkgVendor, pkgSeries: stored.pkgSeries,
+      rows: stored.rows, skipped: stored.skipped,
+    });
+  } catch (err) {
+    console.error("❌ Schedule PDF error:", err.message);
+    return sendText(from, "❌ Failed to generate PDF. Please try again.");
+  }
+
+  try {
+    const fd = new FormData();
+    fd.append("messaging_product", "whatsapp");
+    fd.append("type", "application/pdf");
+    fd.append("file", pdfBuffer, { filename: "Schedule_Selection.pdf", contentType: "application/pdf" });
+
+    const uploadRes = await axios.post(
+      `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/media`,
+      fd,
+      { headers: { ...fd.getHeaders(), Authorization: `Bearer ${WHATSAPP_TOKEN}` } }
+    );
+    const mediaId = uploadRes.data.id;
+
+    await send(from, {
+      messaging_product: "whatsapp",
+      to: from,
+      type: "document",
+      document: {
+        id: mediaId,
+        filename: "Schedule_Selection.pdf",
+        caption: `Schedule / BOQ Selection — ${stored.rows.length} rows`,
+      },
+    });
+  } catch (err) {
+    console.error("❌ Schedule PDF send error:", err.message);
     return sendText(from, "❌ PDF generated but could not be sent. Please try again.");
   }
 }
@@ -1837,9 +1899,12 @@ app.post("/webhook", async (req, res) => {
       return await sendText(from, `Please reply with a number between 1 and ${list.length}.`);
     }
 
-    // ── Split PDF print request ─────────────────────────────────
+    // ── Split / Schedule PDF print request ───────────────────────
     if (/^print$/i.test(text.trim()) && splitResults[from]) {
       return await handleSplitPrint(from);
+    }
+    if (/^print$/i.test(text.trim()) && scheduleResults[from]) {
+      return await handleSchedulePrint(from);
     }
 
     // ── Split unit multi-step session ──────────────────────────
