@@ -7,7 +7,7 @@ const { PRODUCTS } = require("./products.js");
 const { rankModels } = require("./mtz-engine.js");
 const { capacityToKw } = require("./vrf/vrfIntake.js");
 
-const EXTRACT_MODEL = process.env.SCHEDULE_EXTRACT_MODEL || "claude-sonnet-4-6";
+const EXTRACT_MODEL = process.env.SCHEDULE_EXTRACT_MODEL || "claude-haiku-4-5-20251001";
 
 const KW_PER_TR = 3.51685;
 const MBH_PER_KW = 3.412142;
