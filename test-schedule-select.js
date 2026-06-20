@@ -238,3 +238,30 @@ assert.match(multiReply, /Summary/);
 assert.match(multiReply, /Total required/);
 assert.match(multiReply, /Total proposed/);
 console.log("Task 5 OK");
+
+// --- Task 7: computeSelections exposes structured per-row match data ---
+const sel = S.computeSelections(multiRows, {
+  cond: "T3", splitBrand: "toshiba", pkgVendor: "skm", pkgSeries: "apmr",
+});
+assert.strictEqual(sel.pkgResults.length, 1);
+assert.strictEqual(sel.splitResults.length, 1);
+assert.strictEqual(sel.pkgResults[0].row.location, "Plant Room");
+assert.strictEqual(sel.pkgResults[0].vendor, "skm");
+assert.ok(sel.pkgResults[0].match.unitsNeeded > 1);
+assert.strictEqual(sel.splitResults[0].row.location, "Office");
+assert.ok(sel.splitResults[0].match.capKw > 0);
+
+// --- Task 7: computeSelections surfaces per-row errors (uncatalogued type) ---
+const tclDuctedRows = S.normalizeRows([
+  { location: "Roof", type: "Ducted split", capacity: 18000, unit: "BTU/HR", qty: 1 },
+]).rows;
+const ductedSel = S.computeSelections(tclDuctedRows, { cond: "T3", splitBrand: "tcl" });
+assert.strictEqual(ductedSel.splitResults.length, 1);
+assert.ok(ductedSel.splitResults[0].error);
+
+// --- Task 7: buildReply output is unchanged after the computeSelections refactor ---
+const replyAfterRefactor = S.buildReply(multiRows, [], {
+  cond: "T3", splitBrand: "toshiba", pkgVendor: "skm", pkgSeries: "apmr",
+});
+assert.strictEqual(replyAfterRefactor, multiReply);
+console.log("Task 7 OK");

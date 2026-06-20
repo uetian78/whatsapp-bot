@@ -233,6 +233,44 @@ function capStr(kw) {
   return `${toTr(kw).toFixed(1)} TR (${kw.toFixed(1)} kW)`;
 }
 
+// Run every row through its matching engine. choices: { cond, splitBrand,
+// pkgVendor, pkgSeries }. Returns { pkgResults, splitResults }, each entry
+// either { row, vendor, match } or { row, error } (uncatalogued / no match).
+// This is the single source of truth consumed by both buildReply (text) and
+// the PDF report generator, so the two stay in sync.
+function computeSelections(rows, choices) {
+  const { cond, splitBrand, pkgVendor, pkgSeries } = choices;
+
+  const pkgResults = rows
+    .filter((r) => r.category === "package")
+    .map((r) => {
+      if (pkgVendor === "trane") {
+        const oc = (r.onCoilDb != null && r.onCoilWb != null)
+          ? { db: r.onCoilDb, wb: r.onCoilWb } : null;
+        return { row: r, vendor: "trane", match: matchPackageTrane(r.requiredKw, cond, oc, r.airflow) };
+      }
+      return { row: r, vendor: "skm", match: matchPackageSkm(r.requiredKw, pkgSeries, cond) };
+    });
+
+  const BRAND_DISPLAY = { toshiba: "Toshiba", tcl: "TCL", skm: "SKM" };
+  const brandTitle = BRAND_DISPLAY[splitBrand] || (String(splitBrand || "").charAt(0).toUpperCase() + String(splitBrand || "").slice(1));
+  const splitResults = rows
+    .filter((r) => r.category === "split" || r.category === "ducted")
+    .map((r) => {
+      const famKey = splitFamilyKey(splitBrand, r.category);
+      if (!famKey) {
+        return { row: r, error: `${brandTitle} ${r.category} not in catalogue — verify` };
+      }
+      const oc = (splitBrand === "toshiba" && r.onCoilDb != null && r.onCoilWb != null)
+        ? { db: r.onCoilDb, wb: r.onCoilWb } : null;
+      const m = matchSplit(r.requiredKw, famKey, cond, oc);
+      if (!m) return { row: r, error: `${brandTitle} ${r.category} — selection error, verify` };
+      return { row: r, match: m };
+    });
+
+  return { pkgResults, splitResults };
+}
+
 // Build the final WhatsApp reply. choices: { cond, splitBrand, pkgVendor,
 // pkgSeries }. skipped is the verify list from normalizeRows.
 function buildReply(rows, skipped, choices) {
@@ -240,24 +278,20 @@ function buildReply(rows, skipped, choices) {
   const rowWord = rows.length === 1 ? "row" : "rows";
   const lines = [`📋 *Schedule Selection* — ${rows.length} ${rowWord} · rated at ${cond}`];
 
-  const pkgRows = rows.filter((r) => r.category === "package");
-  const splitRows = rows.filter((r) => r.category === "split" || r.category === "ducted");
+  const { pkgResults, splitResults } = computeSelections(rows, choices);
 
-  // Summary accumulators, filled in as each row is matched below.
+  // Summary accumulators, filled in as each row is rendered below.
   let totalReqKw = 0;
   let totalProposedKw = 0;
   const multiUnitLocations = [];
 
-  if (pkgRows.length) {
+  if (pkgResults.length) {
     const vendorLabel = pkgVendor === "trane" ? "Trane MTZ"
       : `SKM ${pkgSeries === "apmr-a" ? "APMR-A" : "APMR"}`;
     lines.push("", `🏢 *PACKAGE (${vendorLabel})*`);
-    for (const r of pkgRows) {
+    for (const { row: r, vendor, match: m } of pkgResults) {
       totalReqKw += r.requiredKw * r.qty;
-      if (pkgVendor === "trane") {
-        const oc = (r.onCoilDb != null && r.onCoilWb != null)
-          ? { db: r.onCoilDb, wb: r.onCoilWb } : null;
-        const m = matchPackageTrane(r.requiredKw, cond, oc, r.airflow);
+      if (vendor === "trane") {
         totalProposedKw += m.proposedKw * r.qty;
         const multi = m.unitsNeeded > 1;
         if (multi) multiUnitLocations.push(r.location);
@@ -273,7 +307,6 @@ function buildReply(rows, skipped, choices) {
           lines.push(`   ⚠️ airflow off rated CFM (req ${m.airflowWarn.req} / rated ${m.airflowWarn.rated})`);
         }
       } else {
-        const m = matchPackageSkm(r.requiredKw, pkgSeries, cond);
         totalProposedKw += m.proposedKw * r.qty;
         const multi = m.unitsNeeded > 1;
         if (multi) multiUnitLocations.push(r.location);
@@ -291,24 +324,15 @@ function buildReply(rows, skipped, choices) {
     }
   }
 
-  if (splitRows.length) {
+  if (splitResults.length) {
     const BRAND_DISPLAY = { toshiba: "Toshiba", tcl: "TCL", skm: "SKM" };
     const brandTitle = BRAND_DISPLAY[splitBrand] || (splitBrand.charAt(0).toUpperCase() + splitBrand.slice(1));
     lines.push("", `❄️ *SPLIT (${brandTitle})*`);
-    for (const r of splitRows) {
+    for (const { row: r, match: m, error } of splitResults) {
       totalReqKw += r.requiredKw * r.qty;
-      const famKey = splitFamilyKey(splitBrand, r.category);
-      if (!famKey) {
+      if (error) {
         lines.push(`• ${r.location} — Required: ${capStr(r.requiredKw)} ×${r.qty}`,
-          `   → ⚠️ ${brandTitle} ${r.category} not in catalogue — verify`);
-        continue;
-      }
-      const oc = (splitBrand === "toshiba" && r.onCoilDb != null && r.onCoilWb != null)
-        ? { db: r.onCoilDb, wb: r.onCoilWb } : null;
-      const m = matchSplit(r.requiredKw, famKey, cond, oc);
-      if (!m) {
-        lines.push(`• ${r.location} — Required: ${capStr(r.requiredKw)} ×${r.qty}`,
-          `   → ⚠️ ${brandTitle} ${r.category} — selection error, verify`);
+          `   → ⚠️ ${error}`);
         continue;
       }
       totalProposedKw += m.proposedKw * r.qty;
@@ -325,7 +349,7 @@ function buildReply(rows, skipped, choices) {
   }
 
   lines.push("", "📊 *Summary*",
-    `• Total rows: ${rows.length} (${splitRows.length} split, ${pkgRows.length} package)`,
+    `• Total rows: ${rows.length} (${splitResults.length} split, ${pkgResults.length} package)`,
     `• Total required: ${capStr(totalReqKw)}`,
     `• Total proposed: ${capStr(totalProposedKw)}`);
   if (multiUnitLocations.length) {
@@ -385,5 +409,5 @@ module.exports = {
   splitFamilyKey, matchSplit, unitsToMeetLoad,
   matchPackageSkm, matchPackageTrane,
   buildExtractionPrompt, normalizeRows,
-  summarize, buildReply, rowsFromScheduleImage,
+  summarize, buildReply, computeSelections, rowsFromScheduleImage,
 };
