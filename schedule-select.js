@@ -51,6 +51,14 @@ function numOrNull(v) {
   return isNaN(n) ? null : n;
 }
 
+// When the single largest available unit still falls short of the load,
+// propose N of that unit in parallel instead of flagging "undersized".
+// Returns qty=1 (no change) whenever one unit already covers the load.
+function unitsToMeetLoad(loadKw, unitCapKw) {
+  const qty = Math.max(1, Math.ceil(loadKw / unitCapKw));
+  return { qty, totalCapKw: qty * unitCapKw };
+}
+
 // Map a free-text TYPE cell to a category enum. package > ducted > split.
 function classifyCategory(text) {
   const t = String(text || "").toLowerCase();
@@ -76,13 +84,17 @@ function matchSplit(loadKw, famKey, cond, onCoil = null) {
   const iwb = hasOC ? onCoil.wb : p.iwb;
   const ranked = rankSplit(famKey, loadKw, idb, iwb, p.odb, cond, 0);
   if (!ranked.length) return null;
-  const best = ranked[0]; // adequate-first, then smallest adequate
+  // adequate-first, then smallest adequate; if none adequate, the largest model.
+  const best = ranked[0];
+  const { qty, totalCapKw } = unitsToMeetLoad(loadKw, best.tc);
   return {
     label: best.label,
     capKw: best.tc,
     marginPct: Math.round((best.margin || 0) * 100),
     adequate: !!best.adequate,
     usedOnCoil: hasOC,
+    unitsNeeded: qty,
+    proposedKw: totalCapKw,
   };
 }
 
@@ -108,9 +120,12 @@ function matchPackageSkm(loadKw, seriesKey, cond) {
   if (!hit) {
     const models = [...PRODUCTS[series].models].sort((a, b) => a[field] - b[field]);
     const max = models[models.length - 1];
-    return { series, code: max.code, capKw: max[field], adequate: false, fellBack };
+    const { qty, totalCapKw } = unitsToMeetLoad(loadKw, max[field]);
+    return { series, code: max.code, capKw: max[field], adequate: true, fellBack,
+             unitsNeeded: qty, proposedKw: totalCapKw };
   }
-  return { series, code: hit.code, capKw: hit.capKw, adequate: true, fellBack };
+  return { series, code: hit.code, capKw: hit.capKw, adequate: true, fellBack,
+           unitsNeeded: 1, proposedKw: hit.capKw };
 }
 
 // Trane MTZ package match. On-coil °C (if both present) → °F; else rated indoor
@@ -131,8 +146,11 @@ function matchPackageTrane(loadKw, cond, onCoil = null, airflowCfm = null) {
       airflowWarn = { req: Math.round(airflowCfm), rated: ratedCfm };
     }
   }
-  return { key: best.key, tons: best.tons, tcMbh: best.r.TC,
-           adequate: !!best.adequate, usedOnCoil: hasOC, ratedCfm, airflowWarn };
+  const capKw = best.r.TC / MBH_PER_KW;
+  const { qty, totalCapKw } = unitsToMeetLoad(loadKw, capKw);
+  return { key: best.key, tons: best.tons, tcMbh: best.r.TC, capKw,
+           adequate: !!best.adequate, usedOnCoil: hasOC, ratedCfm, airflowWarn,
+           unitsNeeded: qty, proposedKw: totalCapKw };
 }
 
 function buildExtractionPrompt() {
@@ -225,32 +243,50 @@ function buildReply(rows, skipped, choices) {
   const pkgRows = rows.filter((r) => r.category === "package");
   const splitRows = rows.filter((r) => r.category === "split" || r.category === "ducted");
 
+  // Summary accumulators, filled in as each row is matched below.
+  let totalReqKw = 0;
+  let totalProposedKw = 0;
+  const multiUnitLocations = [];
+
   if (pkgRows.length) {
     const vendorLabel = pkgVendor === "trane" ? "Trane MTZ"
       : `SKM ${pkgSeries === "apmr-a" ? "APMR-A" : "APMR"}`;
     lines.push("", `🏢 *PACKAGE (${vendorLabel})*`);
     for (const r of pkgRows) {
+      totalReqKw += r.requiredKw * r.qty;
       if (pkgVendor === "trane") {
         const oc = (r.onCoilDb != null && r.onCoilWb != null)
           ? { db: r.onCoilDb, wb: r.onCoilWb } : null;
         const m = matchPackageTrane(r.requiredKw, cond, oc, r.airflow);
-        const flag = m.adequate ? "✅" : "⚠️ undersized";
+        totalProposedKw += m.proposedKw * r.qty;
+        const multi = m.unitsNeeded > 1;
+        if (multi) multiUnitLocations.push(r.location);
         const ocTag = m.usedOnCoil
           ? `(on-coil ${r.onCoilDb}/${r.onCoilWb}°C from schedule)` : "(rated indoor 80/67°F)";
         const air = r.airflow != null ? ` · airflow ${Math.round(r.airflow)} CFM` : "";
-        lines.push(`• ${r.location} — req ${capStr(r.requiredKw)} ×${r.qty}${air}`,
-          `   → MTZ ${m.key} · ${m.tons} TR · ${flag} _${ocTag}_`);
+        const proposedLine = multi
+          ? `${m.unitsNeeded}× MTZ ${m.key} (${m.tons} TR each) = ${capStr(m.proposedKw)}`
+          : `MTZ ${m.key} · ${m.tons} TR`;
+        lines.push(`• ${r.location} — Required: ${capStr(r.requiredKw)} ×${r.qty}${air}`,
+          `   → Proposed: ${proposedLine} · ✅ _${ocTag}_${multi ? " · ↪ multiple units in parallel" : ""}`);
         if (m.airflowWarn) {
           lines.push(`   ⚠️ airflow off rated CFM (req ${m.airflowWarn.req} / rated ${m.airflowWarn.rated})`);
         }
       } else {
         const m = matchPackageSkm(r.requiredKw, pkgSeries, cond);
+        totalProposedKw += m.proposedKw * r.qty;
+        const multi = m.unitsNeeded > 1;
+        if (multi) multiUnitLocations.push(r.location);
         const name = `${m.series === "apmr-a" ? "APMR-A" : "APMR"} ${m.code}`;
         const tags = [];
         if (m.fellBack) tags.push("↪ APMR-A (APMR range exceeded)");
-        tags.push(m.adequate ? "✅" : "⚠️ undersized");
-        lines.push(`• ${r.location} — req ${capStr(r.requiredKw)} ×${r.qty}`,
-          `   → ${name} · ${m.capKw.toFixed(1)} kW ${cond} · ${tags.join(" · ")}`);
+        if (multi) tags.push("↪ multiple units in parallel");
+        tags.push("✅");
+        const proposedLine = multi
+          ? `${m.unitsNeeded}× ${name} (${m.capKw.toFixed(1)} kW each) = ${capStr(m.proposedKw)}`
+          : `${name} · ${m.capKw.toFixed(1)} kW`;
+        lines.push(`• ${r.location} — Required: ${capStr(r.requiredKw)} ×${r.qty}`,
+          `   → Proposed: ${proposedLine} ${cond} · ${tags.join(" · ")}`);
       }
     }
   }
@@ -260,9 +296,10 @@ function buildReply(rows, skipped, choices) {
     const brandTitle = BRAND_DISPLAY[splitBrand] || (splitBrand.charAt(0).toUpperCase() + splitBrand.slice(1));
     lines.push("", `❄️ *SPLIT (${brandTitle})*`);
     for (const r of splitRows) {
+      totalReqKw += r.requiredKw * r.qty;
       const famKey = splitFamilyKey(splitBrand, r.category);
       if (!famKey) {
-        lines.push(`• ${r.location} — req ${capStr(r.requiredKw)} ×${r.qty}`,
+        lines.push(`• ${r.location} — Required: ${capStr(r.requiredKw)} ×${r.qty}`,
           `   → ⚠️ ${brandTitle} ${r.category} not in catalogue — verify`);
         continue;
       }
@@ -270,16 +307,32 @@ function buildReply(rows, skipped, choices) {
         ? { db: r.onCoilDb, wb: r.onCoilWb } : null;
       const m = matchSplit(r.requiredKw, famKey, cond, oc);
       if (!m) {
-        lines.push(`• ${r.location} — req ${capStr(r.requiredKw)} ×${r.qty}`,
+        lines.push(`• ${r.location} — Required: ${capStr(r.requiredKw)} ×${r.qty}`,
           `   → ⚠️ ${brandTitle} ${r.category} — selection error, verify`);
         continue;
       }
-      const flag = m.adequate ? "✅" : "⚠️ undersized";
+      totalProposedKw += m.proposedKw * r.qty;
+      const multi = m.unitsNeeded > 1;
+      if (multi) multiUnitLocations.push(r.location);
       const kind = r.category === "ducted" ? "ducted" : "hi-wall";
       const ocTag = m.usedOnCoil ? ` · (on-coil ${r.onCoilDb}/${r.onCoilWb}°C from schedule)` : "";
-      lines.push(`• ${r.location} (${kind}) — req ${capStr(r.requiredKw)} ×${r.qty}`,
-        `   → ${m.label} · ${m.capKw.toFixed(1)} kW ${cond} · ${flag}${ocTag}`);
+      const proposedLine = multi
+        ? `${m.unitsNeeded}× ${m.label} (${m.capKw.toFixed(1)} kW each) = ${capStr(m.proposedKw)}`
+        : `${m.label} · ${m.capKw.toFixed(1)} kW`;
+      lines.push(`• ${r.location} (${kind}) — Required: ${capStr(r.requiredKw)} ×${r.qty}`,
+        `   → Proposed: ${proposedLine} ${cond} · ✅${multi ? " · ↪ multiple units in parallel" : ""}${ocTag}`);
     }
+  }
+
+  lines.push("", "📊 *Summary*",
+    `• Total rows: ${rows.length} (${splitRows.length} split, ${pkgRows.length} package)`,
+    `• Total required: ${capStr(totalReqKw)}`,
+    `• Total proposed: ${capStr(totalProposedKw)}`);
+  if (multiUnitLocations.length) {
+    lines.push(`• Rows needing multiple units in parallel: ${multiUnitLocations.length} (${multiUnitLocations.join(", ")})`);
+  }
+  if (skipped && skipped.length) {
+    lines.push(`• Rows to verify: ${skipped.length}`);
   }
 
   if (skipped && skipped.length) {
@@ -329,7 +382,7 @@ async function rowsFromScheduleImage(base64Data, mediaType) {
 module.exports = {
   KW_PER_TR, MBH_PER_KW, COND_POINTS, SPLIT_FAMILY,
   toKw, toTr, toMbh, parseCondition, lsToCfm, cToF, classifyCategory,
-  splitFamilyKey, matchSplit,
+  splitFamilyKey, matchSplit, unitsToMeetLoad,
   matchPackageSkm, matchPackageTrane,
   buildExtractionPrompt, normalizeRows,
   summarize, buildReply, rowsFromScheduleImage,

@@ -47,11 +47,13 @@ const aa = S.matchPackageSkm(14.0, "apmr-a", "T3");
 assert.strictEqual(aa.series, "apmr-a");
 assert.strictEqual(aa.fellBack, false);
 
-// --- beyond APMR-A max (282.2): undersized largest model ---
+// --- beyond APMR-A max (282.2): divided across multiple units ---
 const huge = S.matchPackageSkm(400, "apmr", "T3");
-assert.strictEqual(huge.adequate, false);
+assert.strictEqual(huge.adequate, true);
 assert.strictEqual(huge.series, "apmr-a");
 assert.ok(Math.abs(huge.capKw - 282.2) < 0.1);
+assert.strictEqual(huge.unitsNeeded, 2);
+assert.ok(huge.proposedKw >= 400);
 
 // --- Trane ---
 const tr = S.matchPackageTrane(30, "T3");
@@ -60,7 +62,9 @@ assert.ok(tr.tcMbh > 0);
 assert.strictEqual(typeof tr.adequate, "boolean");
 assert.ok(tr.tons > 0);
 const over = S.matchPackageTrane(10000, "T3");
-assert.strictEqual(over.adequate, false);
+assert.strictEqual(over.adequate, false); // no single unit covers this load
+assert.ok(over.unitsNeeded > 1);
+assert.ok(over.proposedKw >= 10000);
 
 // --- buildExtractionPrompt mentions the JSON contract ---
 const prompt = S.buildExtractionPrompt();
@@ -200,3 +204,37 @@ const pReply = S.buildReply(pRows, [], { cond: "T3", pkgVendor: "trane" });
 assert.match(pReply, /on-coil/i);
 assert.match(pReply, /airflow/i);
 console.log("Task 4 OK");
+
+// --- Task 5: unitsToMeetLoad divides load across parallel units ---
+assert.deepStrictEqual(S.unitsToMeetLoad(10, 15), { qty: 1, totalCapKw: 15 });
+assert.deepStrictEqual(S.unitsToMeetLoad(30, 15), { qty: 2, totalCapKw: 30 });
+assert.deepStrictEqual(S.unitsToMeetLoad(31, 15), { qty: 3, totalCapKw: 45 });
+
+// --- Task 5: matchSplit divides when load exceeds the largest model ---
+const biggestSplit = S.matchSplit(1, "PKV", "T3"); // smallest load -> single smallest-adequate unit
+assert.strictEqual(biggestSplit.unitsNeeded, 1);
+const hugeSplit = S.matchSplit(1000, "PKV", "T3"); // exceeds every PKV model
+assert.ok(hugeSplit.unitsNeeded > 1);
+assert.ok(hugeSplit.proposedKw >= 1000);
+assert.strictEqual(hugeSplit.adequate, false); // no single unit covers this load
+
+// --- Task 5: matchPackageTrane reports unitsNeeded/proposedKw consistently ---
+const trSingle = S.matchPackageTrane(30, "T3");
+assert.strictEqual(trSingle.unitsNeeded, 1);
+assert.ok(Math.abs(trSingle.proposedKw - trSingle.capKw) < 0.01);
+
+// --- Task 5: buildReply prints Required/Proposed + a Summary section ---
+const multiRows = S.normalizeRows([
+  { location: "Plant Room", type: "PACKAGE AC", capacity: 400, unit: "TR", qty: 1 },
+  { location: "Office", type: "SPLIT", capacity: 18000, unit: "BTU/HR", qty: 1 },
+]).rows;
+const multiReply = S.buildReply(multiRows, [], {
+  cond: "T3", splitBrand: "toshiba", pkgVendor: "skm", pkgSeries: "apmr",
+});
+assert.match(multiReply, /Required:/);
+assert.match(multiReply, /Proposed:/);
+assert.match(multiReply, /multiple units in parallel/);
+assert.match(multiReply, /Summary/);
+assert.match(multiReply, /Total required/);
+assert.match(multiReply, /Total proposed/);
+console.log("Task 5 OK");
