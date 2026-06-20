@@ -5,6 +5,15 @@
 //  - Claude Haiku answers everything else using YOUR knowledge only
 // ============================================================
 
+// Force IPv4-first DNS resolution. Node 17+ defaults to "verbatim" order, which
+// prefers IPv6. On hosts with a broken/blackholed IPv6 route to Google (Render
+// instances among them), every connection to googleapis.com resets mid-response
+// — surfacing as "Invalid response body while trying to fetch
+// https://www.googleapis.com/oauth2/v4/token: Premature close". Retries don't
+// help because every attempt picks the same dead IPv6 route. Preferring IPv4
+// sidesteps it. Must run before any outbound request is made.
+require("dns").setDefaultResultOrder("ipv4first");
+
 const express = require("express");
 const axios = require("axios");
 const { google } = require("googleapis");
