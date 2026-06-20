@@ -32,6 +32,7 @@ function toKw(value, unitHint) {
 function toTr(kw) { return kw / KW_PER_TR; }
 function toMbh(kw) { return kw * MBH_PER_KW; }
 function lsToCfm(v) { return v * 2.11888; }
+function cToF(c) { return c * 9 / 5 + 32; }
 
 // token wins; else map ambient °C to T1/T3; unrecognized → null (never guess)
 function parseCondition(token, ambientC) {
@@ -112,14 +113,26 @@ function matchPackageSkm(loadKw, seriesKey, cond) {
   return { series, code: hit.code, capKw: hit.capKw, adequate: true, fellBack };
 }
 
-// Trane MTZ package match. Indoor rated DB80/WB67 assumed; ambient from cond.
-function matchPackageTrane(loadKw, cond) {
+// Trane MTZ package match. On-coil °C (if both present) → °F; else rated indoor
+// 80/67°F assumed. Validates required airflow (CFM) against the model rated CFM.
+function matchPackageTrane(loadKw, cond, onCoil = null, airflowCfm = null) {
   if (!COND_POINTS[cond]) throw new RangeError(`matchPackageTrane: unknown condition "${cond}"`);
   const reqTC = toMbh(loadKw);
   const amb = COND_POINTS[cond].ambF;
-  const ranked = rankModels(reqTC, 0, 80, 67, amb);
+  const hasOC = !!(onCoil && onCoil.db != null && onCoil.wb != null);
+  const db = hasOC ? cToF(onCoil.db) : 80;
+  const wb = hasOC ? cToF(onCoil.wb) : 67;
+  const ranked = rankModels(reqTC, 0, db, wb, amb);
   const best = ranked[0];
-  return { key: best.key, tons: best.tons, tcMbh: best.r.TC, adequate: !!best.adequate };
+  const ratedCfm = best.fan && best.fan.cfm_rated ? best.fan.cfm_rated : null;
+  let airflowWarn = null;
+  if (airflowCfm != null && ratedCfm) {
+    if (Math.abs(airflowCfm - ratedCfm) / ratedCfm > 0.15) {
+      airflowWarn = { req: Math.round(airflowCfm), rated: ratedCfm };
+    }
+  }
+  return { key: best.key, tons: best.tons, tcMbh: best.r.TC,
+           adequate: !!best.adequate, usedOnCoil: hasOC, ratedCfm, airflowWarn };
 }
 
 function buildExtractionPrompt() {
@@ -218,10 +231,18 @@ function buildReply(rows, skipped, choices) {
     lines.push("", `🏢 *PACKAGE (${vendorLabel})*`);
     for (const r of pkgRows) {
       if (pkgVendor === "trane") {
-        const m = matchPackageTrane(r.requiredKw, cond);
+        const oc = (r.onCoilDb != null && r.onCoilWb != null)
+          ? { db: r.onCoilDb, wb: r.onCoilWb } : null;
+        const m = matchPackageTrane(r.requiredKw, cond, oc, r.airflow);
         const flag = m.adequate ? "✅" : "⚠️ undersized";
-        lines.push(`• ${r.location} — req ${capStr(r.requiredKw)} ×${r.qty}`,
-          `   → MTZ ${m.key} · ${m.tons} TR · ${flag} _(rated indoor 80/67°F)_`);
+        const ocTag = m.usedOnCoil
+          ? `(on-coil ${r.onCoilDb}/${r.onCoilWb}°C from schedule)` : "(rated indoor 80/67°F)";
+        const air = r.airflow != null ? ` · airflow ${Math.round(r.airflow)} CFM` : "";
+        lines.push(`• ${r.location} — req ${capStr(r.requiredKw)} ×${r.qty}${air}`,
+          `   → MTZ ${m.key} · ${m.tons} TR · ${flag} _${ocTag}_`);
+        if (m.airflowWarn) {
+          lines.push(`   ⚠️ airflow off rated CFM (req ${m.airflowWarn.req} / rated ${m.airflowWarn.rated})`);
+        }
       } else {
         const m = matchPackageSkm(r.requiredKw, pkgSeries, cond);
         const name = `${m.series === "apmr-a" ? "APMR-A" : "APMR"} ${m.code}`;
@@ -307,7 +328,7 @@ async function rowsFromScheduleImage(base64Data, mediaType) {
 
 module.exports = {
   KW_PER_TR, MBH_PER_KW, COND_POINTS, SPLIT_FAMILY,
-  toKw, toTr, toMbh, parseCondition, lsToCfm, classifyCategory,
+  toKw, toTr, toMbh, parseCondition, lsToCfm, cToF, classifyCategory,
   splitFamilyKey, matchSplit,
   matchPackageSkm, matchPackageTrane,
   buildExtractionPrompt, normalizeRows,

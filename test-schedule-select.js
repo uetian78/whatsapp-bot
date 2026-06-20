@@ -176,3 +176,27 @@ assert.match(tReply, /on-coil/i);
 const sReply = S.buildReply(ocRows, [], { cond: "T3", splitBrand: "skm" });
 assert.doesNotMatch(sReply, /on-coil/i);
 console.log("Task 3 OK");
+
+// --- Task 4: Trane on-coil flag + airflow validation ---
+const trStd = S.matchPackageTrane(30, "T3");
+assert.strictEqual(trStd.usedOnCoil, false);
+assert.ok(trStd.ratedCfm > 0);
+
+const trOc = S.matchPackageTrane(30, "T3", { db: 27, wb: 19 });
+assert.strictEqual(trOc.usedOnCoil, true);
+
+// airflow far from rated → warn; near rated → no warn
+const farCfm = Math.round(trStd.ratedCfm * 1.5);
+const nearCfm = Math.round(trStd.ratedCfm * 1.05);
+assert.ok(S.matchPackageTrane(30, "T3", null, farCfm).airflowWarn);
+assert.strictEqual(S.matchPackageTrane(30, "T3", null, nearCfm).airflowWarn, null);
+
+// --- Task 4: buildReply renders airflow + on-coil tags for Trane ---
+const pRows = S.normalizeRows([
+  { location: "AHU-1", type: "PACKAGE AC", capacity: 12, unit: "TR", qty: 1,
+    onCoilDb: 27, onCoilWb: 19, airflow: 99999, airflowUnit: "CFM" },
+]).rows;
+const pReply = S.buildReply(pRows, [], { cond: "T3", pkgVendor: "trane" });
+assert.match(pReply, /on-coil/i);
+assert.match(pReply, /airflow/i);
+console.log("Task 4 OK");
