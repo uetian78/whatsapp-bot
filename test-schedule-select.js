@@ -265,3 +265,16 @@ const replyAfterRefactor = S.buildReply(multiRows, [], {
 });
 assert.strictEqual(replyAfterRefactor, multiReply);
 console.log("Task 7 OK");
+
+// --- Task 8: matchPackageTrane exposes its rankModels inputs (reqTC/db/wb/amb)
+// so a caller can regenerate the exact same MTZ datasheet via generateMtzPdf
+// without recomputing the on-coil/ambient conversion itself. ---
+const trInputs = S.matchPackageTrane(30, "T3");
+assert.strictEqual(trInputs.reqTC, S.toMbh(30));
+assert.strictEqual(trInputs.amb, S.COND_POINTS.T3.ambF);
+assert.strictEqual(trInputs.db, 80); // no on-coil given -> rated indoor assumed
+assert.strictEqual(trInputs.wb, 67);
+const trInputsOc = S.matchPackageTrane(30, "T3", { db: 27, wb: 19 });
+assert.strictEqual(trInputsOc.db, S.cToF(27));
+assert.strictEqual(trInputsOc.wb, S.cToF(19));
+console.log("Task 8 OK");

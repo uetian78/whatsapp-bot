@@ -883,6 +883,28 @@ async function sendDriveFile(to, file) {
   }
 }
 
+// Upload a locally generated PDF buffer to WhatsApp and send it as a document
+// (unlike sendDriveFile, this PDF doesn't exist in Drive — pdfkit built it).
+async function sendPdfBuffer(to, pdfBuffer, filename, caption) {
+  const fd = new FormData();
+  fd.append("messaging_product", "whatsapp");
+  fd.append("type", "application/pdf");
+  fd.append("file", pdfBuffer, { filename, contentType: "application/pdf" });
+
+  const uploadRes = await axios.post(
+    `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/media`,
+    fd,
+    { headers: { ...fd.getHeaders(), Authorization: `Bearer ${WHATSAPP_TOKEN}` } }
+  );
+
+  return send(to, {
+    messaging_product: "whatsapp",
+    to,
+    type: "document",
+    document: { id: uploadRes.data.id, filename, caption },
+  });
+}
+
 async function sendRule(to, rule) {
   if (rule.type === "document") {
     try {
@@ -1379,7 +1401,7 @@ async function advanceScheduleQuestions(from, s) {
   };
 
   scheduleSessions.delete(from);
-  return await sendLongText(from, reply + "\n\nReply *Print* for a PDF report · *Schedule Selection* to run again.");
+  return await sendLongText(from, reply + "\n\nReply *Print* or *Datasheet* for a PDF report + package datasheets · *Schedule Selection* to run again.");
 }
 
 // Send split PDF report when user replies "Print"
@@ -1400,28 +1422,10 @@ async function handleSplitPrint(from) {
   }
 
   try {
-    const fd = new FormData();
-    fd.append("messaging_product", "whatsapp");
-    fd.append("type", "application/pdf");
-    fd.append("file", pdfBuffer, { filename: "Split_Selection.pdf", contentType: "application/pdf" });
-
-    const uploadRes = await axios.post(
-      `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/media`,
-      fd,
-      { headers: { ...fd.getHeaders(), Authorization: `Bearer ${WHATSAPP_TOKEN}` } }
+    await sendPdfBuffer(
+      from, pdfBuffer, `Split_Selection_${stored.brand}.pdf`,
+      `${stored.brand} Split Unit Selection — ${stored.units.filter(u => !u.error).length} units`
     );
-    const mediaId = uploadRes.data.id;
-
-    await send(from, {
-      messaging_product: "whatsapp",
-      to: from,
-      type: "document",
-      document: {
-        id: mediaId,
-        filename: `Split_Selection_${stored.brand}.pdf`,
-        caption: `${stored.brand} Split Unit Selection — ${stored.units.filter(u => !u.error).length} units`,
-      },
-    });
   } catch (err) {
     console.error("❌ Split PDF send error:", err.message);
     return sendText(from, "❌ PDF generated but could not be sent. Please try again.");
@@ -1450,31 +1454,57 @@ async function handleSchedulePrint(from) {
   }
 
   try {
-    const fd = new FormData();
-    fd.append("messaging_product", "whatsapp");
-    fd.append("type", "application/pdf");
-    fd.append("file", pdfBuffer, { filename: "Schedule_Selection.pdf", contentType: "application/pdf" });
-
-    const uploadRes = await axios.post(
-      `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/media`,
-      fd,
-      { headers: { ...fd.getHeaders(), Authorization: `Bearer ${WHATSAPP_TOKEN}` } }
+    await sendPdfBuffer(
+      from, pdfBuffer, "Schedule_Selection.pdf",
+      `Schedule / BOQ Selection — ${stored.rows.length} rows`
     );
-    const mediaId = uploadRes.data.id;
-
-    await send(from, {
-      messaging_product: "whatsapp",
-      to: from,
-      type: "document",
-      document: {
-        id: mediaId,
-        filename: "Schedule_Selection.pdf",
-        caption: `Schedule / BOQ Selection — ${stored.rows.length} rows`,
-      },
-    });
   } catch (err) {
     console.error("❌ Schedule PDF send error:", err.message);
     return sendText(from, "❌ PDF generated but could not be sent. Please try again.");
+  }
+
+  // ── Package datasheets: SKM fetched from Drive, Trane MTZ regenerated
+  // fresh from the same inputs that picked the model in the report above.
+  // Split/ducted rows need nothing extra — the report's Required/Proposed
+  // columns already cover them.
+  const { pkgResults } = schedule.computeSelections(stored.rows, {
+    cond: stored.cond, splitBrand: stored.splitBrand,
+    pkgVendor: stored.pkgVendor, pkgSeries: stored.pkgSeries,
+  });
+  if (!pkgResults.length) return;
+
+  await sendText(from, "⏳ Sending package datasheets…");
+  let driveFiles = null;
+  for (const { row: r, vendor, match: m } of pkgResults) {
+    if (vendor === "skm") {
+      const seriesKey = m.series === "apmr-a" ? "APMR-A" : "APMR";
+      if (!driveFiles) driveFiles = await listFolderFiles();
+      const matches = findDatasheetFiles(seriesKey, m.code, driveFiles);
+      const file = matches.find((f) => f.condition === stored.cond) || matches[0];
+      if (file) {
+        await sendDriveFile(from, file);
+      } else {
+        await sendText(from,
+          `Apologies — the ${seriesKey} ${m.code} datasheet isn't available yet; kindly email hassan.saleem@mannai.com.qa to get the required document.`
+        );
+      }
+    } else if (vendor === "trane") {
+      try {
+        const mtzBuffer = await generateMtzPdf({
+          reqTC: m.reqTC, reqSC: 0, db: m.db, wb: m.wb, amb: m.amb,
+          airflow: r.airflow || null, tag: r.location,
+        });
+        if (mtzBuffer) {
+          await sendPdfBuffer(
+            from, mtzBuffer, `MTZ_Selection_${r.location}.pdf`,
+            `Trane MTZ ${m.key} — ${r.location}`
+          );
+        }
+      } catch (err) {
+        console.error("❌ MTZ datasheet error:", err.message);
+        await sendText(from, `❌ Could not generate the MTZ datasheet for ${r.location}.`);
+      }
+    }
   }
 }
 
@@ -1660,29 +1690,11 @@ async function handleMtzStep(from, text) {
     }
 
     try {
-      const fd = new FormData();
-      fd.append("messaging_product", "whatsapp");
-      fd.append("type", "application/pdf");
-      fd.append("file", pdfBuffer, { filename: "MTZ_Selection.pdf", contentType: "application/pdf" });
-
-      const uploadRes = await axios.post(
-        `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/media`,
-        fd,
-        { headers: { ...fd.getHeaders(), Authorization: `Bearer ${WHATSAPP_TOKEN}` } }
-      );
-      const mediaId = uploadRes.data.id;
-
       const projLabel = s.project ? ` · ${s.project}${s.tag ? " / " + s.tag : ""}` : "";
-      await send(from, {
-        messaging_product: "whatsapp",
-        to: from,
-        type: "document",
-        document: {
-          id: mediaId,
-          filename: `MTZ_Selection${s.tag ? "_" + s.tag : ""}.pdf`,
-          caption: `Trane MTZ — ${(s.reqTC / TR_TO_MBH).toFixed(1)} TR @ DB${s.db}/WB${s.wb}°F, ${s.amb}°F amb${projLabel}`,
-        },
-      });
+      await sendPdfBuffer(
+        from, pdfBuffer, `MTZ_Selection${s.tag ? "_" + s.tag : ""}.pdf`,
+        `Trane MTZ — ${(s.reqTC / TR_TO_MBH).toFixed(1)} TR @ DB${s.db}/WB${s.wb}°F, ${s.amb}°F amb${projLabel}`
+      );
     } catch (err) {
       console.error("❌ MTZ send error:", err.message);
       return sendText(from, "❌ PDF was generated but could not be sent. Please try again.");
@@ -1903,7 +1915,7 @@ app.post("/webhook", async (req, res) => {
     if (/^print$/i.test(text.trim()) && splitResults[from]) {
       return await handleSplitPrint(from);
     }
-    if (/^print$/i.test(text.trim()) && scheduleResults[from]) {
+    if (/^(print|datasheet)$/i.test(text.trim()) && scheduleResults[from]) {
       return await handleSchedulePrint(from);
     }
 

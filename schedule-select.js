@@ -150,7 +150,10 @@ function matchPackageTrane(loadKw, cond, onCoil = null, airflowCfm = null) {
   const { qty, totalCapKw } = unitsToMeetLoad(loadKw, capKw);
   return { key: best.key, tons: best.tons, tcMbh: best.r.TC, capKw,
            adequate: !!best.adequate, usedOnCoil: hasOC, ratedCfm, airflowWarn,
-           unitsNeeded: qty, proposedKw: totalCapKw };
+           unitsNeeded: qty, proposedKw: totalCapKw,
+           // Exact rankModels inputs, so a caller can regenerate this same
+           // model's datasheet (generateMtzPdf) without re-deriving them.
+           reqTC, db, wb, amb };
 }
 
 function buildExtractionPrompt() {
