@@ -134,3 +134,23 @@ assert.strictEqual(t1rows[2].condition, null);      // nothing printed
 assert.strictEqual(t1rows[2].onCoilDb, null);       // absent → null, row kept
 assert.strictEqual(t1rows[2].airflow, null);
 console.log("Task 1 OK");
+
+// --- Task 2: summarize derives a schedule-level condition ---
+const agree = S.summarize([
+  { category: "split", condition: "T3" },
+  { category: "package", condition: "T3" },
+]);
+assert.strictEqual(agree.scheduleCondition, "T3");
+
+const conflict = S.summarize([
+  { category: "split", condition: "T1" },
+  { category: "package", condition: "T3" },
+]);
+assert.strictEqual(conflict.scheduleCondition, null);  // rows disagree → ask
+
+const none = S.summarize([
+  { category: "split", condition: null },
+  { category: "package", condition: null },
+]);
+assert.strictEqual(none.scheduleCondition, null);
+console.log("Task 2 OK");

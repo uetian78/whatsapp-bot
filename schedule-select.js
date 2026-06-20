@@ -184,10 +184,13 @@ function normalizeRows(rawArray) {
 }
 
 function summarize(rows) {
+  const found = rows.map((r) => r.condition).filter((c) => c === "T1" || c === "T3");
+  const uniq = [...new Set(found)];
   return {
     count: rows.length,
     hasSplit: rows.some((r) => r.category === "split" || r.category === "ducted"),
     hasPackage: rows.some((r) => r.category === "package"),
+    scheduleCondition: uniq.length === 1 ? uniq[0] : null,
   };
 }
 
@@ -291,7 +294,8 @@ async function rowsFromScheduleImage(base64Data, mediaType) {
   try { parsed = JSON.parse(text); }
   catch (_) { throw new Error("Could not parse the schedule. Try a clearer photo or PDF."); }
   if (!Array.isArray(parsed)) throw new Error("Schedule extractor returned an unexpected format. Please try again.");
-  return normalizeRows(parsed);
+  const norm = normalizeRows(parsed);
+  return { ...norm, scheduleCondition: summarize(norm.rows).scheduleCondition };
 }
 
 module.exports = {
