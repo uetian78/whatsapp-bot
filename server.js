@@ -1478,15 +1478,25 @@ async function handleSchedulePrint(from) {
   for (const { row: r, vendor, match: m } of pkgResults) {
     if (vendor === "skm") {
       const seriesKey = m.series === "apmr-a" ? "APMR-A" : "APMR";
-      if (!driveFiles) driveFiles = await listFolderFiles();
-      const matches = findDatasheetFiles(seriesKey, m.code, driveFiles);
-      const file = matches.find((f) => f.condition === stored.cond) || matches[0];
-      if (file) {
-        await sendDriveFile(from, file);
-      } else {
-        await sendText(from,
-          `Apologies — the ${seriesKey} ${m.code} datasheet isn't available yet; kindly email hassan.saleem@mannai.com.qa to get the required document.`
+      try {
+        if (!driveFiles) driveFiles = await listFolderFiles();
+        const matches = findDatasheetFiles(seriesKey, m.code, driveFiles);
+        const exact = matches.find((f) => f.condition === stored.cond);
+        const file = exact || matches[0];
+        console.log(
+          `📄 SKM datasheet lookup: ${seriesKey} ${m.code} @ ${stored.cond} -> ` +
+          `${matches.length} match(es)${file ? `, sending "${file.name}"` : ", none found"}`
         );
+        if (file) {
+          await sendDriveFile(from, file);
+        } else {
+          await sendText(from,
+            `Apologies — the ${seriesKey} ${m.code} datasheet isn't available yet; kindly email hassan.saleem@mannai.com.qa to get the required document.`
+          );
+        }
+      } catch (err) {
+        console.error("❌ SKM datasheet error:", err.response?.data || err.message);
+        await sendText(from, `❌ Could not fetch the ${seriesKey} ${m.code} datasheet for ${r.location}. Please try again.`);
       }
     } else if (vendor === "trane") {
       try {
