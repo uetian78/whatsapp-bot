@@ -132,7 +132,23 @@ async function getGoogleAccessToken() {
 let oauthClient = null;
 async function getAuthedClient() {
   const token = await getGoogleAccessToken();
-  if (!oauthClient) oauthClient = new google.auth.OAuth2();
+  if (!oauthClient) {
+    oauthClient = new google.auth.OAuth2();
+    // The googleapis SDK runs every Drive/Sheets call through gaxios 6, whose
+    // only server-side transport is node-fetch 2 — and node-fetch 2 fails
+    // reliably on this host with "Premature close" (the same bug that broke the
+    // token POST, now also seen on the Drive GET once we got past auth). Node 18+
+    // ships a working native fetch (undici); point gaxios at it instead. gaxios
+    // decodes json via res.text()/.json() and binary via res.arrayBuffer(), both
+    // supported by undici's Response; the only unsupported path (responseType
+    // "stream") is never used here — all downloads use "arraybuffer".
+    const tx = oauthClient.transporter;
+    if (tx && tx.instance) {
+      tx.instance.defaults = Object.assign({}, tx.instance.defaults, {
+        fetchImplementation: globalThis.fetch,
+      });
+    }
+  }
   oauthClient.setCredentials({ access_token: token });
   return oauthClient;
 }
