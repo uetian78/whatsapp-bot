@@ -357,6 +357,23 @@ const CATALOGUE_MAP = [
     catalogue: "SKM Ecology Unit -SEU_catalogue.pdf",
     iom: null,
   },
+
+  // ---- Splits (in-house SKM) ----
+  {
+    name: "Hi-Wall Non-Inverter",
+    aliases: [
+      "hi wall non inverter", "wall mounted non inverter",
+      "non inverter split", "skm hi wall",
+    ],
+    catalogue: "SKM Wall Mounted Hi Wall Split - Non Inverter (Qatar).pdf",
+    iom: null,
+  },
+  {
+    name: "Sierra Ducted Split",
+    aliases: ["sierra", "sierra series", "sierra ducted split", "ducted split sierra"],
+    catalogue: "SKM Ducted Split_Catalogue - Sierra Series - R0 CBU_RX+DDP 052c 50Hz (1).pdf",
+    iom: null,
+  },
 ];
 
 // ------- lookup helpers -------
