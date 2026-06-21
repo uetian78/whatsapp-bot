@@ -363,7 +363,7 @@ const CATALOGUE_MAP = [
     name: "Hi-Wall Non-Inverter",
     aliases: [
       "hi wall non inverter", "wall mounted non inverter",
-      "non inverter split", "skm hi wall",
+      "non inverter split", "skm hi wall", "hi-wall non-inverter",
     ],
     catalogue: "SKM Wall Mounted Hi Wall Split - Non Inverter (Qatar).pdf",
     iom: null,
