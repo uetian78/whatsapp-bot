@@ -24,6 +24,7 @@ const { buildSelectionReply, buildSelectionInteractive, handleButtonTap, interpr
 const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSeries, datasheetCondition, DATASHEET_FOLDERS } = require("./catalogue-map.js");
 const { routeChillerText, handleChillerButton } = require("./chillers.js");
 const { findBrandDocs } = require("./brand-docs.js");
+const { findFilesByName } = require("./lib/find-files-by-name.js");
 const { isMenuTrigger, smallTalkReply, welcomeMenu, tipFor, MENU_HINT } = require("./menu.js");
 const { PRODUCT_KB, parseListRequest, buildUnitList } = require("./product-facts.js");
 const crm = require("./crm.js");
@@ -371,28 +372,6 @@ function findFilesInFolder(seriesName, files, docType) {
   }
 
   if (!scored.length) return [];
-  const best = Math.min(...scored.map((s) => s.rank));
-  return scored.filter((s) => s.rank === best).map((s) => s.f);
-}
-
-// Find files whose name matches the user's text.
-// Normalizes by removing spaces/dashes so "52015", "PAC4A 52015", "pac4a52015" all match.
-// Prefers exact base-name matches over partial ones.
-function findFilesByName(text, files) {
-  const norm = (s) => s.toLowerCase().replace(/[\s\-_.]/g, "");
-  const q = norm(text.trim());
-  if (!q) return [];
-
-  const scored = [];
-  for (const f of files) {
-    const base = norm(f.name.replace(/\.[^.]+$/, ""));
-    if (base === q) scored.push({ f, rank: 0 });          // exact
-    else if (base.includes(q)) scored.push({ f, rank: 1 }); // query inside name
-    else if (q.includes(base)) scored.push({ f, rank: 2 }); // name inside query
-  }
-  if (!scored.length) return [];
-
-  // If any exact matches exist, return only those.
   const best = Math.min(...scored.map((s) => s.rank));
   return scored.filter((s) => s.rank === best).map((s) => s.f);
 }
