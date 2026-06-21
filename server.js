@@ -194,6 +194,12 @@ const FILE_CACHE_MS = 2 * 60 * 1000; // refresh at most every 2 minutes
 let chillerDriveIds = {};
 try { chillerDriveIds = require('./chiller-drive-ids.json'); } catch (_) {}
 
+// Static Drive-ID map for catalogue-map.js series (built by build-product-ids.js).
+// Key: "<series name>|<docType>" e.g. "APMR-A|Catalogue" -> { id, name }.
+// Lets resolveSeriesFile() skip listFolderFiles() entirely on a cache hit.
+let productDriveIds = {};
+try { productDriveIds = require('./product-drive-ids.json'); } catch (_) {}
+
 // Stores numbered-list selections per user so they can reply "1", "2", etc.
 const pendingLists = {}; // { [from]: File[] }
 
@@ -733,26 +739,41 @@ async function sendChillerResponse(from, r) {
 //      Drive file list mapped.
 //   2) Old prefix matcher, then AI — only as a safety net for a series that
 //      isn't in the map yet, or a file that was renamed in Drive.
-async function resolveSeriesFile(seriesNameOrText, docType, files) {
+async function resolveSeriesFile(seriesNameOrText, docType, getFiles) {
   // 1) Deterministic map by exact filename.
   const entry = detectSeriesEntry(seriesNameOrText);
   if (entry) {
     const exact = filenameFor(entry, docType); // exact filename or null
     if (exact) {
+      // 1a) Pre-resolved Drive-ID cache — skip the live scan entirely.
+      const cached = productDriveIds[`${entry.name}|${docType}`];
+      if (cached) {
+        console.log(`📖 Map (direct): ${entry.name} ${docType} -> ${cached.name}`);
+        return cached;
+      }
+      // 1b) Cache miss — fall back to the live scan + exact match.
+      const files = await getFiles();
       const hit = findExactFileInDoc(exact, docType, files);
       if (hit) {
         console.log(`📖 Map: ${entry.name} ${docType} -> ${hit.name}`);
         return hit;
       }
       console.log(`⚠️  Map expected "${exact}" in ${docType} but it wasn't indexed (cache/rename?). Falling back.`);
-    } else {
-      // The map KNOWS this series has no file of this type. Be honest.
-      console.log(`ℹ️  ${entry.name} has no ${docType} on file.`);
-      return null;
+      return await fallbackResolve(seriesNameOrText, docType, files);
     }
+    // The map KNOWS this series has no file of this type. Be honest.
+    console.log(`ℹ️  ${entry.name} has no ${docType} on file.`);
+    return null;
   }
 
-  // 2) Safety net: old prefix matcher, then AI (for unmapped series).
+  // 2) No map entry at all — safety net: old prefix matcher, then AI.
+  const files = await getFiles();
+  return await fallbackResolve(seriesNameOrText, docType, files);
+}
+
+// Safety net for series with no map entry, or where the map's expected
+// filename wasn't found live (renamed/removed in Drive since last cache build).
+async function fallbackResolve(seriesNameOrText, docType, files) {
   const hits = findFilesInFolder(seriesNameOrText, files, docType);
   if (hits.length >= 1) return hits[0];
 
@@ -1865,8 +1886,7 @@ app.post("/webhook", async (req, res) => {
       }
       // Catalogue / IOM choice -> fetch from that folder ONLY
       if (action?.type === "folderFile") {
-        const files = await listFolderFiles();
-        const file = await resolveSeriesFile(action.series, action.docType, files);
+        const file = await resolveSeriesFile(action.series, action.docType, listFolderFiles);
         if (file) return await sendDriveFile(from, file);
         return await sendText(
           from,
@@ -2277,8 +2297,7 @@ app.post("/webhook", async (req, res) => {
         if (menu.only) {
           console.log(`📚 Series single-doc: ${menu.only.series} ${menu.only.docType}`);
           await announceSearch("🔍 Fetching that document…");
-          const files = await listFolderFiles();
-          const file = await resolveSeriesFile(menu.only.series, menu.only.docType, files);
+          const file = await resolveSeriesFile(menu.only.series, menu.only.docType, listFolderFiles);
           if (file) return await sendDriveFile(from, file);
           return await sendText(
             from,
@@ -2295,8 +2314,7 @@ app.post("/webhook", async (req, res) => {
       // direct: user named both series and doc type
       console.log(`📚 Series direct: ${seriesReq.series} ${seriesReq.docType}`);
       await announceSearch("🔍 Fetching that document…");
-      const files = await listFolderFiles();
-      const file = await resolveSeriesFile(seriesReq.series, seriesReq.docType, files);
+      const file = await resolveSeriesFile(seriesReq.series, seriesReq.docType, listFolderFiles);
       if (file) return await sendDriveFile(from, file);
       return await sendText(
         from,
