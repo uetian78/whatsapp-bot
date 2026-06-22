@@ -307,3 +307,22 @@ const skmPkgFallback = S.matchPackageSkm(400, "apmr", "T3"); // exercises the ra
 assert.strictEqual(skmPkgFallback.onCoilSource, "rated");
 assert.strictEqual(skmPkgFallback.onCoilDb, S.RATED_INDOOR.db);
 console.log("Task 9 OK");
+
+// --- Task 10: formatRequiredBlock / formatProposedOnCoil render condition
+// and on-coil consistently, with "not specified" / source labels ---
+const reqWithData = S.formatRequiredBlock({ requiredKw: 14.07, condition: "T3", onCoilDb: 27, onCoilWb: 19 });
+assert.strictEqual(reqWithData.condTxt, "T3");
+assert.strictEqual(reqWithData.onCoilTxt, "27/19°C");
+const reqNoData = S.formatRequiredBlock({ requiredKw: 14.07, condition: null, onCoilDb: null, onCoilWb: null });
+assert.strictEqual(reqNoData.condTxt, "not specified");
+assert.strictEqual(reqNoData.onCoilTxt, "not specified");
+
+assert.strictEqual(
+  S.formatProposedOnCoil({ onCoilSource: "schedule", onCoilDb: 27, onCoilWb: 19 }),
+  "27/19°C (from schedule)"
+);
+assert.strictEqual(
+  S.formatProposedOnCoil({ onCoilSource: "rated", onCoilDb: S.RATED_INDOOR.db, onCoilWb: S.RATED_INDOOR.wb }),
+  "26.67/19.44°C (rated default)"
+);
+console.log("Task 10 OK");

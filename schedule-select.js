@@ -250,6 +250,36 @@ function capStr(kw) {
   return `${toTr(kw).toFixed(1)} TR (${kw.toFixed(1)} kW)`;
 }
 
+// Format a Celsius value for display: up to 2 decimals, trailing zeros
+// trimmed (27 -> "27", 26.67 -> "26.67", 19.40 -> "19.4").
+function degC(v) {
+  return Number(v).toFixed(2).replace(/\.?0+$/, "");
+}
+
+// Required-side text for a normalized row: capacity, condition, and
+// on-coil — straight from the schedule, "not specified" when the schedule
+// didn't print it. Used verbatim by both buildReply (chat) and
+// schedule-pdf.js (PDF "Required" column) so wording never drifts.
+function formatRequiredBlock(row) {
+  return {
+    capTxt: capStr(row.requiredKw),
+    condTxt: row.condition || "not specified",
+    onCoilTxt: (row.onCoilDb != null && row.onCoilWb != null)
+      ? `${degC(row.onCoilDb)}/${degC(row.onCoilWb)}°C`
+      : "not specified",
+  };
+}
+
+// Proposed-side on-coil text: the DB/WB the matching engine actually
+// assumed, labeled by source so a rated default is never confused with a
+// schedule value the engine didn't use. Works for any match object that
+// carries onCoilDb/onCoilWb/onCoilSource (matchSplit, matchPackageTrane,
+// matchPackageSkm all do, as of Task 1).
+function formatProposedOnCoil(match) {
+  const src = match.onCoilSource === "schedule" ? "from schedule" : "rated default";
+  return `${degC(match.onCoilDb)}/${degC(match.onCoilWb)}°C (${src})`;
+}
+
 // Run every row through its matching engine. choices: { cond, splitBrand,
 // pkgVendor, pkgSeries }. Returns { pkgResults, splitResults }, each entry
 // either { row, vendor, match } or { row, error } (uncatalogued / no match).
@@ -425,6 +455,7 @@ module.exports = {
   toKw, toTr, toMbh, parseCondition, lsToCfm, cToF, classifyCategory,
   splitFamilyKey, matchSplit, unitsToMeetLoad,
   matchPackageSkm, matchPackageTrane,
+  formatRequiredBlock, formatProposedOnCoil,
   buildExtractionPrompt, normalizeRows,
   summarize, buildReply, computeSelections, rowsFromScheduleImage,
 };
