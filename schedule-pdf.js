@@ -8,7 +8,7 @@
 const PDFDocument = require("pdfkit");
 const schedule = require("./schedule-select.js");
 
-const { toTr } = schedule;
+const { toTr, formatRequiredBlock, formatProposedOnCoil } = schedule;
 
 const f1 = (kw) => (kw == null || isNaN(kw) ? "—" : kw.toFixed(1));
 const capCell = (kw) => `${f1(toTr(kw))} TR\n(${f1(kw)} kW)`;
@@ -76,7 +76,7 @@ async function generateSchedulePdf({ project, cond, splitBrand, pkgVendor, pkgSe
     };
 
     // Columns: # | Location | Required | Qty | Proposed Selection | Status
-    const COL_W = [22, 110, 80, 30, 190, 83];
+    const COL_W = [22, 110, 95, 30, 175, 83];
     const COL_H = ["#", "Location", "Required", "Qty", "Proposed Selection", "Status"];
 
     const tableHeader = () => {
@@ -140,15 +140,18 @@ async function generateSchedulePdf({ project, cond, splitBrand, pkgVendor, pkgSe
         totalProposedKw += m.proposedKw * r.qty;
         const multi = m.unitsNeeded > 1;
         if (multi) multiUnitLocations.push(r.location);
-        const proposed = vendor === "trane"
-          ? (multi ? `${m.unitsNeeded}× MTZ ${m.key}\n(${m.tons} TR each)` : `MTZ ${m.key} · ${m.tons} TR`)
+        const req = formatRequiredBlock(r);
+        const requiredCell = `${capCell(r.requiredKw)}\n${req.condTxt}\nOn-coil: ${req.onCoilTxt}`;
+        const proposedModel = vendor === "trane"
+          ? (multi ? `${m.unitsNeeded}× MTZ ${m.key} (${m.tons} TR each)` : `MTZ ${m.key} · ${m.tons} TR`)
           : (() => {
               const name = `${m.series === "apmr-a" ? "APMR-A" : "APMR"} ${m.code}`;
-              return multi ? `${m.unitsNeeded}× ${name}\n(${m.capKw.toFixed(1)} kW each)` : `${name} · ${m.capKw.toFixed(1)} kW`;
+              return multi ? `${m.unitsNeeded}× ${name} (${m.capKw.toFixed(1)} kW each)` : `${name} · ${m.capKw.toFixed(1)} kW`;
             })();
+        const proposed = `${proposedModel}\n${cond}\nOn-coil: ${formatProposedOnCoil(m)}`;
         const status = multi ? `OK · ${m.unitsNeeded}× parallel` : "OK";
         rowNum += 1;
-        tableDataRow([String(rowNum), r.location, capCell(r.requiredKw), `×${r.qty}`, proposed, status], true);
+        tableDataRow([String(rowNum), r.location, requiredCell, `×${r.qty}`, proposed, status], true, 48);
       }
       tableTotalRow("PACKAGE TOTAL", pkgReqKw, pkgPropKw);
       y += 10;
@@ -164,19 +167,22 @@ async function generateSchedulePdf({ project, cond, splitBrand, pkgVendor, pkgSe
         splitReqKw += r.requiredKw * r.qty;
         totalReqKw += r.requiredKw * r.qty;
         rowNum += 1;
+        const req = formatRequiredBlock(r);
+        const requiredCell = `${capCell(r.requiredKw)}\n${req.condTxt}\nOn-coil: ${req.onCoilTxt}`;
         if (error) {
-          tableDataRow([String(rowNum), r.location, capCell(r.requiredKw), `×${r.qty}`, error, "VERIFY"], false);
+          tableDataRow([String(rowNum), r.location, requiredCell, `×${r.qty}`, error, "VERIFY"], false, 48);
           continue;
         }
         splitPropKw += m.proposedKw * r.qty;
         totalProposedKw += m.proposedKw * r.qty;
         const multi = m.unitsNeeded > 1;
         if (multi) multiUnitLocations.push(r.location);
-        const proposed = multi
-          ? `${m.unitsNeeded}× ${m.label}\n(${m.capKw.toFixed(1)} kW each)`
+        const proposedModel = multi
+          ? `${m.unitsNeeded}× ${m.label} (${m.capKw.toFixed(1)} kW each)`
           : `${m.label} · ${m.capKw.toFixed(1)} kW`;
+        const proposed = `${proposedModel}\n${cond}\nOn-coil: ${formatProposedOnCoil(m)}`;
         const status = multi ? `OK · ${m.unitsNeeded}× parallel` : "OK";
-        tableDataRow([String(rowNum), r.location, capCell(r.requiredKw), `×${r.qty}`, proposed, status], true);
+        tableDataRow([String(rowNum), r.location, requiredCell, `×${r.qty}`, proposed, status], true, 48);
       }
       tableTotalRow("SPLIT TOTAL", splitReqKw, splitPropKw);
       y += 10;
