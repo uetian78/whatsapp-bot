@@ -176,9 +176,13 @@ const ocRows = S.normalizeRows([
 ]).rows;
 const tReply = S.buildReply(ocRows, [], { cond: "T3", splitBrand: "toshiba" });
 assert.match(tReply, /on-coil/i);
-// SKM split with the same row must NOT use on-coil
+assert.match(tReply, /Proposed:.*On-coil: 27\/19°C \(from schedule\)/);
+// SKM split with the same row shows on-coil too, but as the rated default —
+// SKM/TCL split matching doesn't consume schedule on-coil, so the Proposed
+// side must never claim "from schedule" for a value it didn't use.
 const sReply = S.buildReply(ocRows, [], { cond: "T3", splitBrand: "skm" });
-assert.doesNotMatch(sReply, /on-coil/i);
+assert.match(sReply, /Proposed:.*On-coil: 29\/19°C \(rated default\)/);
+assert.doesNotMatch(sReply, /Proposed:[^\n]*from schedule/);
 console.log("Task 3 OK");
 
 // --- Task 4: Trane on-coil flag + airflow validation ---
@@ -326,3 +330,35 @@ assert.strictEqual(
   "26.67/19.44°C (rated default)"
 );
 console.log("Task 10 OK");
+
+// --- Task 11: buildReply prints Required + Proposed condition/on-coil
+// consistently across all four vendor paths ---
+
+// Trane: Required side shows the schedule's own condition/on-coil; Proposed
+// side shows what matchPackageTrane actually used.
+const traneRows = S.normalizeRows([
+  { location: "AHU-1", type: "PACKAGE AC", capacity: 12, unit: "TR", qty: 1,
+    condition: "T3", onCoilDb: 27, onCoilWb: 19 },
+]).rows;
+const traneReply = S.buildReply(traneRows, [], { cond: "T3", pkgVendor: "trane" });
+assert.match(traneReply, /Required:.*T3.*On-coil: 27\/19°C/);
+assert.match(traneReply, /Proposed:.*On-coil: 27\/19°C \(from schedule\)/);
+
+const traneNoOcRows = S.normalizeRows([
+  { location: "AHU-2", type: "PACKAGE AC", capacity: 12, unit: "TR", qty: 1 },
+]).rows;
+const traneNoOcReply = S.buildReply(traneNoOcRows, [], { cond: "T3", pkgVendor: "trane" });
+assert.match(traneNoOcReply, /Required:.*not specified.*On-coil: not specified/);
+assert.match(traneNoOcReply, /Proposed:.*On-coil: 26\.67\/19\.44°C \(rated default\)/);
+
+// SKM package: never modeled, always the rated default — and never claims
+// "from schedule" even when the schedule prints on-coil for that row.
+const skmPkgRows = S.normalizeRows([
+  { location: "Plant Room", type: "PACKAGE AC", capacity: 14, unit: "TR", qty: 1,
+    condition: "T3", onCoilDb: 27, onCoilWb: 19 },
+]).rows;
+const skmPkgReply = S.buildReply(skmPkgRows, [], { cond: "T3", pkgVendor: "skm", pkgSeries: "apmr" });
+assert.match(skmPkgReply, /Required:.*T3.*On-coil: 27\/19°C/);
+assert.match(skmPkgReply, /Proposed:.*On-coil: 26\.67\/19\.44°C \(rated default\)/);
+assert.doesNotMatch(skmPkgReply, /Proposed:[^\n]*from schedule/);
+console.log("Task 11 OK");

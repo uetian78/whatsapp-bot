@@ -338,18 +338,19 @@ function buildReply(rows, skipped, choices) {
     lines.push("", `🏢 *PACKAGE (${vendorLabel})*`);
     for (const { row: r, vendor, match: m } of pkgResults) {
       totalReqKw += r.requiredKw * r.qty;
+      const req = formatRequiredBlock(r);
       if (vendor === "trane") {
         totalProposedKw += m.proposedKw * r.qty;
         const multi = m.unitsNeeded > 1;
         if (multi) multiUnitLocations.push(r.location);
-        const ocTag = m.usedOnCoil
-          ? `(on-coil ${r.onCoilDb}/${r.onCoilWb}°C from schedule)` : "(rated indoor 80/67°F)";
         const air = r.airflow != null ? ` · airflow ${Math.round(r.airflow)} CFM` : "";
         const proposedLine = multi
           ? `${m.unitsNeeded}× MTZ ${m.key} (${m.tons} TR each) = ${capStr(m.proposedKw)}`
           : `MTZ ${m.key} · ${m.tons} TR`;
-        lines.push(`• ${r.location} — Required: ${capStr(r.requiredKw)} ×${r.qty}${air}`,
-          `   → Proposed: ${proposedLine} · ✅ _${ocTag}_${multi ? " · ↪ multiple units in parallel" : ""}`);
+        lines.push(
+          `• ${r.location} — Required: ${req.capTxt} ×${r.qty} · ${req.condTxt} · On-coil: ${req.onCoilTxt}${air}`,
+          `   → Proposed: ${proposedLine} · ${cond} · On-coil: ${formatProposedOnCoil(m)} · ✅${multi ? " · ↪ multiple units in parallel" : ""}`
+        );
         if (m.airflowWarn) {
           lines.push(`   ⚠️ airflow off rated CFM (req ${m.airflowWarn.req} / rated ${m.airflowWarn.rated})`);
         }
@@ -365,8 +366,10 @@ function buildReply(rows, skipped, choices) {
         const proposedLine = multi
           ? `${m.unitsNeeded}× ${name} (${m.capKw.toFixed(1)} kW each) = ${capStr(m.proposedKw)}`
           : `${name} · ${m.capKw.toFixed(1)} kW`;
-        lines.push(`• ${r.location} — Required: ${capStr(r.requiredKw)} ×${r.qty}`,
-          `   → Proposed: ${proposedLine} ${cond} · ${tags.join(" · ")}`);
+        lines.push(
+          `• ${r.location} — Required: ${req.capTxt} ×${r.qty} · ${req.condTxt} · On-coil: ${req.onCoilTxt}`,
+          `   → Proposed: ${proposedLine} · ${cond} · On-coil: ${formatProposedOnCoil(m)} · ${tags.join(" · ")}`
+        );
       }
     }
   }
@@ -377,21 +380,25 @@ function buildReply(rows, skipped, choices) {
     lines.push("", `❄️ *SPLIT (${brandTitle})*`);
     for (const { row: r, match: m, error } of splitResults) {
       totalReqKw += r.requiredKw * r.qty;
+      const req = formatRequiredBlock(r);
       if (error) {
-        lines.push(`• ${r.location} — Required: ${capStr(r.requiredKw)} ×${r.qty}`,
-          `   → ⚠️ ${error}`);
+        lines.push(
+          `• ${r.location} — Required: ${req.capTxt} ×${r.qty} · ${req.condTxt} · On-coil: ${req.onCoilTxt}`,
+          `   → ⚠️ ${error}`
+        );
         continue;
       }
       totalProposedKw += m.proposedKw * r.qty;
       const multi = m.unitsNeeded > 1;
       if (multi) multiUnitLocations.push(r.location);
       const kind = r.category === "ducted" ? "ducted" : "hi-wall";
-      const ocTag = m.usedOnCoil ? ` · (on-coil ${r.onCoilDb}/${r.onCoilWb}°C from schedule)` : "";
       const proposedLine = multi
         ? `${m.unitsNeeded}× ${m.label} (${m.capKw.toFixed(1)} kW each) = ${capStr(m.proposedKw)}`
         : `${m.label} · ${m.capKw.toFixed(1)} kW`;
-      lines.push(`• ${r.location} (${kind}) — Required: ${capStr(r.requiredKw)} ×${r.qty}`,
-        `   → Proposed: ${proposedLine} ${cond} · ✅${multi ? " · ↪ multiple units in parallel" : ""}${ocTag}`);
+      lines.push(
+        `• ${r.location} (${kind}) — Required: ${req.capTxt} ×${r.qty} · ${req.condTxt} · On-coil: ${req.onCoilTxt}`,
+        `   → Proposed: ${proposedLine} · ${cond} · On-coil: ${formatProposedOnCoil(m)} · ✅${multi ? " · ↪ multiple units in parallel" : ""}`
+      );
     }
   }
 
