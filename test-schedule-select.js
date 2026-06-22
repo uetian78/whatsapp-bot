@@ -278,3 +278,32 @@ const trInputsOc = S.matchPackageTrane(30, "T3", { db: 27, wb: 19 });
 assert.strictEqual(trInputsOc.db, S.cToF(27));
 assert.strictEqual(trInputsOc.wb, S.cToF(19));
 console.log("Task 8 OK");
+
+// --- Task 9: match functions expose the applied on-coil basis for display
+// (onCoilSource / onCoilDb / onCoilWb), additive to existing fields ---
+const ratedSplit = S.matchSplit(5.0, "PKV", "T3");
+assert.strictEqual(ratedSplit.onCoilSource, "rated");
+assert.strictEqual(ratedSplit.onCoilDb, S.COND_POINTS.T3.idb);
+assert.strictEqual(ratedSplit.onCoilWb, S.COND_POINTS.T3.iwb);
+const schedSplit = S.matchSplit(5.0, "PKV", "T3", { db: 27, wb: 19 });
+assert.strictEqual(schedSplit.onCoilSource, "schedule");
+assert.strictEqual(schedSplit.onCoilDb, 27);
+assert.strictEqual(schedSplit.onCoilWb, 19);
+
+const ratedTrane = S.matchPackageTrane(30, "T3");
+assert.strictEqual(ratedTrane.onCoilSource, "rated");
+assert.strictEqual(ratedTrane.onCoilDb, S.RATED_INDOOR.db);
+assert.strictEqual(ratedTrane.onCoilWb, S.RATED_INDOOR.wb);
+const schedTrane = S.matchPackageTrane(30, "T3", { db: 27, wb: 19 });
+assert.strictEqual(schedTrane.onCoilSource, "schedule");
+assert.strictEqual(schedTrane.onCoilDb, 27);
+assert.strictEqual(schedTrane.onCoilWb, 19);
+
+const skmPkg = S.matchPackageSkm(14.1, "apmr", "T3");
+assert.strictEqual(skmPkg.onCoilSource, "rated");
+assert.strictEqual(skmPkg.onCoilDb, S.RATED_INDOOR.db);
+assert.strictEqual(skmPkg.onCoilWb, S.RATED_INDOOR.wb);
+const skmPkgFallback = S.matchPackageSkm(400, "apmr", "T3"); // exercises the range-exceeded branch
+assert.strictEqual(skmPkgFallback.onCoilSource, "rated");
+assert.strictEqual(skmPkgFallback.onCoilDb, S.RATED_INDOOR.db);
+console.log("Task 9 OK");

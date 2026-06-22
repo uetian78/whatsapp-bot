@@ -18,6 +18,12 @@ const COND_POINTS = {
   T3: { idb: 29, iwb: 19, odb: 46, ambF: 115 },
 };
 
+// Standard AHRI rated-indoor reference point (80°F DB / 67°F WB), used as
+// the Proposed-side on-coil display whenever an engine falls back to its
+// own rated default (Trane) or doesn't model on-coil at all (SKM package).
+// Display only — never fed into any capacity lookup.
+const RATED_INDOOR = { db: 26.67, wb: 19.44 };
+
 // brand -> { hiwall, ducted } family keys. null = unsupported.
 const SPLIT_FAMILY = {
   toshiba: { hiwall: "PKV", ducted: "BSP" },
@@ -95,6 +101,9 @@ function matchSplit(loadKw, famKey, cond, onCoil = null) {
     usedOnCoil: hasOC,
     unitsNeeded: qty,
     proposedKw: totalCapKw,
+    onCoilSource: hasOC ? "schedule" : "rated",
+    onCoilDb: idb,
+    onCoilWb: iwb,
   };
 }
 
@@ -122,10 +131,12 @@ function matchPackageSkm(loadKw, seriesKey, cond) {
     const max = models[models.length - 1];
     const { qty, totalCapKw } = unitsToMeetLoad(loadKw, max[field]);
     return { series, code: max.code, capKw: max[field], adequate: true, fellBack,
-             unitsNeeded: qty, proposedKw: totalCapKw };
+             unitsNeeded: qty, proposedKw: totalCapKw,
+             onCoilSource: "rated", onCoilDb: RATED_INDOOR.db, onCoilWb: RATED_INDOOR.wb };
   }
   return { series, code: hit.code, capKw: hit.capKw, adequate: true, fellBack,
-           unitsNeeded: 1, proposedKw: hit.capKw };
+           unitsNeeded: 1, proposedKw: hit.capKw,
+           onCoilSource: "rated", onCoilDb: RATED_INDOOR.db, onCoilWb: RATED_INDOOR.wb };
 }
 
 // Trane MTZ package match. On-coil °C (if both present) → °F; else rated indoor
@@ -153,7 +164,10 @@ function matchPackageTrane(loadKw, cond, onCoil = null, airflowCfm = null) {
            unitsNeeded: qty, proposedKw: totalCapKw,
            // Exact rankModels inputs, so a caller can regenerate this same
            // model's datasheet (generateMtzPdf) without re-deriving them.
-           reqTC, db, wb, amb };
+           reqTC, db, wb, amb,
+           onCoilSource: hasOC ? "schedule" : "rated",
+           onCoilDb: hasOC ? onCoil.db : RATED_INDOOR.db,
+           onCoilWb: hasOC ? onCoil.wb : RATED_INDOOR.wb };
 }
 
 function buildExtractionPrompt() {
@@ -407,7 +421,7 @@ async function rowsFromScheduleImage(base64Data, mediaType) {
 }
 
 module.exports = {
-  KW_PER_TR, MBH_PER_KW, COND_POINTS, SPLIT_FAMILY,
+  KW_PER_TR, MBH_PER_KW, COND_POINTS, RATED_INDOOR, SPLIT_FAMILY,
   toKw, toTr, toMbh, parseCondition, lsToCfm, cToF, classifyCategory,
   splitFamilyKey, matchSplit, unitsToMeetLoad,
   matchPackageSkm, matchPackageTrane,
