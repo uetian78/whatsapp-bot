@@ -1104,8 +1104,8 @@ function displayName(file) {
 //   1 match  → send it directly
 //   2-3      → WhatsApp reply buttons (tappable)
 //   4+       → numbered text list (user replies "1", "2", …)
-async function sendFileOptions(to, matchedFiles, prompt) {
-  if (matchedFiles.length === 1) return sendDriveFile(to, matchedFiles[0]);
+async function sendFileOptions(to, matchedFiles, prompt, autoSendSingle = true) {
+  if (autoSendSingle && matchedFiles.length === 1) return sendDriveFile(to, matchedFiles[0]);
 
   if (matchedFiles.length <= 3) {
     const buttons = matchedFiles.map((f) => ({
@@ -1120,6 +1120,24 @@ async function sendFileOptions(to, matchedFiles, prompt) {
   pendingLists[to] = matchedFiles;
   const list = matchedFiles.map((f, i) => `${i + 1}. ${displayName(f)}`).join("\n");
   return sendText(to, `${prompt || "I found several matches:"}\n\n${list}\n\nReply with a number to get the file.`);
+}
+
+// Last-resort reply for a lookup miss: ask AI for documents that are
+// genuinely relevant to the request and offer them as a caveated choice
+// (never auto-sent — a related match is a guess, not a confirmed answer).
+// Falls back to the plain NOT_FOUND_MSG when nothing clears the relevance
+// bar. `files` is optional — pass the already-fetched Drive index when the
+// caller has one in scope; otherwise it's fetched here (cheap:
+// listFolderFiles() caches for FILE_CACHE_MS).
+async function sendNotFoundWithSuggestions(to, text, files) {
+  const fileList = files || (await listFolderFiles());
+  const hits = await aiRelatedFiles(text, fileList);
+  console.log(`🔎 Related-files fallback for "${text}": ${hits.length} suggestion(s)`);
+  if (hits.length) {
+    const caveat = `I couldn't find an exact match for "${text}". We might not have that exact document, but here are the closest ones I have — pick one below. If none fit, email hassan.saleem@mannai.com.qa.`;
+    return sendFileOptions(to, hits, caveat, false);
+  }
+  return sendText(to, NOT_FOUND_MSG);
 }
 
 
