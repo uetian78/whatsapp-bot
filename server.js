@@ -1926,10 +1926,7 @@ app.post("/webhook", async (req, res) => {
       if (action?.type === "folderFile") {
         const file = await resolveSeriesFile(action.series, action.docType, listFolderFiles);
         if (file) return await sendDriveFile(from, file);
-        return await sendText(
-          from,
-          NOT_FOUND_MSG
-        );
+        return await sendNotFoundWithSuggestions(from, `${action.series} ${action.docType}`);
       }
       // Datasheet condition chosen (T1/T3) -> fetch that exact file by ID.
       if (action?.type === "datasheetFile") {
@@ -1955,10 +1952,7 @@ app.post("/webhook", async (req, res) => {
           if (condFiltered.length >= 1) hits = condFiltered;
         }
         if (hits.length >= 1) return await sendDriveFile(from, hits[0]);
-        return await sendText(
-          from,
-          NOT_FOUND_MSG
-        );
+        return await sendNotFoundWithSuggestions(from, action.fileName, files);
       }
       // Doc-type choice button: "doctype|IOM|<query>" or "doctype|Catalogue|<query>"
       if (btnId.startsWith("doctype|")) {
@@ -1968,7 +1962,7 @@ app.post("/webhook", async (req, res) => {
         const filtered = files.filter((f) => fileMatchesDocType(f, docType));
         const aiHits = await aiMatchFile(query, filtered);
         if (aiHits && aiHits.length >= 1) return await sendFileOptions(from, aiHits, `${docType} — which product?`);
-        return await sendText(from, NOT_FOUND_MSG);
+        return await sendNotFoundWithSuggestions(from, query, files);
       }
       // FCU model sheet: "fcu-sheet|DMP-10" -> find 3-row & 4-row datasheets for that model.
       if (btnId.startsWith("fcu-sheet|")) {
@@ -1986,7 +1980,7 @@ app.post("/webhook", async (req, res) => {
         // Fallback: search by name anywhere in Drive if folder filter missed
         const fallback = files.filter((f) => norm(f.name.replace(/\.[^.]+$/, "")).startsWith(q) && f.name.toLowerCase().endsWith(".pdf"));
         if (fallback.length >= 1) return await sendFileOptions(from, fallback, `${model} datasheets:`);
-        return await sendText(from, NOT_FOUND_MSG);
+        return await sendNotFoundWithSuggestions(from, model, files);
       }
 
       // Direct file by Drive ID (used by sendFileOptions buttons)
