@@ -89,6 +89,8 @@ both already resolved by the existing reply handler.
 
 ## Call sites that change (all → `sendNotFoundWithSuggestions(from, text)`)
 
+Free-text lookup pipeline:
+
 | Location | Context |
 |---|---|
 | `server.js:2275` | Explicit datasheet not on file |
@@ -98,8 +100,19 @@ both already resolved by the existing reply handler.
 | `server.js:2428` | Bare model code without "detail" |
 | `server.js:2465` | Final generic fallback (via `suggestionMessage`) |
 
-`suggestionMessage()` (`server.js:500`) is either repurposed to delegate to
-the wrapper or removed in favor of a direct call at `server.js:2465`.
+Button-tap handler (same category — a fresh lookup miss, just triggered by a
+button instead of free text; the text proxy passed to `aiRelatedFiles` is
+noted per row):
+
+| Location | Context | Text proxy passed |
+|---|---|---|
+| `server.js:1872` | `folderFile` action — catalogue/IOM choice unresolved | `` `${action.series} ${action.docType}` `` |
+| `server.js:1901` | `sheet` action — model data sheet unresolved | `action.fileName` |
+| `server.js:1912` | `doctype\|` button — AI match empty after doc-type filter | `query` (already extracted from the button id) |
+| `server.js:1930` | `fcu-sheet\|` button — FCU model sheet unresolved | `model` (already extracted from the button id) |
+
+`suggestionMessage()` (`server.js:500`) is removed; its sole call site
+(`server.js:2465`) calls `sendNotFoundWithSuggestions` directly.
 
 ## Explicitly out of scope (stay as plain `NOT_FOUND_MSG`)
 
@@ -108,6 +121,15 @@ the wrapper or removed in favor of a direct call at `server.js:2465`.
 
 These are **send/upload errors**, not lookup misses — the requested file was
 found, so AI suggestions would be misleading.
+
+- `datasheetFile` action — T1/T3 condition tap (`server.js:1882`)
+- `fileid|` button — direct file-by-id tap (`server.js:1939`)
+
+These two button taps re-fetch a file that was already identified earlier in
+the conversation (by Drive ID); a miss here means the file vanished from
+Drive between being offered and being tapped, not that the original request
+was unmatched. There is no human-readable request text available at this
+point to feed the AI matcher, so these stay as plain `NOT_FOUND_MSG`.
 
 Structured selection flows that emit their own specific errors (split unit,
 schedule, VRF intake — e.g. `server.js:1280`, `1490`, `1518`, `1797`) are
