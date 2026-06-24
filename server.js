@@ -26,6 +26,7 @@ const { routeChillerText, handleChillerButton } = require("./chillers.js");
 const { findBrandDocs } = require("./brand-docs.js");
 const { findFilesByName } = require("./lib/find-files-by-name.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
+const { splitPdfIntoParts } = require("./lib/pdf-split.js");
 const { isMenuTrigger, smallTalkReply, welcomeMenu, tipFor, MENU_HINT } = require("./menu.js");
 const { PRODUCT_KB, parseListRequest, buildUnitList } = require("./product-facts.js");
 const crm = require("./crm.js");
@@ -913,20 +914,25 @@ async function downloadBytes({ link, fileId }) {
   return Buffer.from(r.data);
 }
 
+// Sanity check: a real PDF starts with "%PDF". Throws if filename says PDF
+// but the downloaded bytes say otherwise (e.g. an HTML error page served
+// instead of the file, due to a permissions problem).
+function validatePdfBuffer(buffer, filename) {
+  const mime = mimeFromName(filename);
+  if (mime !== "application/pdf") return;
+  const sig = buffer.slice(0, 5).toString("utf8");
+  if (!sig.startsWith("%PDF")) {
+    throw new Error(
+      `Downloaded file is not a valid PDF (got ${buffer.length} bytes starting "${sig}"). ` +
+      `Check the bot's access to this file.`
+    );
+  }
+}
+
 async function uploadMedia({ link, fileId, filename }) {
   const buffer = await downloadBytes({ link, fileId });
+  validatePdfBuffer(buffer, filename);
   const mime = mimeFromName(filename);
-
-  // sanity check: a real PDF starts with "%PDF"
-  if (mime === "application/pdf") {
-    const sig = buffer.slice(0, 5).toString("utf8");
-    if (!sig.startsWith("%PDF")) {
-      throw new Error(
-        `Downloaded file is not a valid PDF (got ${buffer.length} bytes starting "${sig}"). ` +
-        `Check the bot's access to this file.`
-      );
-    }
-  }
 
   const form = new FormData();
   form.append("messaging_product", "whatsapp");
@@ -980,24 +986,74 @@ async function sendDocument(to, buffer, filename, caption) {
   });
 }
 
+// Safety margin under Meta's documented 100MB per-document cap — splitting
+// at 20MB absorbs the slack from page-count-based (not exact-byte) splitting.
+const MAX_PART_SIZE_BYTES = 20 * 1024 * 1024;
+
+// Splits an oversized PDF buffer (already downloaded) into parts and sends
+// each as a separate, numbered WhatsApp document. Falls back to the plain
+// not-found-style message if the PDF can't be split further, or if any part
+// fails to send.
+async function sendFileInParts(to, buffer, filename, niceName) {
+  try {
+    const parts = await splitPdfIntoParts(buffer, MAX_PART_SIZE_BYTES);
+    if (parts.length <= 1) {
+      console.error(`❌ "${filename}" is too large to send and cannot be split further.`);
+      return sendText(to, NOT_FOUND_MSG);
+    }
+    for (let i = 0; i < parts.length; i++) {
+      const partFilename = `${niceName} (Part ${i + 1} of ${parts.length}).pdf`;
+      const partCaption = `Here is ${niceName} (Part ${i + 1} of ${parts.length}) 📄`;
+      const mediaId = await uploadMediaBuffer(parts[i], partFilename);
+      await send(to, {
+        messaging_product: "whatsapp", to, type: "document",
+        document: { id: mediaId, filename: partFilename, caption: partCaption },
+      });
+    }
+  } catch (err) {
+    console.error(`❌ Split-and-send error for "${filename}":`, err.response?.data || err.message);
+    return sendText(to, NOT_FOUND_MSG);
+  }
+}
+
 // Send a file found in the Drive folder, by its Drive ID.
 async function sendDriveFile(to, file) {
   const isImage = /\.(png|jpe?g)$/i.test(file.name);
   const niceName = file.name.replace(/\.[^.]+$/, "");
   const caption = `Here is ${niceName} 📄`;
-  try {
-    const mediaId = await uploadMedia({ fileId: file.id, filename: file.name });
-    if (isImage) {
+
+  if (isImage) {
+    try {
+      const mediaId = await uploadMedia({ fileId: file.id, filename: file.name });
       return send(to, {
         messaging_product: "whatsapp", to, type: "image",
         image: { id: mediaId, caption },
       });
+    } catch (err) {
+      console.error("❌ Drive file send error:", err.response?.data || err.message);
+      return sendText(to, NOT_FOUND_MSG);
     }
+  }
+
+  let buffer;
+  try {
+    buffer = await downloadBytes({ fileId: file.id });
+    validatePdfBuffer(buffer, file.name);
+  } catch (err) {
+    console.error("❌ Drive file download error:", err.message);
+    return sendText(to, NOT_FOUND_MSG);
+  }
+
+  try {
+    const mediaId = await uploadMediaBuffer(buffer, file.name);
     return send(to, {
       messaging_product: "whatsapp", to, type: "document",
       document: { id: mediaId, filename: file.name, caption },
     });
   } catch (err) {
+    if (err.response?.status === 413 && /\.pdf$/i.test(file.name)) {
+      return await sendFileInParts(to, buffer, file.name, niceName);
+    }
     console.error("❌ Drive file send error:", err.response?.data || err.message);
     return sendText(to, NOT_FOUND_MSG);
   }
@@ -1027,8 +1083,16 @@ async function sendPdfBuffer(to, pdfBuffer, filename, caption) {
 
 async function sendRule(to, rule) {
   if (rule.type === "document") {
+    let buffer;
     try {
-      const mediaId = await uploadMedia({ link: rule.fileLink, filename: rule.filename });
+      buffer = await downloadBytes({ link: rule.fileLink });
+      validatePdfBuffer(buffer, rule.filename);
+    } catch (err) {
+      console.error("❌ Document download error:", err.message);
+      return sendText(to, NOT_FOUND_MSG);
+    }
+    try {
+      const mediaId = await uploadMediaBuffer(buffer, rule.filename);
       return send(to, {
         messaging_product: "whatsapp",
         to,
@@ -1036,11 +1100,12 @@ async function sendRule(to, rule) {
         document: { id: mediaId, filename: rule.filename, caption: rule.caption },
       });
     } catch (err) {
+      if (err.response?.status === 413 && /\.pdf$/i.test(rule.filename)) {
+        const niceName = rule.filename.replace(/\.[^.]+$/, "");
+        return await sendFileInParts(to, buffer, rule.filename, niceName);
+      }
       console.error("❌ Document upload error:", err.response?.data || err.message);
-      return sendText(
-        to,
-        NOT_FOUND_MSG
-      );
+      return sendText(to, NOT_FOUND_MSG);
     }
   }
   if (rule.type === "image") {
