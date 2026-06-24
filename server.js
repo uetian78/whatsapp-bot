@@ -991,24 +991,32 @@ async function sendDocument(to, buffer, filename, caption) {
 const MAX_PART_SIZE_BYTES = 20 * 1024 * 1024;
 
 // Splits an oversized PDF buffer (already downloaded) into parts and sends
-// each as a separate, numbered WhatsApp document. Falls back to the plain
-// not-found-style message if the PDF can't be split further, or if any part
-// fails to send.
+// each as a separate, numbered WhatsApp document, one at a time — each part
+// is uploaded and its buffer dropped before the next part is built, instead
+// of building every part upfront. Holding the original buffer, the loaded
+// pdf-lib source document, AND all N output parts simultaneously is what
+// OOM-killed a 1GB Railway container on a real 119MB file. Falls back to the
+// plain not-found-style message if the PDF can't be split further, or if any
+// part fails to send.
 async function sendFileInParts(to, buffer, filename, niceName) {
   try {
-    const parts = await splitPdfIntoParts(buffer, MAX_PART_SIZE_BYTES);
-    if (parts.length <= 1) {
-      console.error(`❌ "${filename}" is too large to send and cannot be split further.`);
-      return sendText(to, NOT_FOUND_MSG);
-    }
-    for (let i = 0; i < parts.length; i++) {
-      const partFilename = `${niceName} (Part ${i + 1} of ${parts.length}).pdf`;
-      const partCaption = `Here is ${niceName} (Part ${i + 1} of ${parts.length}) 📄`;
-      const mediaId = await uploadMediaBuffer(parts[i], partFilename);
+    let unsplittable = false;
+    await splitPdfIntoParts(buffer, MAX_PART_SIZE_BYTES, async (partBuffer, i, total) => {
+      if (total === 1) {
+        unsplittable = true;
+        return;
+      }
+      const partFilename = `${niceName} (Part ${i} of ${total}).pdf`;
+      const partCaption = `Here is ${niceName} (Part ${i} of ${total}) 📄`;
+      const mediaId = await uploadMediaBuffer(partBuffer, partFilename);
       await send(to, {
         messaging_product: "whatsapp", to, type: "document",
         document: { id: mediaId, filename: partFilename, caption: partCaption },
       });
+    });
+    if (unsplittable) {
+      console.error(`❌ "${filename}" is too large to send and cannot be split further.`);
+      return sendText(to, NOT_FOUND_MSG);
     }
   } catch (err) {
     console.error(`❌ Split-and-send error for "${filename}":`, err.response?.data || err.message);
