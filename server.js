@@ -494,14 +494,6 @@ function closestKeywords(text, rules, limit = 5) {
 
 const NOT_FOUND_MSG = "Cannot find requested file — Email hassan.saleem@mannai.com.qa to get the required file.\n\n" + MENU_HINT;
 
-// Not-found reply. (Previously this guessed "closest documents" via fuzzy
-// keyword matching, but that surfaced irrelevant suggestions — e.g. a VRF query
-// matched "PAC4A SELECTIONS" — so we now just send the clean not-found message,
-// which already points to email and the menu.)
-function suggestionMessage(text, rules) {
-  return NOT_FOUND_MSG;
-}
-
 // ============================================================
 //  CLAUDE HAIKU FALLBACK
 //  Answers ONLY from the Knowledge tab. Refuses to invent.
@@ -2320,7 +2312,7 @@ app.post("/webhook", async (req, res) => {
       // datasheet (word "datasheet"/spec or a T1/T3), say so. If it was just
       // "<series> <code>", fall through so the rest of the pipeline can try.
       if (dsReq.explicit) {
-        return await sendText(from, NOT_FOUND_MSG);
+        return await sendNotFoundWithSuggestions(from, text, files);
       }
     }
 
@@ -2345,10 +2337,7 @@ app.post("/webhook", async (req, res) => {
           await announceSearch("🔍 Fetching that document…");
           const file = await resolveSeriesFile(menu.only.series, menu.only.docType, listFolderFiles);
           if (file) return await sendDriveFile(from, file);
-          return await sendText(
-            from,
-            NOT_FOUND_MSG
-          );
+          return await sendNotFoundWithSuggestions(from, text);
         }
         // No buttons (nothing on file) -> just send the text.
         if (!menu.buttons || !menu.buttons.length) {
@@ -2362,10 +2351,7 @@ app.post("/webhook", async (req, res) => {
       await announceSearch("🔍 Fetching that document…");
       const file = await resolveSeriesFile(seriesReq.series, seriesReq.docType, listFolderFiles);
       if (file) return await sendDriveFile(from, file);
-      return await sendText(
-        from,
-        NOT_FOUND_MSG
-      );
+      return await sendNotFoundWithSuggestions(from, text);
     }
 
     // 2) Sheet keyword rules (custom overrides / captions)
@@ -2460,7 +2446,7 @@ app.post("/webhook", async (req, res) => {
         if (resolved.length === 1) return await sendDriveFile(from, resolved[0]);
         if (resolved.length > 1) return await sendFileOptions(from, resolved, "Here are the matching documents:");
         // filename listed in brand-docs.js but not yet on Drive
-        return await sendText(from, NOT_FOUND_MSG);
+        return await sendNotFoundWithSuggestions(from, text, files);
       }
     }
 
@@ -2473,7 +2459,7 @@ app.post("/webhook", async (req, res) => {
     const hasModelCode = /\d{5}/.test(text);
     if (hasModelCode && !wantsDetail && !isKnowledgeQuestion) {
       console.log(`🚫 model code without "detail" -> not-found (no AI details): "${text}"`);
-      return await sendText(from, NOT_FOUND_MSG);
+      return await sendNotFoundWithSuggestions(from, text, files);
     }
 
     // 3) Product-ish request that filename search missed -> AI matches by meaning
@@ -2509,8 +2495,8 @@ app.post("/webhook", async (req, res) => {
       return await sendText(from, aiReply);
     }
 
-    // 5) Nothing matched -> show closest documents if any, otherwise standard apology
-    await sendText(from, suggestionMessage(text, rules));
+    // 5) Nothing matched -> AI suggests related documents, or the standard apology
+    await sendNotFoundWithSuggestions(from, text, files);
   } catch (err) {
     console.error("Handler error:", err.message);
   }
