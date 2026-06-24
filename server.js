@@ -1083,8 +1083,16 @@ async function sendPdfBuffer(to, pdfBuffer, filename, caption) {
 
 async function sendRule(to, rule) {
   if (rule.type === "document") {
+    let buffer;
     try {
-      const mediaId = await uploadMedia({ link: rule.fileLink, filename: rule.filename });
+      buffer = await downloadBytes({ link: rule.fileLink });
+      validatePdfBuffer(buffer, rule.filename);
+    } catch (err) {
+      console.error("❌ Document download error:", err.message);
+      return sendText(to, NOT_FOUND_MSG);
+    }
+    try {
+      const mediaId = await uploadMediaBuffer(buffer, rule.filename);
       return send(to, {
         messaging_product: "whatsapp",
         to,
@@ -1092,11 +1100,12 @@ async function sendRule(to, rule) {
         document: { id: mediaId, filename: rule.filename, caption: rule.caption },
       });
     } catch (err) {
+      if (err.response?.status === 413 && /\.pdf$/i.test(rule.filename)) {
+        const niceName = rule.filename.replace(/\.[^.]+$/, "");
+        return await sendFileInParts(to, buffer, rule.filename, niceName);
+      }
       console.error("❌ Document upload error:", err.response?.data || err.message);
-      return sendText(
-        to,
-        NOT_FOUND_MSG
-      );
+      return sendText(to, NOT_FOUND_MSG);
     }
   }
   if (rule.type === "image") {
