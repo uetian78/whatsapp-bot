@@ -25,6 +25,7 @@ const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSerie
 const { routeChillerText, handleChillerButton } = require("./chillers.js");
 const { findBrandDocs } = require("./brand-docs.js");
 const { findFilesByName } = require("./lib/find-files-by-name.js");
+const { parseRelatedFilesResponse } = require("./lib/related-files.js");
 const { isMenuTrigger, smallTalkReply, welcomeMenu, tipFor, MENU_HINT } = require("./menu.js");
 const { PRODUCT_KB, parseListRequest, buildUnitList } = require("./product-facts.js");
 const crm = require("./crm.js");
@@ -593,6 +594,54 @@ ${list}`;
   } catch (err) {
     console.error("AI match error:", err.message);
     return null;
+  }
+}
+
+// AI fallback for a lookup miss: finds documents that are genuinely relevant
+// to the request (not just loosely related) so a not-found reply can offer
+// alternatives instead of a dead end. Returns [] (never null) when nothing
+// clears the relevance bar, so callers can do `if (hits.length)` directly.
+async function aiRelatedFiles(text, files) {
+  if (!ANTHROPIC_API_KEY || !files.length) return [];
+
+  const list = files.map((f, i) => `${i + 1}. ${f.name.replace(/\.[^.]+$/, "")}`).join("\n");
+
+  const system = `A customer's request did not match any file exactly. Find documents from the list below that are GENUINELY RELEVANT to what they asked for — close enough that a human would reasonably offer them as alternatives.
+The list may include SKM brand files as well as third-party brand catalogues (Hisense, Daikin, Mitsubishi, Trane, Carrier, etc.).
+Use your knowledge of HVAC abbreviations and brand names:
+- MAH = Modular Air Handling Unit (AHU)
+- CAH = Comfort Air Handling Unit (AHU)
+- FCU = Fan Coil Unit
+- APMR-A = Packaged Air Conditioner
+- AUMR-A = Air-Cooled Condensing Unit
+- APCY-P / APCY-H / APCY-E = Air-Cooled Screw Chillers
+- ACMR = Air-Cooled Scroll Chiller
+- PAC4A = 100% Fresh Air Packaged Unit (DOAS)
+- PAC4A 5xxxx = a specific PAC4A unit selection sheet
+- VRF / VRV = Variable Refrigerant Flow/Volume multi-split system
+- Also match third-party brand names directly (e.g. "Hisense VRF" matches any file with "Hisense" and "VRF" in the name)
+
+Apply a STRICT relevance bar — do NOT suggest a file just because it shares a generic word (e.g. "unit", "catalogue") or a loosely related category. Only suggest files for the SAME product type/series/brand the customer asked about.
+
+Reply with up to 5 numbers, best match first, separated by commas.
+If NOTHING is genuinely relevant, reply with "0".
+No other text.
+
+FILES:
+${list}`;
+
+  try {
+    const msg = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 40,
+      system,
+      messages: [{ role: "user", content: text }],
+    });
+    const out = (msg.content?.[0]?.text || "").trim();
+    return parseRelatedFilesResponse(out, files);
+  } catch (err) {
+    console.error("AI related-files error:", err.message);
+    return [];
   }
 }
 
