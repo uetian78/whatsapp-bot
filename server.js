@@ -494,6 +494,26 @@ function closestKeywords(text, rules, limit = 5) {
 
 const NOT_FOUND_MSG = "Cannot find requested file — Email hassan.saleem@mannai.com.qa to get the required file.\n\n" + MENU_HINT;
 
+// The bot's full menu of capabilities, in copy-paste command form. Shown as the
+// last-resort reply when a request matches nothing AND the AI can't even guess
+// which product the user meant. Also handed to the AI in aiGuidance() as the
+// authoritative list of commands it may suggest (so it never invents one).
+const BOT_CAPABILITIES =
+  "Here's everything I can help you with 👇\n\n" +
+  "*📄 Documents*\n" +
+  "• Catalogue — e.g. *APMR catalogue*, *Hisense catalogue*\n" +
+  "• IOM manual — e.g. *APMR IOM*\n" +
+  "• Model datasheet — e.g. *APMRa 51004*, *APMR 52340 T1*\n" +
+  "• List a full range — e.g. *list APMR units*, *list of split units*\n\n" +
+  "*🛠️ Quick Selection* (give a capacity → get a model)\n" +
+  "• Packaged unit — *package unit 20 tr t3*\n" +
+  "• Fresh air / DOAS — *fresh air 15 tr*\n" +
+  "• Chiller — *APCY-H 30 tr*\n" +
+  "• Fan coil unit — *DMP 10 tr*\n\n" +
+  "*🧭 Guided Selectors* (step-by-step + PDF)\n" +
+  "• *Schedule Selection* · *VRF Selection* · *MTZ Selection* · *Split Selection*\n\n" +
+  "💡 Type *menu* anytime, or email hassan.saleem@mannai.com.qa for help.";
+
 // ============================================================
 //  CLAUDE HAIKU FALLBACK
 //  Answers ONLY from the Knowledge tab. Refuses to invent.
@@ -634,6 +654,53 @@ ${list}`;
   } catch (err) {
     console.error("AI related-files error:", err.message);
     return [];
+  }
+}
+
+// Last-resort "smart guidance" for a request that matched no file. Given the
+// raw message, the AI either (a) recognises the product/brand/intent and
+// replies with a short, human-like note naming the EXACT commands that would
+// work for it (e.g. "SKM package selection" -> how to get the catalogue, IOM,
+// datasheet, run a selection, or list the range), or (b) can't make sense of
+// it and returns the sentinel "SHOW_MENU". Returns the guidance string, or
+// null when the caller should fall back to the full capabilities menu.
+async function aiGuidance(text) {
+  if (!ANTHROPIC_API_KEY) return null;
+
+  const system = `You are the Mannai HVAC WhatsApp assistant. A customer's message did NOT match any document or command. Act like a helpful human colleague: figure out what they probably want and point them to a command that actually works.
+
+These are the ONLY real things the bot can do — never invent a command, model number, or capability outside this list:
+${BOT_CAPABILITIES}
+
+HVAC abbreviations & brands you should recognise:
+- APMR / APMR-A / APMR-V = SKM packaged air conditioners
+- PAC4A / PAC9A = 100% fresh-air / DOAS packaged units
+- APCY-E / APCY-H / APCY-P / ACMR / WPCY = chillers
+- MAH / CAH / HMAH = air handling units (AHU)
+- FCU / DMP / DCMP = fan coil units
+- VRF / VRV = variable refrigerant flow multi-split
+- MTZ = Trane packaged unit
+- Brands: SKM, Hisense, Daikin, Mitsubishi, Trane, Toshiba, TCL
+
+RULES:
+- If you can reasonably tell which product, brand, or intent the customer means, reply with a SHORT, warm message (2–5 short lines). Name the product, then list ONLY the commands that make sense for it, each as an exact phrase in *asterisks* the customer can copy and send.
+- If the message is too vague, or not about HVAC products/documents at all, reply with EXACTLY: SHOW_MENU
+- NEVER claim a document was sent. NEVER give specs, prices, or capacities. You only guide.
+- No "Hello"/greetings — go straight to the helpful guidance.`;
+
+  try {
+    const msg = await anthropic.messages.create({
+      model: "claude-haiku-4-5-20251001",
+      max_tokens: 250,
+      system,
+      messages: [{ role: "user", content: text }],
+    });
+    const out = (msg.content?.[0]?.text || "").trim();
+    if (!out || /^SHOW_MENU$/i.test(out)) return null;
+    return out;
+  } catch (err) {
+    console.error("AI guidance error:", err.message);
+    return null;
   }
 }
 
@@ -1156,7 +1223,19 @@ async function sendNotFoundWithSuggestions(to, text, files) {
     const caveat = `I couldn't find an exact match for "${text}". We might not have that exact document, but here are the closest ones I have — pick one below. If none fit, email hassan.saleem@mannai.com.qa.`;
     return sendFileOptions(to, hits, caveat, false);
   }
-  return sendText(to, NOT_FOUND_MSG);
+
+  // No related files either. Instead of a flat "not found", let the AI give a
+  // human-like reply that steers the user to a command that works (e.g. they
+  // typed "SKM package selection" -> tell them how to get the catalogue, IOM,
+  // datasheet, run a selection, or list the range). If even the AI can't tell
+  // what they meant, fall back to the full capabilities menu.
+  const guidance = await aiGuidance(text);
+  if (guidance) {
+    console.log(`🧭 Smart guidance for "${text}"`);
+    return sendText(to, `${guidance}\n\n${MENU_HINT}`);
+  }
+  console.log(`📋 No guess for "${text}" -> capabilities menu`);
+  return sendText(to, BOT_CAPABILITIES);
 }
 
 

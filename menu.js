@@ -102,38 +102,23 @@ const MENU_OPTIONS = [
   },
   {
     n: 4,
-    title: "Quick Questions about products",
-    tip:
-      "*❓ Quick Questions*\n" +
-      "Ask about any product and I'll answer from our catalogue & datasheet data.\n\n" +
-      "👉 Examples:\n" +
-      "• *What is the cooling capacity of APMR 52340 at T3?*\n" +
-      "• *How many TR is DMP 10?*\n" +
-      "• *What's the EER of APCY5080DE?*\n" +
-      "• *Difference between APCY-E and APCY-H?*\n\n" +
-      "💡 If I don't have the answer, I'll point you to the team.",
-  },
-  {
-    n: 5,
     title: "Help (how to use this bot)",
     tip:
       "*🙋 How to use this assistant*\n" +
-      "Just type what you need — four ways:\n\n" +
+      "Just type what you need — three ways:\n\n" +
       "1️⃣ *Find a document* — product + *catalogue* / *IOM*, or a model code.\n" +
       "   e.g. *APMR catalogue*, *APMRa 51004*\n\n" +
       "2️⃣ *Quick select* — capacity + type.\n" +
       "   e.g. *package unit 20 tr*, *fresh air 15 tr*\n\n" +
       "3️⃣ *Guided selectors* — step-by-step with PDF output:\n" +
       "   *Schedule Selection* · *VRF Selection* · *MTZ Selection* · *Split Selection*\n\n" +
-      "4️⃣ *Ask a question* — in plain words.\n" +
-      "   e.g. *How many TR is DMP 10?*\n\n" +
       "📋 *See a whole range* — *list APMR units* (also PAC4A, DMP, chillers…)\n\n" +
       "Type *menu* anytime. For anything else: *hassan.saleem@mannai.com.qa*",
   },
 ];
 
-const NUM  = ["", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣"];
-const ICON = ["", "📄", "🛠️", "🧭", "❓", "🙋"];
+const NUM  = ["", "1️⃣", "2️⃣", "3️⃣", "4️⃣"];
+const ICON = ["", "📄", "🛠️", "🧭", "🙋"];
 
 // Build the welcome message (numbered list) + the options array to remember.
 // `name` = WhatsApp profile name (optional); `returning` = seen before (CRM).
@@ -145,7 +130,7 @@ function welcomeMenu(name, returning) {
   const line = (o) => `${NUM[o.n] || o.n + "."} ${ICON[o.n] || ""} *${o.title}*`;
   const text =
     `${hello}\n` +
-    "_Mannai HVAC Assistant_ — documents, selections & product answers.\n" +
+    "_Mannai HVAC Assistant_ — catalogues, datasheets & equipment selections.\n" +
     "━━━━━━━━━━━━━━\n" +
     "Reply with a *number*:\n\n" +
     MENU_OPTIONS.map(line).join("\n") + "\n" +
