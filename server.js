@@ -26,7 +26,6 @@ const { routeChillerText, handleChillerButton } = require("./chillers.js");
 const { findBrandDocs } = require("./brand-docs.js");
 const { findFilesByName } = require("./lib/find-files-by-name.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
-const { splitPdfIntoParts } = require("./lib/pdf-split.js");
 const { isMenuTrigger, smallTalkReply, welcomeMenu, tipFor, MENU_HINT } = require("./menu.js");
 const { PRODUCT_KB, parseListRequest, buildUnitList } = require("./product-facts.js");
 const crm = require("./crm.js");
@@ -986,44 +985,6 @@ async function sendDocument(to, buffer, filename, caption) {
   });
 }
 
-// Safety margin under Meta's documented 100MB per-document cap — splitting
-// at 20MB absorbs the slack from page-count-based (not exact-byte) splitting.
-const MAX_PART_SIZE_BYTES = 20 * 1024 * 1024;
-
-// Splits an oversized PDF buffer (already downloaded) into parts and sends
-// each as a separate, numbered WhatsApp document, one at a time — each part
-// is uploaded and its buffer dropped before the next part is built, instead
-// of building every part upfront. Holding the original buffer, the loaded
-// pdf-lib source document, AND all N output parts simultaneously is what
-// OOM-killed a 1GB Railway container on a real 119MB file. Falls back to the
-// plain not-found-style message if the PDF can't be split further, or if any
-// part fails to send.
-async function sendFileInParts(to, buffer, filename, niceName) {
-  try {
-    let unsplittable = false;
-    await splitPdfIntoParts(buffer, MAX_PART_SIZE_BYTES, async (partBuffer, i, total) => {
-      if (total === 1) {
-        unsplittable = true;
-        return;
-      }
-      const partFilename = `${niceName} (Part ${i} of ${total}).pdf`;
-      const partCaption = `Here is ${niceName} (Part ${i} of ${total}) 📄`;
-      const mediaId = await uploadMediaBuffer(partBuffer, partFilename);
-      await send(to, {
-        messaging_product: "whatsapp", to, type: "document",
-        document: { id: mediaId, filename: partFilename, caption: partCaption },
-      });
-    });
-    if (unsplittable) {
-      console.error(`❌ "${filename}" is too large to send and cannot be split further.`);
-      return sendText(to, NOT_FOUND_MSG);
-    }
-  } catch (err) {
-    console.error(`❌ Split-and-send error for "${filename}":`, err.response?.data || err.message);
-    return sendText(to, NOT_FOUND_MSG);
-  }
-}
-
 // Send a file found in the Drive folder, by its Drive ID.
 async function sendDriveFile(to, file) {
   const isImage = /\.(png|jpe?g)$/i.test(file.name);
@@ -1059,9 +1020,6 @@ async function sendDriveFile(to, file) {
       document: { id: mediaId, filename: file.name, caption },
     });
   } catch (err) {
-    if (err.response?.status === 413 && /\.pdf$/i.test(file.name)) {
-      return await sendFileInParts(to, buffer, file.name, niceName);
-    }
     console.error("❌ Drive file send error:", err.response?.data || err.message);
     return sendText(to, NOT_FOUND_MSG);
   }
@@ -1108,10 +1066,6 @@ async function sendRule(to, rule) {
         document: { id: mediaId, filename: rule.filename, caption: rule.caption },
       });
     } catch (err) {
-      if (err.response?.status === 413 && /\.pdf$/i.test(rule.filename)) {
-        const niceName = rule.filename.replace(/\.[^.]+$/, "");
-        return await sendFileInParts(to, buffer, rule.filename, niceName);
-      }
       console.error("❌ Document upload error:", err.response?.data || err.message);
       return sendText(to, NOT_FOUND_MSG);
     }
