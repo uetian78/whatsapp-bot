@@ -494,6 +494,16 @@ function closestKeywords(text, rules, limit = 5) {
 
 const NOT_FOUND_MSG = "Cannot find requested file — Email hassan.saleem@mannai.com.qa to get the required file.\n\n" + MENU_HINT;
 
+// WhatsApp's Graph API rejects document/image uploads over 100 MB (HTTP 413).
+// Splitting large PDFs into parts was tried and reverted — pdf-lib's full
+// in-memory parse of a 119 MB file OOM-killed the Render container and took
+// the whole bot down. Until a memory-safe splitting approach exists, the
+// correct behavior is an honest message, never a raw Drive link.
+const WHATSAPP_MAX_FILE_BYTES = 100 * 1024 * 1024;
+function fileTooLargeMessage(filename) {
+  return `Sorry, *${filename}* is too large to send via WhatsApp (file exceeds the 100 MB limit). Please contact hassan.saleem@mannai.com.qa to request this file directly.`;
+}
+
 // The bot's full menu of capabilities, in copy-paste command form. Shown as the
 // last-resort reply when a request matches nothing AND the AI can't even guess
 // which product the user meant. Also handed to the AI in aiGuidance() as the
@@ -1067,6 +1077,9 @@ async function sendDriveFile(to, file) {
       });
     } catch (err) {
       console.error("❌ Drive file send error:", err.response?.data || err.message);
+      if (err.response?.status === 413) {
+        return sendText(to, fileTooLargeMessage(file.name));
+      }
       return sendText(to, NOT_FOUND_MSG);
     }
   }
@@ -1088,6 +1101,9 @@ async function sendDriveFile(to, file) {
     });
   } catch (err) {
     console.error("❌ Drive file send error:", err.response?.data || err.message);
+    if (err.response?.status === 413 || buffer.length > WHATSAPP_MAX_FILE_BYTES) {
+      return sendText(to, fileTooLargeMessage(file.name));
+    }
     return sendText(to, NOT_FOUND_MSG);
   }
 }
@@ -1134,6 +1150,9 @@ async function sendRule(to, rule) {
       });
     } catch (err) {
       console.error("❌ Document upload error:", err.response?.data || err.message);
+      if (err.response?.status === 413 || buffer.length > WHATSAPP_MAX_FILE_BYTES) {
+        return sendText(to, fileTooLargeMessage(rule.filename));
+      }
       return sendText(to, NOT_FOUND_MSG);
     }
   }
