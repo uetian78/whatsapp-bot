@@ -27,7 +27,7 @@ const { findBrandDocs } = require("./brand-docs.js");
 const { findFilesByName } = require("./lib/find-files-by-name.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
 const { isMenuTrigger, smallTalkReply, welcomeMenu, tipFor, MENU_HINT } = require("./menu.js");
-const { PRODUCT_KB, parseListRequest, buildUnitList } = require("./product-facts.js");
+const { PRODUCT_KB, parseListRequest, parseUnsupportedSeriesListRequest, buildUnitList } = require("./product-facts.js");
 const crm = require("./crm.js");
 const { generateMtzPdf } = require("./mtz-pdf.js");
 const schedule = require("./schedule-select.js");
@@ -459,39 +459,6 @@ function levenshtein(a, b) {
   return d[m][n];
 }
 
-// Find keywords closest to the user's text, to suggest when nothing matched.
-// Returns up to `limit` suggestion keywords (first keyword of each near rule).
-function closestKeywords(text, rules, limit = 5) {
-  const full = text.trim().toLowerCase();
-  const words = full.split(/\s+/).filter(Boolean);
-  const scored = [];
-  for (const rule of rules) {
-    if (rule.matchType === "exact") continue; // skip the greeting/menu rule
-    let best = Infinity;
-    for (const kw of rule.keywords) {
-      const kwWords = kw.split(/\s+/);
-      for (const w of words) {
-        // direct containment either way counts as very close
-        if (kw.includes(w) || w.includes(kw)) best = Math.min(best, 0.1);
-        if (kwWords.some((kwW) => kwW === w)) best = Math.min(best, 0.0);
-        const norm = levenshtein(w, kw) / Math.max(w.length, kw.length);
-        if (norm < best) best = norm;
-      }
-      const d2 = levenshtein(full, kw) / Math.max(full.length, kw.length);
-      if (d2 < best) best = d2;
-    }
-    if (best <= 0.5) scored.push({ kw: rule.keywords[0], score: best });
-  }
-  scored.sort((a, b) => a.score - b.score);
-  const seen = new Set();
-  const out = [];
-  for (const s of scored) {
-    if (!seen.has(s.kw)) { seen.add(s.kw); out.push(s.kw); }
-    if (out.length >= limit) break;
-  }
-  return out;
-}
-
 const NOT_FOUND_MSG = "Cannot find requested file — Email hassan.saleem@mannai.com.qa to get the required file.\n\n" + MENU_HINT;
 
 // WhatsApp's Graph API rejects document/image uploads over 100 MB (HTTP 413).
@@ -914,10 +881,21 @@ async function sendLongText(to, body, limit = 3800) {
 // Send up to 3 tappable reply buttons. buttons = [{id, title}, ...].
 // Titles are capped at 20 chars (WhatsApp limit).
 async function sendButtons(to, bodyText, buttons) {
-  const trimmed = buttons.slice(0, 3).map((b) => ({
-    type: "reply",
-    reply: { id: b.id, title: b.title.slice(0, 20) },
-  }));
+  // WhatsApp rejects the whole message (#131009 "Duplicate button title") if any
+  // two buttons share a title. Titles are capped at 20 chars, so names that only
+  // differ past char 20 (e.g. "Trane … Part 1" / "Part 2") collide once trimmed.
+  // Disambiguate collisions with a " (n)" suffix that still fits the 20-char cap.
+  const seen = new Map();
+  const trimmed = buttons.slice(0, 3).map((b) => {
+    let title = (b.title || "").slice(0, 20);
+    const count = seen.get(title) || 0;
+    if (count > 0) {
+      const suffix = ` (${count + 1})`;
+      title = title.slice(0, 20 - suffix.length) + suffix;
+    }
+    seen.set((b.title || "").slice(0, 20), count + 1);
+    return { type: "reply", reply: { id: b.id, title } };
+  });
   return send(to, {
     messaging_product: "whatsapp",
     to,
@@ -2361,6 +2339,25 @@ app.post("/webhook", async (req, res) => {
     if (listReq) {
       console.log(`📋 unit list: ${listReq.join(", ")}`);
       return await sendListWithToggle(from, "product", listReq, "imp");
+    }
+
+    // ── List request for a series with no spec table on file ─────
+    // "ACMR models", "list of CRAC" -> say a model list isn't available
+    // yet and offer the catalogue (which lists every model) as a download.
+    const unsupportedListReq = parseUnsupportedSeriesListRequest(text);
+    if (unsupportedListReq) {
+      console.log(`📋 unit list unavailable: ${unsupportedListReq.name}`);
+      if (unsupportedListReq.catalogue) {
+        return await sendButtons(
+          from,
+          `A model list isn't available for ${unsupportedListReq.name} yet. You can download the catalogue, which lists every model:`,
+          [{ id: `doc|${unsupportedListReq.name}|Catalogue`, title: "Download Catalogue" }]
+        );
+      }
+      return await sendText(
+        from,
+        `A model list isn't available for ${unsupportedListReq.name} yet, and no catalogue is on file for it either. Please contact us for details.`
+      );
     }
 
     // ── Quick Questions about products ───────────────────────────
