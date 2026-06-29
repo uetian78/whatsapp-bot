@@ -8,6 +8,7 @@
 
 const { PRODUCTS } = require("./products.js");
 const chillers = require("./chillers.js");
+const { detectSeriesEntry } = require("./catalogue-map.js");
 
 // Packaged units (APMR / APMR-A): T1 + T3 capacities.
 function packagedLines(key) {
@@ -90,6 +91,15 @@ const PRODUCT_KB = buildProductKnowledge();
 //  capacity and airflow, built from the same structured data.
 // ============================================================
 
+// Shared "does this text ask for a list/lineup?" check, used both by the
+// structured list below and by the unsupported-series fallback.
+function wantsListIntent(t) {
+  return (
+    /\b(list|all|every|complete|entire|whole|models?|range|line\s?-?up|lineup)\b/.test(t) ||
+    /\bwhat\b.*\b(do you have|are there|available|offer)\b/.test(t)
+  );
+}
+
 // Detect a list-style request and which family/families it names.
 // Returns an array of keys (e.g. ["apmr"], ["fcu-dmp","fcu-dcmp"],
 // ["chiller:APCY-E"]) or null if it isn't a list request.
@@ -101,12 +111,13 @@ function parseListRequest(text) {
   if (/\b\d{5}\b/.test(t)) return null;
   if (/\d+(?:\.\d+)?\s*(?:tr|ton|tons|cfm)\b/.test(t)) return null;
 
-  const wantsList =
-    /\b(list|all|every|complete|entire|whole|models?|range|line\s?-?up|lineup)\b/.test(t) ||
-    /\bwhat\b.*\b(do you have|are there|available|offer)\b/.test(t);
-  if (!wantsList) return null;
+  if (!wantsListIntent(t)) return null;
 
   if (/\bapmr-?a\b/.test(t)) return ["apmr-a"];
+  // APMR-V is a distinct series with no spec table of its own — don't let the
+  // bare "apmr" check below swallow it (word-boundary regex treats the
+  // hyphen as a boundary, so "apmr-v" would otherwise match "apmr").
+  if (/\bapmr-?v\b/.test(t)) return null;
   if (/\bapmr\b/.test(t)) return ["apmr"];
   if (/\bpac4a\b|\bfresh air\b|\bdoas\b/.test(t)) return ["pac4a"];
   if (/\bdcmp\b/.test(t)) return ["fcu-dcmp"];
@@ -116,6 +127,26 @@ function parseListRequest(text) {
   if (/\bapcy-?h\b/.test(t)) return ["chiller:APCY-H"];
   if (/\bapcy\b|\bchiller(s)?\b/.test(t)) return ["chiller:APCY-E", "chiller:APCY-H"];
   return null;
+}
+
+// Canonical catalogue-map series names already covered by parseListRequest
+// above — skip them here so this fallback never fights the real list.
+const SUPPORTED_LIST_SERIES = new Set(["APMR-A", "APMR", "PAC4A", "FCU", "APCY-E", "APCY-H"]);
+
+// A list-style request ("ACMR models", "list of CRAC", "MAH model") for a
+// series that IS in the catalogue map but has no structured spec table to
+// build a list from. Returns { name, catalogue } so the caller can say a
+// list isn't available and offer the catalogue (which lists every model)
+// as a download instead, or null if this isn't that case.
+function parseUnsupportedSeriesListRequest(text) {
+  const t = (text || "").toLowerCase();
+  if (/\b(catalog(?:ue)?|iom|datasheet|data ?sheet|manual|brochure)\b/.test(t)) return null;
+  if (!wantsListIntent(t)) return null;
+  if (parseListRequest(text)) return null; // already has a real structured list
+
+  const entry = detectSeriesEntry(text);
+  if (!entry || SUPPORTED_LIST_SERIES.has(entry.name)) return null;
+  return { name: entry.name, catalogue: !!entry.catalogue };
 }
 
 const tr1 = (v) => Number(v).toFixed(1); // one-decimal TR for tidy columns
@@ -198,4 +229,10 @@ function buildUnitList(keys, system = "imp") {
   return sections.join("\n\n");
 }
 
-module.exports = { PRODUCT_KB, buildProductKnowledge, parseListRequest, buildUnitList };
+module.exports = {
+  PRODUCT_KB,
+  buildProductKnowledge,
+  parseListRequest,
+  parseUnsupportedSeriesListRequest,
+  buildUnitList,
+};
