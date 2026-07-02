@@ -217,38 +217,10 @@ try { chillerDriveIds = require('./chiller-drive-ids.json'); } catch (_) {}
 let productDriveIds = {};
 try { productDriveIds = require('./product-drive-ids.json'); } catch (_) {}
 
-// Stores numbered-list selections per user so they can reply "1", "2", etc.
-const pendingLists = {}; // { [from]: File[] }
+// Unified per-user session state (guided flows + auxiliary ctx). Replaces the
+// 8 previous ad-hoc per-user stores that each had their own TTL and expiry logic.
+const store = require("./lib/session-store.js");
 
-// Stores an open welcome menu per user so a numbered reply maps to a tip.
-const pendingMenu = {}; // { [from]: { options, ts } }
-const MENU_TTL_MS = 15 * 60 * 1000; // a menu reply is only honoured for 15 min
-
-// Stores multi-step MTZ selection sessions per user.
-// { step, reqTC, db, wb, amb, airflow, project, tag, ts }
-const pendingMtz = {};  // { [from]: object }
-const MTZ_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
-
-// Split unit selection sessions: { step, brand, ts }
-const pendingSplit = {};
-const SPLIT_TIMEOUT_MS = 10 * 60 * 1000;
-
-// Schedule / BOQ image selection sessions
-const scheduleSessions = new Map(); // from -> { step, ts, rows, skipped, cond, splitBrand, pkgVendor, pkgSeries }
-const SCHEDULE_TIMEOUT_MS = 10 * 60 * 1000;
-
-// Stores last split results per user for Print (30 min TTL)
-const splitResults = {};
-const SPLIT_RESULT_TTL = 30 * 60 * 1000;
-
-// Stores last schedule/BOQ selection results per user for Print (30 min TTL)
-const scheduleResults = {};
-const SCHEDULE_RESULT_TTL = 30 * 60 * 1000;
-
-// Remembers the last unit list shown so the user can toggle Imperial <-> SI
-// via a button. kind = "split" | "product"; keys = the builder's key array.
-const pendingUnitList = {}; // { [from]: { kind, keys, system, ts } }
-const UNIT_LIST_TTL = 30 * 60 * 1000;
 const VRF_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
 // ── Message deduplication ────────────────────────────────────────────────────
@@ -932,7 +904,7 @@ async function sendListWithToggle(from, kind, keys, system) {
   const body = kind === "split" ? listSplits(keys, system) : buildUnitList(keys, system);
   if (!body) return;
   await sendLongText(from, body);
-  pendingUnitList[from] = { kind, keys, system, ts: Date.now() };
+  store.setCtx(from, "unitList", { kind, keys, system }, 30 * 60 * 1000);
   const other = system === "si" ? "imp" : "si";
   const curName = system === "si" ? "International (kW)" : "Imperial (TR)";
   const otherTitle = other === "si" ? "International (kW)" : "Imperial (TR)";
@@ -1214,8 +1186,8 @@ async function sendFileOptions(to, matchedFiles, prompt, autoSendSingle = true) 
   }
 
   // 4+ options: numbered list stored for next reply (supersedes any open menu)
-  delete pendingMenu[to];
-  pendingLists[to] = matchedFiles;
+  store.clearCtx(to, "menu");
+  store.setCtx(to, "list", matchedFiles, 30 * 60 * 1000);
   const list = matchedFiles.map((f, i) => `${i + 1}. ${displayName(f)}`).join("\n");
   return sendText(to, `${prompt || "I found several matches:"}\n\n${list}\n\nReply with a number to get the file.`);
 }
@@ -1376,16 +1348,9 @@ function formatSplitUnit(unitNum, res) {
   return out;
 }
 
-async function handleSplitStep(from, text) {
-  const s = pendingSplit[from];
-
-  if (Date.now() - s.ts > SPLIT_TIMEOUT_MS) {
-    delete pendingSplit[from];
-    return sendText(from, "⏰ Split session timed out. Type *Split Selection* to start again.");
-  }
-
+async function handleSplitStep(from, s, text) {
   if (/^(cancel|stop|exit|quit|reset)\b/i.test(text.trim())) {
-    delete pendingSplit[from];
+    store.endFlow(from);
     return sendText(from, "✅ Split selection cancelled. Type *Split Selection* anytime to restart.");
   }
 
@@ -1526,11 +1491,11 @@ async function handleSplitStep(from, text) {
       });
     });
 
-    delete pendingSplit[from];
+    store.endFlow(from);
 
     // Store results for PDF print (30 min TTL)
     const goodUnits = unitResults.filter(u => !u.error);
-    splitResults[from] = { brand: s.brand, units: unitResults, ts: Date.now() };
+    store.setCtx(from, "splitResult", { brand: s.brand, units: unitResults }, 30 * 60 * 1000);
 
     // Build WhatsApp text output
     const textBlocks = unitResults.map((u) =>
@@ -1651,19 +1616,19 @@ async function advanceScheduleQuestions(from, s) {
   });
 
   // Store results for PDF print (30 min TTL)
-  scheduleResults[from] = {
+  store.setCtx(from, "scheduleResult", {
     cond: s.cond, splitBrand: s.splitBrand, pkgVendor: s.pkgVendor, pkgSeries: s.pkgSeries,
-    rows: s.rows, skipped: s.skipped, ts: Date.now(),
-  };
+    rows: s.rows, skipped: s.skipped,
+  }, 30 * 60 * 1000);
 
-  scheduleSessions.delete(from);
+  store.endFlow(from);
   return await sendLongText(from, reply + "\n\nReply *Print* or *Datasheet* for a PDF report + package datasheets · *Schedule Selection* to run again.");
 }
 
 // Send split PDF report when user replies "Print"
 async function handleSplitPrint(from) {
-  const stored = splitResults[from];
-  if (!stored || Date.now() - stored.ts > SPLIT_RESULT_TTL) {
+  const stored = store.getCtx(from, "splitResult");
+  if (!stored) {
     return sendText(from, "❌ No recent split results found. Run *Split Selection* first.");
   }
 
@@ -1690,8 +1655,8 @@ async function handleSplitPrint(from) {
 
 // Send schedule/BOQ PDF report when user replies "Print"
 async function handleSchedulePrint(from) {
-  const stored = scheduleResults[from];
-  if (!stored || Date.now() - stored.ts > SCHEDULE_RESULT_TTL) {
+  const stored = store.getCtx(from, "scheduleResult");
+  if (!stored) {
     return sendText(from, "❌ No recent schedule results found. Run *Schedule Selection* first.");
   }
 
@@ -1860,17 +1825,10 @@ function mtzRankSummary(reqTC, reqSC, db, wb, amb) {
   return lines.join("\n\n");
 }
 
-async function handleMtzStep(from, text) {
-  const s = pendingMtz[from];
-
-  if (Date.now() - s.ts > MTZ_TIMEOUT_MS) {
-    delete pendingMtz[from];
-    return sendText(from, "⏰ MTZ session timed out. Type *MTZ* to start a new selection.");
-  }
-
+async function handleMtzStep(from, s, text) {
   const cancel = /^(cancel|stop|exit|quit|reset)\b/i.test(text.trim());
   if (cancel) {
-    delete pendingMtz[from];
+    store.endFlow(from);
     return sendText(from, "✅ MTZ selection cancelled. Type *MTZ* anytime to start again.");
   }
 
@@ -1936,7 +1894,7 @@ async function handleMtzStep(from, text) {
     s.airflow = ex.airflow;
     s.project = ex.project;
     s.tag     = ex.tag;
-    delete pendingMtz[from];
+    store.endFlow(from);
 
     // Show ranked text preview first
     let previewText = "";
@@ -2028,8 +1986,8 @@ app.post("/webhook", async (req, res) => {
       // chosen system. State remembers which list it was.
       if (btnId.startsWith("units|")) {
         const system = btnId.split("|")[1] === "imp" ? "imp" : "si";
-        const st = pendingUnitList[from];
-        if (!st || Date.now() - st.ts > UNIT_LIST_TTL) {
+        const st = store.getCtx(from, "unitList");
+        if (!st) {
           return await sendText(from,
             "That list has expired — just ask for it again (e.g. *list of split units* or *APMR list*).");
         }
@@ -2120,13 +2078,10 @@ app.post("/webhook", async (req, res) => {
     // hijacks a real request like "hi can I get the APMR catalogue".
     if (message.type === "text" && isMenuTrigger(message.text.body)) {
       vrfSessions.delete(from);
-      scheduleSessions.delete(from);
-      delete pendingSplit[from];
-      delete pendingMtz[from];
-      delete pendingLists[from];
+      store.clearAll(from);
       console.log(`📋 welcome menu (global escape) -> ${from}`);
       const m = welcomeMenu(profileName, crm.isKnownContact(from));
-      pendingMenu[from] = { options: m.options, ts: Date.now() };
+      store.setCtx(from, "menu", { options: m.options }, 15 * 60 * 1000);
       return await sendText(from, m.text);
     }
 
@@ -2171,56 +2126,58 @@ app.post("/webhook", async (req, res) => {
     // Trigger: exact "Image Selection" / "BOQ Selection" / "Schedule Selection".
     if (message.type === "text" &&
         /^(image|boq|schedule)\s+selection$/i.test(message.text.body.trim())) {
-      scheduleSessions.set(from, { step: "awaitImage", ts: Date.now() });
+      store.startFlow(from, "schedule", { step: "awaitImage" });
       return await sendText(from,
         "📋 *Schedule / BOQ Selection*\n\nSend the equipment schedule as an *image* or *PDF*.\n_(Type *cancel* anytime to exit)_");
     }
 
-    if (scheduleSessions.has(from)) {
-      const s = scheduleSessions.get(from);
-      if (Date.now() - (s.ts || 0) > SCHEDULE_TIMEOUT_MS) {
-        scheduleSessions.delete(from);
-        return await sendText(from, "⏰ Schedule session timed out. Type *Schedule Selection* to start again.");
-      }
-      s.ts = Date.now();
+    // ── Active guided flow (split / mtz / schedule) ─────────────
+    const flow = store.getFlow(from);
+    if (flow?.expired) {
+      const names = { split: "Split Selection", mtz: "MTZ Selection", schedule: "Schedule Selection" };
+      return await sendText(from, `⏰ ${names[flow.type] || "Your"} session timed out. Type *${names[flow.type] || "menu"}* to start again.`);
+    }
+    if (flow) store.touchFlow(from);
+
+    if (flow?.type === "schedule") {
       const vText = message.type === "text" ? message.text.body.trim() : "";
       if (/^(cancel|stop|exit|quit|reset)\b/i.test(vText)) {
-        scheduleSessions.delete(from);
+        store.endFlow(from);
         return await sendText(from, "✅ Schedule selection cancelled.");
       }
-      return await handleScheduleStep(from, s, message, vText);
+      return await handleScheduleStep(from, flow.data, message, vText);
     }
 
     if (message.type !== "text") return;
     const text = message.text.body.trim();
 
     // Numeric reply to a pending numbered list ("1", "2", etc.)
-    if (/^\d+$/.test(text) && pendingLists[from]) {
+    const pendingList = store.getCtx(from, "list");
+    if (/^\d+$/.test(text) && pendingList) {
       const idx = parseInt(text, 10) - 1;
-      const list = pendingLists[from];
-      delete pendingLists[from];
-      if (idx >= 0 && idx < list.length) {
-        console.log(`🔢 ${from} selected #${idx + 1}: ${list[idx].name}`);
-        return await sendDriveFile(from, list[idx]);
+      store.clearCtx(from, "list");
+      if (idx >= 0 && idx < pendingList.length) {
+        console.log(`🔢 ${from} selected #${idx + 1}: ${pendingList[idx].name}`);
+        return await sendDriveFile(from, pendingList[idx]);
       }
-      return await sendText(from, `Please reply with a number between 1 and ${list.length}.`);
+      return await sendText(from, `Please reply with a number between 1 and ${pendingList.length}.`);
     }
 
     // ── Split / Schedule PDF print request ───────────────────────
-    if (/^print$/i.test(text.trim()) && splitResults[from]) {
+    if (/^print$/i.test(text.trim()) && store.getCtx(from, "splitResult")) {
       return await handleSplitPrint(from);
     }
-    if (/^(print|datasheet)$/i.test(text.trim()) && scheduleResults[from]) {
+    if (/^(print|datasheet)$/i.test(text.trim()) && store.getCtx(from, "scheduleResult")) {
       return await handleSchedulePrint(from);
     }
 
     // ── Split unit multi-step session ──────────────────────────
-    if (pendingSplit[from]) {
-      return await handleSplitStep(from, text);
+    if (flow?.type === "split") {
+      return await handleSplitStep(from, flow.data, text);
     }
     // Trigger: exact phrase "Split Selection"
     if (/^split\s+selection$/i.test(text.trim())) {
-      pendingSplit[from] = { step: "brand", ts: Date.now() };
+      store.startFlow(from, "split", { step: "brand" });
       return await sendText(from,
         "🧊 *Split Unit Selector*\n\n" +
         "*Step 1/3:* Choose brand:\n" +
@@ -2230,8 +2187,8 @@ app.post("/webhook", async (req, res) => {
     }
 
     // ── MTZ multi-step session ─────────────────────────────────
-    if (pendingMtz[from]) {
-      return await handleMtzStep(from, text);
+    if (flow?.type === "mtz") {
+      return await handleMtzStep(from, flow.data, text);
     }
     // Trigger: exact phrase "MTZ Selection"
     if (/^mtz\s+selection$/i.test(text.trim())) {
@@ -2246,11 +2203,11 @@ app.post("/webhook", async (req, res) => {
           // nums[0]=load, nums[1]=DB, nums[2]=WB, nums[3]=Amb
           const db = parseFloat(nums[1]), wb = parseFloat(nums[2]), amb = parseFloat(nums[3]);
           if (db >= 60 && db <= 100 && wb >= 50 && wb <= 85 && wb <= db && amb >= 70 && amb <= 135) {
-            pendingMtz[from] = {
-              step: "extras", ts: Date.now(),
+            store.startFlow(from, "mtz", {
+              step: "extras",
               reqTC: load.tc, reqSC: load.sc,
               db, wb, amb,
-            };
+            });
             const scNote = load.sc ? ` / SC ${load.sc.toFixed(1)} MBH` : "";
             return await sendText(from,
               `✅ *${load.tc.toFixed(1)} MBH${scNote} · DB${db}/WB${wb}°F · Amb ${amb}°F*\n\n` +
@@ -2262,7 +2219,7 @@ app.post("/webhook", async (req, res) => {
           }
         }
       }
-      pendingMtz[from] = { step: "load", ts: Date.now() };
+      store.startFlow(from, "mtz", { step: "load" });
       return await sendText(from,
         "🌡️ *Trane MTZ Package Unit Selector*\n\n" +
         "3 quick steps → ranked models + PDF datasheet.\n\n" +
@@ -2286,8 +2243,9 @@ app.post("/webhook", async (req, res) => {
     // ── Welcome menu / help ──────────────────────────────────────
     // Numbered reply while a recent menu is open -> send that section's
     // "how to ask" tip card.
-    if (/^\d+$/.test(text) && pendingMenu[from] && Date.now() - pendingMenu[from].ts < MENU_TTL_MS) {
-      const { options } = pendingMenu[from];
+    const openMenu = store.getCtx(from, "menu");
+    if (/^\d+$/.test(text) && openMenu) {
+      const { options } = openMenu;
       const n = parseInt(text, 10);
       const tip = tipFor(n, options);
       if (tip) {
@@ -2310,9 +2268,9 @@ app.post("/webhook", async (req, res) => {
     // Greeting / "menu" / "help" -> show the welcome menu (numbered list).
     if (isMenuTrigger(text)) {
       console.log(`📋 welcome menu -> ${from}`);
-      delete pendingLists[from];
+      store.clearCtx(from, "list");
       const m = welcomeMenu(profileName, crm.isKnownContact(from));
-      pendingMenu[from] = { options: m.options, ts: Date.now() };
+      store.setCtx(from, "menu", { options: m.options }, 15 * 60 * 1000);
       return await sendText(from, m.text);
     }
     // Conversational closing / thanks / ack ("bye", "exit", "thanks", "ok") ->
@@ -2321,8 +2279,8 @@ app.post("/webhook", async (req, res) => {
     const smalltalk = smallTalkReply(text);
     if (smalltalk) {
       console.log(`💬 small talk -> ${from}`);
-      delete pendingMenu[from];
-      delete pendingLists[from];
+      store.clearCtx(from, "menu");
+      store.clearCtx(from, "list");
       return await sendText(from, smalltalk);
     }
     // ─────────────────────────────────────────────────────────────
