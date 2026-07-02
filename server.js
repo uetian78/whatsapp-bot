@@ -610,21 +610,30 @@ app.get("/webhook", (req, res) => {
 });
 
 // Send multiple file matches smartly:
-//   1 match  → send it directly
-//   2-3      → WhatsApp reply buttons (tappable)
-//   4+       → numbered text list (user replies "1", "2", …)
+//   1 match   → send it directly
+//   2-3       → WhatsApp reply buttons (tappable)
+//   4-10      → WhatsApp interactive list (tappable rows)
+//   11+       → numbered text list (user replies "1", "2", …) — API row cap
 async function sendFileOptions(to, matchedFiles, prompt, autoSendSingle = true) {
   if (autoSendSingle && matchedFiles.length === 1) return sendDriveFile(to, matchedFiles[0]);
 
   if (matchedFiles.length <= 3) {
-    const buttons = matchedFiles.map((f) => ({
-      id: `fileid|${f.id}`,
-      title: displayName(f).slice(0, 20),
-    }));
+    const buttons = matchedFiles.map((f) => ({ id: `fileid|${f.id}`, title: displayName(f).slice(0, 20) }));
     return sendButtons(to, prompt || "Which one would you like?", buttons);
   }
 
-  // 4+ options: numbered list stored for next reply (supersedes any open menu)
+  // 4-10 matches: tappable list rows (title = short name, description = full name).
+  if (matchedFiles.length <= 10) {
+    store.clearCtx(to, "menu");
+    const rows = matchedFiles.map((f) => ({
+      id: `fileid|${f.id}`,
+      title: displayName(f).slice(0, 24),
+      description: f.name.length > 24 ? f.name : undefined,
+    }));
+    return sendList(to, prompt || "I found several matches:", "Choose a document", rows);
+  }
+
+  // 11+ matches: numbered text list stored for the next reply.
   store.clearCtx(to, "menu");
   store.setCtx(to, "list", matchedFiles, 30 * 60 * 1000);
   const list = matchedFiles.map((f, i) => `${i + 1}. ${displayName(f)}`).join("\n");
