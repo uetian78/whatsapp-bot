@@ -1,10 +1,4 @@
-﻿// ============================================================
-//  WhatsApp Auto-Responder + Claude Haiku AI Fallback
-//  - Google Sheet = control panel (rules + AI knowledge)
-//  - Keyword rules answer common questions for FREE
-//  - Claude Haiku answers everything else using YOUR knowledge only
-// ============================================================
-
+﻿require("dotenv").config();
 // Force IPv4-first DNS resolution. Node 17+ defaults to "verbatim" order, which
 // prefers IPv6. On hosts with a broken/blackholed IPv6 route to Google (Render
 // instances among them), every connection to googleapis.com resets mid-response
@@ -13,6 +7,13 @@
 // help because every attempt picks the same dead IPv6 route. Preferring IPv4
 // sidesteps it. Must run before any outbound request is made.
 require("dns").setDefaultResultOrder("ipv4first");
+
+// ============================================================
+//  WhatsApp Auto-Responder + Claude Haiku AI Fallback
+//  - Google Sheet = control panel (rules + AI knowledge)
+//  - Keyword rules answer common questions for FREE
+//  - Claude Haiku answers everything else using YOUR knowledge only
+// ============================================================
 
 const express = require("express");
 const crypto = require("crypto");
@@ -38,7 +39,11 @@ const { isVrfTrigger } = require("./vrf/trigger.js");
 const {
   initVrf, onVrfKeyword, onVrfMessage, sessions: vrfSessions,
 } = require("./vrf/vrfHandler.js");
-require("dotenv").config();
+const { getSheets, getDrive, withRetry, driveFileId, downloadBytes, normalizeDriveLink } = require("./lib/google.js");
+const {
+  listFolderFiles, docTypeFromFilename, folderMatchesDocType, fileMatchesDocType,
+  findFilesInFolder, findExactFileInDoc, findDatasheetFiles, findChillerDatasheetFiles, displayName,
+} = require("./lib/drive-index.js");
 
 const app = express();
 app.use(express.json());
@@ -79,132 +84,6 @@ const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 //   2) "Knowledge" -> Topic | Info   (the AI's knowledge base)
 //   3) "Allowed"   -> Number        (optional whitelist; empty = reply to all)
 // ============================================================
-// Parse the service-account credentials from GOOGLE_SERVICE_ACCOUNT_JSON.
-// Accepts EITHER raw JSON or a base64-encoded JSON. Base64 is recommended on
-// hosting dashboards because it has no quotes/newlines/backslashes to get
-// mangled on paste (the private_key's \n is the usual casualty).
-function parseServiceAccount() {
-  const raw = (GOOGLE_SERVICE_ACCOUNT_JSON || "").trim();
-  if (!raw) throw new Error("GOOGLE_SERVICE_ACCOUNT_JSON is not set");
-  const text = raw.startsWith("{") ? raw : Buffer.from(raw, "base64").toString("utf8");
-  const creds = JSON.parse(text);
-  // If the private key survived as literal "\n" sequences, restore real newlines.
-  if (creds.private_key && creds.private_key.includes("\\n")) {
-    creds.private_key = creds.private_key.replace(/\\n/g, "\n");
-  }
-  return creds;
-}
-
-// ── Access-token minting via axios (NOT gaxios/node-fetch) ───────────────────
-// google-auth-library's own token fetch rides on gaxios 6 → node-fetch 2, whose
-// POST handling fails reliably on modern Node with "Invalid response body while
-// trying to fetch https://www.googleapis.com/oauth2/v4/token: Premature close".
-// gaxios never retries POSTs, so the token exchange can never recover and every
-// Drive/Sheets call dies before it starts. We instead sign the JWT ourselves and
-// exchange it for an access token over axios (native http — the same transport
-// our WhatsApp Graph calls use, which work fine), then hand that token to the
-// google SDK so it only ever issues GET API calls. Token cached until ~1 min
-// before expiry.
-const GOOGLE_SCOPES = [
-  "https://www.googleapis.com/auth/spreadsheets", // read rules/knowledge + write CRM log
-  "https://www.googleapis.com/auth/drive.readonly",
-].join(" ");
-let googleToken = { value: null, exp: 0 };
-
-async function getGoogleAccessToken() {
-  if (googleToken.value && Date.now() < googleToken.exp - 60_000) return googleToken.value;
-  const creds = parseServiceAccount();
-  const now = Math.floor(Date.now() / 1000);
-  const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
-  const unsigned =
-    b64({ alg: "RS256", typ: "JWT" }) + "." +
-    b64({
-      iss: creds.client_email,
-      scope: GOOGLE_SCOPES,
-      aud: "https://oauth2.googleapis.com/token",
-      iat: now,
-      exp: now + 3600,
-    });
-  const sig = crypto.createSign("RSA-SHA256").update(unsigned).sign(creds.private_key, "base64url");
-  const jwt = `${unsigned}.${sig}`;
-
-  const res = await axios.post(
-    "https://oauth2.googleapis.com/token",
-    new URLSearchParams({
-      grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer",
-      assertion: jwt,
-    }).toString(),
-    { headers: { "Content-Type": "application/x-www-form-urlencoded" }, timeout: 20_000 }
-  );
-  googleToken = {
-    value: res.data.access_token,
-    exp: Date.now() + (res.data.expires_in || 3600) * 1000,
-  };
-  console.log("🔑 Google access token minted (axios), expires in", res.data.expires_in, "s");
-  return googleToken.value;
-}
-
-// OAuth2 client carrying our self-minted token. We re-set the (cached) token
-// before every use so the SDK never attempts its own refresh.
-let oauthClient = null;
-async function getAuthedClient() {
-  const token = await getGoogleAccessToken();
-  if (!oauthClient) {
-    oauthClient = new google.auth.OAuth2();
-    // The googleapis SDK runs every Drive/Sheets call through gaxios 6, whose
-    // only server-side transport is node-fetch 2 — and node-fetch 2 fails
-    // reliably on this host with "Premature close" (the same bug that broke the
-    // token POST, now also seen on the Drive GET once we got past auth). Node 18+
-    // ships a working native fetch (undici); point gaxios at it instead. gaxios
-    // decodes json via res.text()/.json() and binary via res.arrayBuffer(), both
-    // supported by undici's Response; the only unsupported path (responseType
-    // "stream") is never used here — all downloads use "arraybuffer".
-    const tx = oauthClient.transporter;
-    if (tx && tx.instance) {
-      tx.instance.defaults = Object.assign({}, tx.instance.defaults, {
-        fetchImplementation: globalThis.fetch,
-      });
-    }
-  }
-  oauthClient.setCredentials({ access_token: token });
-  return oauthClient;
-}
-
-// Retry helper for genuine transient blips on the GET API calls.
-async function withRetry(fn, attempts = 3, baseDelayMs = 500) {
-  let lastErr;
-  for (let i = 0; i < attempts; i++) {
-    try {
-      return await fn();
-    } catch (err) {
-      lastErr = err;
-      if (i < attempts - 1) await new Promise((r) => setTimeout(r, baseDelayMs * (i + 1)));
-    }
-  }
-  throw lastErr;
-}
-
-async function getSheets() {
-  return google.sheets({ version: "v4", auth: await getAuthedClient() });
-}
-
-async function getDrive() {
-  return google.drive({ version: "v3", auth: await getAuthedClient() });
-}
-
-// Extract a Drive file ID from any Drive link.
-function driveFileId(link) {
-  if (!link) return null;
-  const m = link.match(/\/d\/([a-zA-Z0-9_-]+)/) || link.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-  return m ? m[1] : null;
-}
-
-// ---- Recursive listing of all PDFs under the parent folder (cached) ----
-// Lets the bot find files by name without any sheet entry. Drop a PDF in the
-// folder (or any subfolder) and it becomes requestable automatically.
-let fileIndex = { files: [], ts: 0 };
-const FILE_CACHE_MS = 2 * 60 * 1000; // refresh at most every 2 minutes
-
 // Static Drive-ID map for chiller datasheets (built by build-chiller-ids.js).
 // Key: "code|series" e.g. "5230|APCY-E" -> { id, name }.
 // Allows button taps to skip listFolderFiles() entirely.
@@ -240,129 +119,6 @@ function isDuplicate(msgId) {
   return false;
 }
 
-
-async function listFolderFiles() {
-  if (!DRIVE_FOLDER_ID) return [];
-  if (Date.now() - fileIndex.ts < FILE_CACHE_MS && fileIndex.files.length) {
-    return fileIndex.files;
-  }
-
-  const drive = await getDrive();
-  const collected = [];
-  // Track each folder's name so we know which folder a file lives in
-  // (e.g. "Catalogue", "IOM", "Datasheets"). The parent folder itself
-  // is recorded under its own name too.
-  // folderPaths stores the FULL path for each folder id, e.g.
-  // "Catalogues/Hisense VRF" — so a file inside a brand sub-folder still
-  // inherits the "Catalogues" ancestor and passes the doc-type filter.
-  const folderPaths = { [DRIVE_FOLDER_ID]: "(root)" };
-  const toVisit = [DRIVE_FOLDER_ID];
-  let foldersVisited = 0;
-
-  while (toVisit.length) {
-    const folderId = toVisit.shift();
-    foldersVisited++;
-    let pageToken;
-    do {
-      const res = await withRetry(() => drive.files.list({
-        q: `'${folderId}' in parents and trashed = false`,
-        fields: "nextPageToken, files(id, name, mimeType)",
-        pageSize: 100,
-        pageToken,
-        supportsAllDrives: true,
-        includeItemsFromAllDrives: true,
-      }));
-      for (const f of res.data.files || []) {
-        if (f.mimeType === "application/vnd.google-apps.folder") {
-          // Build full path so nested folders inherit their ancestors' names
-          const parentPath = folderPaths[folderId] || "(root)";
-          folderPaths[f.id] = parentPath === "(root)" ? f.name : `${parentPath}/${f.name}`;
-          console.log(`   ↳ subfolder found: ${folderPaths[f.id]} (${f.id})`);
-          toVisit.push(f.id);
-        } else if (f.mimeType === "application/pdf" || /\.(pdf|png|jpe?g)$/i.test(f.name)) {
-          collected.push({ id: f.id, name: f.name, folder: folderPaths[folderId] || "(root)" });
-        }
-      }
-      pageToken = res.data.nextPageToken;
-    } while (pageToken);
-  }
-
-  fileIndex = { files: collected, ts: Date.now() };
-  console.log(
-    `🗂️  Indexed ${collected.length} files across ${foldersVisited} folder(s): ` +
-    collected.map((f) => `${f.folder}/${f.name}`).join(", ")
-  );
-  return collected;
-}
-
-// Find the right file for a series + doc type.
-//
-// IMPORTANT design facts (from the real Drive layout):
-//   - The DOC TYPE is decided by the FOLDER, not the filename:
-//       * Catalogue files live in a folder named "Catalogue(s)" and are named
-//         just by series, e.g. "APMR-A.pdf", "APCY-H.pdf", "ACMR.pdf".
-//         (No word "Catalogue" in the filename.)
-//       * IOM files live in a folder named "IOM(s)" and DO carry "IOM" in the
-//         name, e.g. "ACMR IOM.pdf", "APMRA 2025 IOM.pdf".
-//   - So we match the FOLDER for the doc type, then match only the SERIES
-//     prefix within the filename. Any extra tokens (year, version, stray
-//     dots like "APMR-A. 2025.pdf") are ignored.
-//
-// Detect doc type from filename suffix — _IOM.pdf or _catalogue.pdf.
-// This is the primary signal now that all files are renamed consistently.
-function docTypeFromFilename(filename) {
-  const n = (filename || "").toLowerCase();
-  if (n.endsWith("_iom.pdf")) return "IOM";
-  if (n.endsWith("_catalogue.pdf")) return "Catalogue";
-  return null;
-}
-
-// docType is "Catalogue" or "IOM". Match by folder path (any segment), not just
-// the immediate parent — so files in "Catalogues/Hisense VRF/" still count as Catalogues.
-function folderMatchesDocType(folderPath, docType) {
-  // Split full path (e.g. "Catalogues/Hisense VRF") and check each segment.
-  const segments = (folderPath || "").split("/").map((s) => s.toLowerCase().trim());
-  if (docType === "Catalogue") return segments.some((s) => /^catalogues?$/.test(s) || /^catalog$/.test(s));
-  if (docType === "IOM") return segments.some((s) => /^ioms?$/.test(s));
-  return false;
-}
-
-function fileMatchesDocType(file, docType) {
-  return folderMatchesDocType(file.folder, docType) || docTypeFromFilename(file.name) === docType;
-}
-
-function findFilesInFolder(seriesName, files, docType) {
-  const inFolder = files.filter((f) => fileMatchesDocType(f, docType));
-
-  const norm = (s) => s.toLowerCase().replace(/[\s\-_.]/g, "");
-  const seriesToken = norm(seriesName); // e.g. "apmra" for "APMR-A"
-  const docWord = docType.toLowerCase(); // "catalogue" or "iom"
-
-  const scored = [];
-  for (const f of inFolder) {
-    const base = norm(f.name.replace(/\.[^.]+$/, "")); // e.g. "apmra2025", "acmriom"
-    if (!base.startsWith(seriesToken)) continue; // series must lead the name
-
-    // Prevent a shorter series matching a longer one (APMR vs APMR-A).
-    // The char right after the series prefix must NOT be a letter — UNLESS
-    // those letters are the doc-type word itself (e.g. "acmr" + "iom" ->
-    // "acmriom" is valid; "apmr" + "a..." is NOT valid for series APMR).
-    const after = base.slice(seriesToken.length); // e.g. "2025", "iom", "a2025iom"
-    if (/^[a-z]/.test(after) && !after.startsWith(docWord)) continue;
-
-    // Rank: exact series name first (e.g. "apmra"), then series + doc word
-    // (e.g. "acmriom"), then series + other extras (e.g. "apmra2025"). This
-    // makes "APMR-A.pdf" win over "APMR-A. 2025.pdf" when both exist.
-    let rank = 2;
-    if (base === seriesToken) rank = 0;
-    else if (after.startsWith(docWord)) rank = 1;
-    scored.push({ f, rank });
-  }
-
-  if (!scored.length) return [];
-  const best = Math.min(...scored.map((s) => s.rank));
-  return scored.filter((s) => s.rank === best).map((s) => s.f);
-}
 
 // Simple cache so we don't hit the Sheet on every single message
 let cache = { rules: [], knowledge: [], allowed: [], ts: 0 };
@@ -402,18 +158,6 @@ async function loadSheet() {
   cache = { rules, knowledge, allowed, ts: Date.now() };
   console.log(`🔄 Sheet loaded: ${rules.length} rules, ${knowledge.length} knowledge rows`);
   return cache;
-}
-
-// Convert a normal Drive share link into a reliable direct-download link.
-// Uses drive.usercontent.google.com with confirm=t, which bypasses the
-// "can't scan for viruses" warning page that corrupts downloads.
-function normalizeDriveLink(link) {
-  if (!link) return "";
-  const m = link.match(/\/d\/([a-zA-Z0-9_-]+)/) || link.match(/[?&]id=([a-zA-Z0-9_-]+)/);
-  if (link.includes("drive.google.com") && m) {
-    return `https://drive.usercontent.google.com/download?id=${m[1]}&export=download&confirm=t`;
-  }
-  return link; // already direct, or a GitHub/other link
 }
 
 // ============================================================
@@ -712,51 +456,6 @@ ${list}`;
   }
 }
 
-// Find an indexed file by its EXACT name within a given doc-type folder.
-// Folder is matched via the catalogue-map's folderToDocType (handles
-// "Catalogues"/"Catalogue" and "IOM"/"IOMs"). Filename match is exact, but
-// tolerant of a stray trailing space (Drive has "APCNVVH .pdf").
-function findExactFileInDoc(exactName, docType, files) {
-  if (!exactName) return null;
-  const want = exactName.trim().toLowerCase();
-  for (const f of files) {
-    if (f.name.trim().toLowerCase() !== want) continue;
-    if (folderToDocType(f.folder) === docType || docTypeFromFilename(f.name) === docType) return f;
-  }
-  return null;
-}
-
-// Find datasheet files for a series + code. Looks only inside that series'
-// datasheet subfolder(s) and matches files whose name contains the 5-digit
-// code. Returns an array of { name, id, condition } (condition = T1/T3/null).
-function findDatasheetFiles(series, code, files) {
-  const out = [];
-  for (const f of files) {
-    if (!datasheetFolderForSeries(f.folder, series)) continue;
-    // the code must appear in the filename
-    const re = new RegExp(`\\b${code}\\b`);
-    if (!re.test(f.name)) continue;
-    out.push({ name: f.name, id: f.id, condition: datasheetCondition(f.name) });
-  }
-  return out;
-}
-
-// Chiller datasheets: the 4-digit code is embedded in the model string
-// (e.g. "APCY5530TH..."), so word-boundaries don't apply. Match by checking
-// any path segment against the series' datasheet folder names and the code as
-// a substring of the normalized filename. Returns matching file objects.
-function findChillerDatasheetFiles(series, code, files) {
-  const aliases = DATASHEET_FOLDERS[series] || [];
-  const out = [];
-  for (const f of files) {
-    const segs = (f.folder || "").toLowerCase().split("/").map((s) => s.trim());
-    if (!segs.some((s) => aliases.includes(s))) continue;
-    const norm = f.name.toLowerCase().replace(/[\s\-_.]/g, "");
-    if (norm.includes(code)) out.push(f);
-  }
-  return out;
-}
-
 // Dispatch a chiller response descriptor from chillers.js (text / buttons /
 // datasheet fetch). Keeps logging to the matched model/intent only.
 async function sendChillerResponse(from, r) {
@@ -934,25 +633,6 @@ const EXT_MIME = {
 function mimeFromName(name) {
   const ext = (name.split(".").pop() || "").toLowerCase();
   return EXT_MIME[ext] || "application/octet-stream";
-}
-
-// Download a file. Accepts either {link} or {fileId}. For Drive, downloads
-// via the Drive API using the service account (reliable, no virus-scan page).
-async function downloadBytes({ link, fileId }) {
-  const id = fileId || (link ? driveFileId(link) : null);
-
-  if (id) {
-    const drive = await getDrive();
-    const res = await drive.files.get(
-      { fileId: id, alt: "media", supportsAllDrives: true },
-      { responseType: "arraybuffer" }
-    );
-    return Buffer.from(res.data);
-  }
-
-  // Non-Drive link: direct HTTP download.
-  const r = await axios.get(link, { responseType: "arraybuffer", maxRedirects: 5 });
-  return Buffer.from(r.data);
 }
 
 // Sanity check: a real PDF starts with "%PDF". Throws if filename says PDF
@@ -1160,15 +840,6 @@ app.get("/webhook", (req, res) => {
   }
   return res.sendStatus(403);
 });
-
-// Clean display name: strip _IOM / _catalogue suffix and extension.
-function displayName(file) {
-  return file.name
-    .replace(/_IOM\.pdf$/i, "")
-    .replace(/_catalogue\.pdf$/i, "")
-    .replace(/\.pdf$/i, "")
-    .trim();
-}
 
 // Send multiple file matches smartly:
 //   1 match  → send it directly
