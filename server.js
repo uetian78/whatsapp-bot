@@ -628,7 +628,7 @@ async function sendFileOptions(to, matchedFiles, prompt, autoSendSingle = true) 
     const rows = matchedFiles.map((f) => ({
       id: `fileid|${f.id}`,
       title: displayName(f).slice(0, 24),
-      description: f.name.length > 24 ? f.name : undefined,
+      description: displayName(f).length > 24 ? f.name : undefined,
     }));
     return sendList(to, prompt || "I found several matches:", "Choose a document", rows);
   }
