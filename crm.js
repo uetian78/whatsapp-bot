@@ -12,11 +12,7 @@
 //    the router uses — zero AI cost.
 // ============================================================
 
-const { parseDatasheetRequest, buildSelectionInteractive, parseSeriesRequest, interpretCode } = require("./products.js");
-const { routeChillerText } = require("./chillers.js");
-const { parseListRequest } = require("./product-facts.js");
-const { isMenuTrigger, smallTalkReply } = require("./menu.js");
-const { isVrfTrigger } = require("./vrf/trigger.js");
+const { classify } = require("./intents.js");
 
 const CRM_SHEET_ID = process.env.CRM_SHEET_ID || "1EbAXIZrjaelovg8APOaWhdg7FVnLxyO6-I2bMzIE2JM";
 const TZ = "Asia/Qatar";
@@ -34,35 +30,6 @@ function nowQatar() {
 
 function init({ getSheets }) {
   getSheetsClient = getSheets;
-}
-
-// ── Intent classification (deterministic, mirrors the router) ──
-function classify(text) {
-  const t = (text || "").trim();
-  if (!t) return "empty";
-  if (/^\[(image|document|audio|video|sticker)\]$/.test(t)) return "media";
-  if (t.startsWith("btn:")) return "button-tap";
-  if (/^\d+$/.test(t)) return "numbered-reply";
-  if (isMenuTrigger(t)) return "menu";
-  if (smallTalkReply(t)) return "small-talk";
-  if (/^stats$/i.test(t)) return "admin-stats";
-  if (isVrfTrigger(t)) return "vrf-selection";
-  if (/\bmtz\b/i.test(t)) return "mtz-selection";
-  // Mirror the router's order: list-units and spec questions are intercepted
-  // BEFORE chiller/datasheet/selection routing.
-  try { if (parseListRequest(t)) return "list-units"; } catch (_) {}
-  const mentionsDoc = /\b(datasheet|data ?sheet|catalog(?:ue)?|iom|manual|brochure|drawing|pdf|document|file)\b/i.test(t);
-  if (!mentionsDoc && (/\?/.test(t) || /\b(what|whats|what's|how many|how much|which|tell me|explain|compare|difference|capacity|cooling|airflow|eer|iplv|tonnage|weight|dimensions?|sound|dba|refrigerant)\b/i.test(t))) {
-    return "question";
-  }
-  try { if (routeChillerText(t)) return "chiller"; } catch (_) {}
-  try { if (parseDatasheetRequest(t)) return "datasheet"; } catch (_) {}
-  try { if (buildSelectionInteractive(t)) return "selection"; } catch (_) {}
-  try { if (parseSeriesRequest(t)) return "catalogue-iom"; } catch (_) {}
-  try { if (interpretCode(t)) return "model-code"; } catch (_) {}
-  if (mentionsDoc) return "doc-search";
-  if (/\b(price|cost|warranty|deliver|contact|hours)\b/i.test(t)) return "question";
-  return "other";
 }
 
 // ── Per-message pending records (collect outbounds, then commit) ──
