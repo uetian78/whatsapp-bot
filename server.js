@@ -46,7 +46,7 @@ const wa = require("./lib/wa.js");
 const {
   send, sendText, sendLongText, sendButtons, sendList, sendDocument, sendDriveFile,
   sendPdfBuffer, uploadMedia, uploadMediaBuffer, downloadWhatsAppMedia, markReadWithTyping,
-  NOT_FOUND_MSG, fileTooLargeMessage, WHATSAPP_MAX_FILE_BYTES,
+  NOT_FOUND_MSG, fileTooLargeMessage, WHATSAPP_MAX_FILE_BYTES, validatePdfBuffer,
 } = wa;
 
 const app = express();
