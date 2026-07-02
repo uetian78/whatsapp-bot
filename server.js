@@ -16,9 +16,7 @@ require("dns").setDefaultResultOrder("ipv4first");
 // ============================================================
 
 const express = require("express");
-const crypto = require("crypto");
 const axios = require("axios");
-const { google } = require("googleapis");
 const Anthropic = require("@anthropic-ai/sdk");
 const FormData = require("form-data");
 const { buildSelectionReply, buildSelectionInteractive, handleButtonTap, interpretCode, parseSeriesRequest, seriesMenu, parseDatasheetRequest, datasheetMenu, detectDocType } = require("./products.js");
@@ -54,8 +52,6 @@ const {
   PHONE_NUMBER_ID,
   ANTHROPIC_API_KEY,
   GOOGLE_SHEET_ID,
-  GOOGLE_SERVICE_ACCOUNT_JSON, // full service-account JSON as one env var
-  DRIVE_FOLDER_ID,             // parent folder the bot searches (recursively)
   PORT = 3000,
 } = process.env;
 
