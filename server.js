@@ -54,6 +54,21 @@ const {
   PORT = 3000,
 } = process.env;
 
+// Fail fast on required env; warn on optional. A missing required var
+// otherwise surfaces as a confusing mid-request auth error.
+const REQUIRED_ENV = ["VERIFY_TOKEN", "WHATSAPP_TOKEN", "PHONE_NUMBER_ID", "GOOGLE_SHEET_ID", "GOOGLE_SERVICE_ACCOUNT_JSON"];
+const OPTIONAL_ENV = ["ANTHROPIC_API_KEY", "DRIVE_FOLDER_ID", "ADMIN_NUMBERS", "CRM_SHEET_ID"];
+{
+  const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
+  if (missing.length) {
+    console.error(`❌ Missing required env vars: ${missing.join(", ")} — refusing to start.`);
+    process.exit(1);
+  }
+  for (const k of OPTIONAL_ENV.filter((k) => !process.env[k])) {
+    console.warn(`⚠️  Optional env var ${k} is not set — related features are disabled.`);
+  }
+}
+
 const GRAPH_URL = `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/messages`;
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 
@@ -2614,7 +2629,12 @@ app.post("/webhook", async (req, res) => {
     // 5) Nothing matched -> AI suggests related documents, or the standard apology
     await sendNotFoundWithSuggestions(from, text, files);
   } catch (err) {
-    console.error("Handler error:", err.message);
+    console.error("Handler error:", err.stack || err.message);
+    // Never leave the user with silence on a crash.
+    try {
+      const from = req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from;
+      if (from) await sendText(from, "⚠️ Something went wrong on my side. Please try that again — or type *menu* to see what I can do.");
+    } catch (_) { /* the apology itself failed; nothing more to do */ }
   }
 });
 
