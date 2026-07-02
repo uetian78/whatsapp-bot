@@ -1390,6 +1390,9 @@ async function handleMtzStep(from, s, text) {
 async function handleIncomingMessage(value, message) {
     const from = message.from;
 
+    // Blue-tick + "typing…" right away; clears when our reply sends.
+    markReadWithTyping(message.id); // fire-and-forget by design
+
     // CRM: log who asked what, when. The profile name rides along in the
     // webhook payload; the reply is attached later via the send() hook.
     const profileName = value?.contacts?.[0]?.profile?.name || "";
