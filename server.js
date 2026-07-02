@@ -797,11 +797,6 @@ function formatSplitUnit(unitNum, res) {
 }
 
 async function handleSplitStep(from, s, text) {
-  if (/^(cancel|stop|exit|quit|reset)\b/i.test(text.trim())) {
-    store.endFlow(from);
-    return sendText(from, "✅ Split selection cancelled. Type *Split Selection* anytime to restart.");
-  }
-
   // ── Step 1/3: choose brand ──────────────────────────────────
   if (s.step === "brand") {
     const t = text.trim();
@@ -1274,12 +1269,6 @@ function mtzRankSummary(reqTC, reqSC, db, wb, amb) {
 }
 
 async function handleMtzStep(from, s, text) {
-  const cancel = /^(cancel|stop|exit|quit|reset)\b/i.test(text.trim());
-  if (cancel) {
-    store.endFlow(from);
-    return sendText(from, "✅ MTZ selection cancelled. Type *MTZ* anytime to start again.");
-  }
-
   // ── Step 1: cooling load ────────────────────────────────────
   if (s.step === "load") {
     const load = parseLoad(text);
@@ -1540,6 +1529,19 @@ async function handleIncomingMessage(value, message) {
       return await sendList(from, m.body, m.buttonLabel, m.rows);
     }
 
+    // ── Global cancel: ends ANY active flow from anywhere. Each flow used to
+    // implement its own copy; this is now the single authority. (VRF keeps its
+    // internal "exit" handling too — vrf/ is upstream-mirrored, untouched.)
+    if (message.type === "text" && /^(cancel|stop|exit|quit|reset)$/i.test(message.text.body.trim())) {
+      const hadFlow = !!store.getFlow(from) || vrfSessions.has(from);
+      vrfSessions.delete(from);
+      store.endFlow(from);
+      if (hadFlow) {
+        return await sendText(from, "✅ Cancelled. Type *menu* to see everything I can do.");
+      }
+      // No active flow -> fall through (smallTalkReply gives the friendly bye).
+    }
+
     // ── VRF Selection session (handles text, image, and document messages) ──
     if (vrfSessions.has(from)) {
       const s = vrfSessions.get(from);
@@ -1596,10 +1598,6 @@ async function handleIncomingMessage(value, message) {
 
     if (flow?.type === "schedule") {
       const vText = message.type === "text" ? message.text.body.trim() : "";
-      if (/^(cancel|stop|exit|quit|reset)\b/i.test(vText)) {
-        store.endFlow(from);
-        return await sendText(from, "✅ Schedule selection cancelled.");
-      }
       return await handleScheduleStep(from, flow.data, message, vText);
     }
 
@@ -1709,6 +1707,13 @@ async function handleIncomingMessage(value, message) {
       }
       return await sendText(from, `Please reply with a number between 1 and ${options.length}, or type *menu*.`);
     }
+
+    // A bare number with no open menu/list would fall into document search and
+    // return nonsense. Nudge instead.
+    if (/^\d{1,2}$/.test(text)) {
+      return await sendText(from, "That menu or list has expired. Type *menu* to see your options, or just tell me what you need — e.g. *APMR catalogue*.");
+    }
+
     // Admin: "stats" -> usage summary from the CRM log. Restricted to
     // ADMIN_NUMBERS (comma-separated env var) when set; otherwise open
     // (internal tool). Falls through to normal routing for non-admins.
