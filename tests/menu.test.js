@@ -27,3 +27,16 @@ test("welcomeMenu lists every option and tipFor resolves each", () => {
   }
   assert.equal(tipFor(99), null);
 });
+
+test("welcomeMenuList builds API-safe rows for every option", () => {
+  const { welcomeMenuList } = require("../menu.js");
+  const m = welcomeMenuList("Hassan", false);
+  assert.equal(m.rows.length, MENU_OPTIONS.length);
+  for (const r of m.rows) {
+    assert.match(r.id, /^menu\|\d+$/);
+    assert.ok(r.title.length > 0 && r.title.length <= 24, `title too long: ${r.title}`);
+    assert.ok(!r.description || r.description.length <= 72);
+  }
+  assert.ok(m.buttonLabel.length <= 20);
+  assert.match(m.body, /Welcome, Hassan/);
+});

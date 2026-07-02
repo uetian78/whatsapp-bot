@@ -43,6 +43,8 @@ const MENU_OPTIONS = [
   {
     n: 1,
     title: "Document Search (Catalogues & IOM)",
+    short: "Documents",
+    desc: "Catalogues, IOM manuals & model datasheets",
     tip:
       "*📄 Document Search*\n" +
       "Get a catalogue, IOM manual, or model datasheet — I'll send the PDF to your chat.\n\n" +
@@ -57,6 +59,8 @@ const MENU_OPTIONS = [
   {
     n: 2,
     title: "Quick Selection Tools (Package / AHU / Chiller)",
+    short: "Quick Selection",
+    desc: "Capacity in → model out (package, chiller, FCU)",
     tip:
       "*🛠️ Quick Selection Tools*\n" +
       "Tell me the capacity and I'll pick the model for you.\n\n" +
@@ -69,6 +73,8 @@ const MENU_OPTIONS = [
   {
     n: 3,
     title: "Guided Selectors (Schedule / VRF / MTZ / Split)",
+    short: "Guided Selectors",
+    desc: "Schedule · VRF · MTZ · Split — step-by-step + PDF",
     tip:
       "*🧭 Guided Selectors — Step-by-step with PDF output*\n\n" +
       "━━━━━━━━━━━━━━\n" +
@@ -103,6 +109,8 @@ const MENU_OPTIONS = [
   {
     n: 4,
     title: "Help (how to use this bot)",
+    short: "Help",
+    desc: "How to ask, with copy-paste examples",
     tip:
       "*🙋 How to use this assistant*\n" +
       "Just type what you need — three ways:\n\n" +
@@ -145,4 +153,26 @@ function tipFor(n, options = MENU_OPTIONS) {
   return opt ? opt.tip : null;
 }
 
-module.exports = { isMenuTrigger, smallTalkReply, welcomeMenu, tipFor, MENU_HINT, MENU_OPTIONS };
+// Native list-message version of the welcome menu. Rows tap straight into the
+// same tips as the numbered replies (ids "menu|<n>"), so both entry paths work.
+function welcomeMenuList(name, returning) {
+  const first = (name || "").trim().split(/\s+/)[0];
+  const hello = first
+    ? (returning ? `👋 *Welcome back, ${first}!*` : `👋 *Welcome, ${first}!*`)
+    : "👋 *Welcome!*";
+  const body =
+    `${hello}\n_Mannai HVAC Assistant_ — catalogues, datasheets & equipment selections.\n\n` +
+    "Tap below to see what I can do — or just type what you need, e.g. *APMR catalogue* · *Split Selection*.";
+  return {
+    body,
+    buttonLabel: "What I can do",
+    rows: MENU_OPTIONS.map((o) => ({
+      id: `menu|${o.n}`,
+      title: `${ICON[o.n] || ""} ${o.short}`.trim().slice(0, 24),
+      description: (o.desc || "").slice(0, 72),
+    })),
+    options: MENU_OPTIONS,
+  };
+}
+
+module.exports = { isMenuTrigger, smallTalkReply, welcomeMenu, welcomeMenuList, tipFor, MENU_HINT, MENU_OPTIONS };

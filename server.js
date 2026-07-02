@@ -25,7 +25,7 @@ const { routeChillerText, handleChillerButton } = require("./chillers.js");
 const { findBrandDocs } = require("./brand-docs.js");
 const { findFilesByName } = require("./lib/find-files-by-name.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
-const { isMenuTrigger, smallTalkReply, welcomeMenu, tipFor, MENU_HINT } = require("./menu.js");
+const { isMenuTrigger, smallTalkReply, welcomeMenu, welcomeMenuList, tipFor, MENU_HINT } = require("./menu.js");
 const { PRODUCT_KB, parseListRequest, parseUnsupportedSeriesListRequest, buildUnitList } = require("./product-facts.js");
 const crm = require("./crm.js");
 const { generateMtzPdf } = require("./mtz-pdf.js");
@@ -1400,13 +1400,29 @@ async function handleIncomingMessage(value, message) {
       message.type === "text" ? message.text.body.trim()
       : message.type === "interactive" && message.interactive?.type === "button_reply"
         ? `btn:${message.interactive.button_reply.title || message.interactive.button_reply.id}`
+      : message.type === "interactive" && message.interactive?.type === "list_reply"
+        ? `btn:${message.interactive.list_reply.title || message.interactive.list_reply.id}`
       : `[${message.type}]`;
     crm.logInbound({ from, name: profileName, text: inboundText });
 
-    // --- Button tap? (interactive reply) ---
-    if (message.type === "interactive" && message.interactive?.type === "button_reply") {
-      const btnId = message.interactive.button_reply.id;
+    // --- Button tap or list-row tap? (interactive reply) ---
+    // A list-row tap carries the same kind of id as a button tap — normalize
+    // and let the single button-id dispatcher below handle both.
+    const tapId =
+      message.type === "interactive" && message.interactive?.type === "button_reply" ? message.interactive.button_reply.id
+      : message.type === "interactive" && message.interactive?.type === "list_reply" ? message.interactive.list_reply.id
+      : null;
+    if (tapId) {
+      const btnId = tapId;
       console.log(`🔘 ${from} tapped: ${btnId}`);
+
+      // Menu row tap -> that section's tip card.
+      if (btnId.startsWith("menu|")) {
+        const n = parseInt(btnId.split("|")[1], 10);
+        const tip = tipFor(n);
+        if (tip) return await sendText(from, tip);
+        return; // stale/unknown row
+      }
 
       // Chiller buttons (chmodel|, chsel|, chds|) -> series pick / spec / datasheet.
       const chillerBtn = handleChillerButton(btnId);
@@ -1510,9 +1526,9 @@ async function handleIncomingMessage(value, message) {
       vrfSessions.delete(from);
       store.clearAll(from);
       console.log(`📋 welcome menu (global escape) -> ${from}`);
-      const m = welcomeMenu(profileName, crm.isKnownContact(from));
-      store.setCtx(from, "menu", { options: m.options }, 15 * 60 * 1000);
-      return await sendText(from, m.text);
+      const m = welcomeMenuList(profileName, crm.isKnownContact(from));
+      store.setCtx(from, "menu", { options: m.options }, 15 * 60 * 1000); // numbered replies still work
+      return await sendList(from, m.body, m.buttonLabel, m.rows);
     }
 
     // ── VRF Selection session (handles text, image, and document messages) ──
@@ -1699,9 +1715,9 @@ async function handleIncomingMessage(value, message) {
     if (isMenuTrigger(text)) {
       console.log(`📋 welcome menu -> ${from}`);
       store.clearCtx(from, "list");
-      const m = welcomeMenu(profileName, crm.isKnownContact(from));
-      store.setCtx(from, "menu", { options: m.options }, 15 * 60 * 1000);
-      return await sendText(from, m.text);
+      const m = welcomeMenuList(profileName, crm.isKnownContact(from));
+      store.setCtx(from, "menu", { options: m.options }, 15 * 60 * 1000); // numbered replies still work
+      return await sendList(from, m.body, m.buttonLabel, m.rows);
     }
     // Conversational closing / thanks / ack ("bye", "exit", "thanks", "ok") ->
     // reply politely and stop. Must run BEFORE the "searching" notice and the
