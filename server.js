@@ -100,6 +100,7 @@ try { productDriveIds = require('./product-drive-ids.json'); } catch (_) {}
 // Unified per-user session state (guided flows + auxiliary ctx). Replaces the
 // 8 previous ad-hoc per-user stores that each had their own TTL and expiry logic.
 const store = require("./lib/session-store.js");
+const { enqueue } = require("./lib/user-queue.js");
 
 const VRF_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
 
@@ -1386,19 +1387,7 @@ async function handleMtzStep(from, s, text) {
 // ============================================================
 //  WEBHOOK RECEIVER
 // ============================================================
-app.post("/webhook", async (req, res) => {
-  res.sendStatus(200);
-  try {
-    const value = req.body.entry?.[0]?.changes?.[0]?.value;
-    const message = value?.messages?.[0];
-    if (!message) return;
-
-    // Drop WhatsApp retries (same message.id re-delivered during cold start).
-    if (message.id && isDuplicate(message.id)) {
-      console.log(`⚡ Duplicate message ${message.id} — skipped`);
-      return;
-    }
-
+async function handleIncomingMessage(value, message) {
     const from = message.from;
 
     // CRM: log who asked what, when. The profile name rides along in the
@@ -2024,14 +2013,31 @@ app.post("/webhook", async (req, res) => {
 
     // 5) Nothing matched -> AI suggests related documents, or the standard apology
     await sendNotFoundWithSuggestions(from, text, files);
-  } catch (err) {
-    console.error("Handler error:", err.stack || err.message);
-    // Never leave the user with silence on a crash.
-    try {
-      const from = req.body?.entry?.[0]?.changes?.[0]?.value?.messages?.[0]?.from;
-      if (from) await sendText(from, "⚠️ Something went wrong on my side. Please try that again — or type *menu* to see what I can do.");
-    } catch (_) { /* the apology itself failed; nothing more to do */ }
+}
+
+app.post("/webhook", (req, res) => {
+  res.sendStatus(200);
+  const value = req.body.entry?.[0]?.changes?.[0]?.value;
+  const message = value?.messages?.[0];
+  if (!message) return;
+
+  // Drop WhatsApp retries (same message.id re-delivered during cold start).
+  if (message.id && isDuplicate(message.id)) {
+    console.log(`⚡ Duplicate message ${message.id} — skipped`);
+    return;
   }
+
+  enqueue(message.from, async () => {
+    try {
+      await handleIncomingMessage(value, message);
+    } catch (err) {
+      console.error("Handler error:", err.stack || err.message);
+      // Never leave the user with silence on a crash.
+      try {
+        await sendText(message.from, "⚠️ Something went wrong on my side. Please try that again — or type *menu* to see what I can do.");
+      } catch (_) { /* the apology itself failed; nothing more to do */ }
+    }
+  });
 });
 
 app.get("/", (_, res) => res.send("WhatsApp AI bot running ✅"));
