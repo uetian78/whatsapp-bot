@@ -698,7 +698,9 @@ git add lib/wa.js tests/wa-builders.test.js server.js
 git commit -m "refactor: extract WhatsApp transport to lib/wa with tested payload builders"
 ```
 
----### Task 6: Shared intent table (`intents.js`) — kill the router/CRM mirror
+---
+
+### Task 6: Shared intent table (`intents.js`) — kill the router/CRM mirror
 
 `crm.classify()` hand-mirrors the webhook's routing order ("classify() must mirror router order" is a documented landmine). Extract the ordered predicates into one table both sides consume, with a test that locks the order.
 
