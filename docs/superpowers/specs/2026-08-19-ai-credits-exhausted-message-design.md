@@ -46,7 +46,7 @@ Owns all billing-state knowledge so `server.js` gains none of its own.
 | `markExhausted()` | Latches the exhausted state with a timestamp. |
 | `isExhausted()` | `true` while inside the 10-minute TTL; auto-clears afterwards. |
 | `resetCredits()` | Test-only latch reset. |
-| `PREMIUM_UNAVAILABLE_MSG` | The customer-facing copy, as one editable constant. |
+| `creditsExhaustedMessage(name)` | The customer-facing copy, greeting the account by name. |
 
 `429` (rate limit) and `401` (bad or revoked key) are **not** credit errors. A rate
 limit is transient and retrying works; a bad key is an operator problem that must not
@@ -79,13 +79,18 @@ logging, and PDF delivery.
 
 ### Message copy
 
-> ⚡ AI-powered answers and smart file search are premium features and are currently
-> unavailable.
+Reaches only **paid** accounts — a free account is caught by the earlier plan check
+and gets the upgrade message instead. Since this person already pays, the copy must
+not tell them to upgrade:
+
+> Hi *Hassan* 👋
 >
-> Please move to the PAID plan to get access to premium features.
+> Your AI credits are *0* — premium search features are paused until credits are
+> added.
 >
-> You can still get files — just type the **exact file name** (for example `APMR-A`
-> or `ACMR IOM`). Type `menu` to see everything I can do.
+> *OR*
+>
+> Type the exact file name to get it (for example "APMR-A" or "ACMR IOM").
 
 ### Error handling
 
@@ -107,7 +112,7 @@ network:
 
 ## Known limitation
 
-The credits are the bot owner's, not the customer's, so "move to the PAID plan" may
-read to a customer as though they personally owe money. The wording was chosen
-deliberately by the owner; changing it is a one-line edit to
-`PREMIUM_UNAVAILABLE_MSG`.
+The credits are the bot owner's, not the customer's, so "Your AI credits are 0" may
+read to a paying customer as though they personally need to top something up, and
+prompt them to ask the owner how. The wording was chosen deliberately by the owner;
+changing it is a one-line edit to `creditsExhaustedMessage()`.

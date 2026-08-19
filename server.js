@@ -24,7 +24,7 @@ const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSerie
 const { routeChillerText, handleChillerButton } = require("./chillers.js");
 const { findBrandDocs } = require("./brand-docs.js");
 const { findFilesByName } = require("./lib/find-files-by-name.js");
-const { isCreditError, markExhausted, isExhausted, PREMIUM_UNAVAILABLE_MSG } = require("./lib/ai-credits.js");
+const { isCreditError, markExhausted, isExhausted, creditsExhaustedMessage } = require("./lib/ai-credits.js");
 const { parseAccounts, runWithAccount, currentAccount, aiAllowed, freePlanMessage } = require("./lib/accounts.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
 const { isMenuTrigger, smallTalkReply, welcomeMenu, welcomeMenuList, tipFor, MENU_HINT } = require("./menu.js");
@@ -673,13 +673,13 @@ async function sendNotFoundWithSuggestions(to, text, files) {
     return sendText(to, freePlanMessage(account?.name));
   }
 
-  // Out of Anthropic credit: every step below (related-files, guidance) is a
+  // Paid account, but the Anthropic balance is empty: every step below is a
   // Claude call that would fail, leaving the user on a generic menu with no
-  // explanation. Say what's unavailable and point at the exact-filename path,
-  // which is pure filename matching and still works.
+  // explanation. Say the credits are gone and point at the exact-filename
+  // path, which is pure filename matching and still works.
   if (isExhausted()) {
-    console.log(`💳 AI credits exhausted -> premium message for "${text}"`);
-    return sendText(to, PREMIUM_UNAVAILABLE_MSG);
+    console.log(`💳 AI credits exhausted -> credits message for "${text}"`);
+    return sendText(to, creditsExhaustedMessage(currentAccount()?.name));
   }
 
   const fileList = files || (await listFolderFiles());

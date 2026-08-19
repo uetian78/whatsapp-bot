@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const {
   isCreditError, markExhausted, isExhausted, resetCredits,
-  PREMIUM_UNAVAILABLE_MSG, EXHAUSTED_TTL_MS,
+  creditsExhaustedMessage, EXHAUSTED_TTL_MS,
 } = require("../lib/ai-credits.js");
 
 // The real shape the Anthropic SDK throws when the balance hits zero:
@@ -83,8 +83,23 @@ test("latch expires after the TTL so a top-up recovers by itself", () => {
   }
 });
 
-test("customer message names the premium upgrade and the exact-filename path", () => {
-  assert.match(PREMIUM_UNAVAILABLE_MSG, /PAID plan/);
-  assert.match(PREMIUM_UNAVAILABLE_MSG, /exact file name/i);
-  assert.match(PREMIUM_UNAVAILABLE_MSG, /menu/i);
+test("credits message greets by name, says credits are 0, gives the escape hatch", () => {
+  const msg = creditsExhaustedMessage("Hassan");
+  assert.match(msg, /Hassan/);
+  assert.match(msg, /\*0\*/, "states the balance is zero");
+  assert.match(msg, /exact file name/i);
+});
+
+// This person already pays. Telling them to upgrade would be nonsense, and
+// was the bug this message replaced.
+test("credits message never tells a paying customer to upgrade", () => {
+  const msg = creditsExhaustedMessage("Hassan");
+  assert.doesNotMatch(msg, /upgrade/i);
+  assert.doesNotMatch(msg, /move to the \*?PAID/i);
+});
+
+test("credits message still reads correctly with no name on file", () => {
+  const msg = creditsExhaustedMessage("");
+  assert.doesNotMatch(msg, /Hi \*\*/, "no empty bold greeting");
+  assert.match(msg, /\*0\*/);
 });
