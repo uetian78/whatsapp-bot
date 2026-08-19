@@ -24,6 +24,8 @@ const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSerie
 const { routeChillerText, handleChillerButton } = require("./chillers.js");
 const { findBrandDocs } = require("./brand-docs.js");
 const { findFilesByName } = require("./lib/find-files-by-name.js");
+const { isCreditError, markExhausted, isExhausted, PREMIUM_UNAVAILABLE_MSG } = require("./lib/ai-credits.js");
+const { parseAccounts, runWithAccount, currentAccount, aiAllowed, freePlanMessage } = require("./lib/accounts.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
 const { isMenuTrigger, smallTalkReply, welcomeMenu, welcomeMenuList, tipFor, MENU_HINT } = require("./menu.js");
 const { PRODUCT_KB, parseListRequest, parseUnsupportedSeriesListRequest, buildUnitList } = require("./product-facts.js");
@@ -123,14 +125,16 @@ function isDuplicate(msgId) {
 
 
 // Simple cache so we don't hit the Sheet on every single message
-let cache = { rules: [], knowledge: [], allowed: [], ts: 0 };
+let cache = { rules: [], knowledge: [], allowed: [], accounts: new Map(), ts: 0 };
 const CACHE_MS = 60 * 1000; // refresh at most once per minute
 
 async function loadSheet() {
   if (Date.now() - cache.ts < CACHE_MS && cache.rules.length) return cache;
 
   const sheets = await getSheets();
-  const ranges = ["Rules!A2:F", "Knowledge!A2:B", "Allowed!A2:A"];
+  // Allowed is A2:C — A = number, B = name, C = plan (paid/free). Extra
+  // columns are additive: rows that only fill A keep working as before.
+  const ranges = ["Rules!A2:F", "Knowledge!A2:B", "Allowed!A2:C"];
   const res = await sheets.spreadsheets.values.batchGet({
     spreadsheetId: GOOGLE_SHEET_ID,
     ranges,
@@ -155,10 +159,17 @@ async function loadSheet() {
     .filter((r) => r[0] || r[1])
     .map((r) => `${r[0] ? r[0] + ": " : ""}${r[1] || ""}`);
 
-  const allowed = allowRows.map((r) => (r[0] || "").replace(/\D/g, "")).filter(Boolean);
+  // accounts carries name + plan per number; `allowed` stays the plain list of
+  // numbers so the existing gate below is untouched.
+  const accounts = parseAccounts(allowRows);
+  const allowed = [...accounts.keys()];
 
-  cache = { rules, knowledge, allowed, ts: Date.now() };
-  console.log(`🔄 Sheet loaded: ${rules.length} rules, ${knowledge.length} knowledge rows`);
+  cache = { rules, knowledge, allowed, accounts, ts: Date.now() };
+  const paidCount = [...accounts.values()].filter((a) => a.paid).length;
+  console.log(
+    `🔄 Sheet loaded: ${rules.length} rules, ${knowledge.length} knowledge rows, ` +
+    `${accounts.size} account(s) (${paidCount} paid)`
+  );
   return cache;
 }
 
@@ -217,7 +228,7 @@ const BOT_CAPABILITIES =
 //  Answers ONLY from the Knowledge tab. Refuses to invent.
 // ============================================================
 async function askClaude(question, knowledge) {
-  if (!ANTHROPIC_API_KEY) return null;
+  if (!ANTHROPIC_API_KEY || isExhausted() || !aiAllowed()) return null;
 
   const knowledgeText = knowledge.join("\n");
 
@@ -250,6 +261,7 @@ ${PRODUCT_KB}
     return msg.content?.[0]?.text?.trim() || null;
   } catch (err) {
     console.error("Claude error:", err.message);
+    if (isCreditError(err)) markExhausted();
     return null;
   }
 }
@@ -258,7 +270,7 @@ ${PRODUCT_KB}
 // misses (handles synonyms, e.g. "AHU" / "air handling unit" -> MAH.pdf).
 // Returns the matching file object, or null if none fits.
 async function aiMatchFile(text, files) {
-  if (!ANTHROPIC_API_KEY || !files.length) return null;
+  if (!ANTHROPIC_API_KEY || isExhausted() || !aiAllowed() || !files.length) return null;
 
   // Give Claude the list of filenames (without extension) to choose from.
   const list = files.map((f, i) => `${i + 1}. ${f.name.replace(/\.[^.]+$/, "")}`).join("\n");
@@ -303,6 +315,7 @@ ${list}`;
     return picked.length ? picked : null; // array of matches
   } catch (err) {
     console.error("AI match error:", err.message);
+    if (isCreditError(err)) markExhausted();
     return null;
   }
 }
@@ -312,7 +325,7 @@ ${list}`;
 // alternatives instead of a dead end. Returns [] (never null) when nothing
 // clears the relevance bar, so callers can do `if (hits.length)` directly.
 async function aiRelatedFiles(text, files) {
-  if (!ANTHROPIC_API_KEY || !files.length) return [];
+  if (!ANTHROPIC_API_KEY || isExhausted() || !aiAllowed() || !files.length) return [];
 
   const list = files.map((f, i) => `${i + 1}. ${f.name.replace(/\.[^.]+$/, "")}`).join("\n");
 
@@ -351,6 +364,7 @@ ${list}`;
     return parseRelatedFilesResponse(out, files);
   } catch (err) {
     console.error("AI related-files error:", err.message);
+    if (isCreditError(err)) markExhausted();
     return [];
   }
 }
@@ -363,7 +377,7 @@ ${list}`;
 // it and returns the sentinel "SHOW_MENU". Returns the guidance string, or
 // null when the caller should fall back to the full capabilities menu.
 async function aiGuidance(text) {
-  if (!ANTHROPIC_API_KEY) return null;
+  if (!ANTHROPIC_API_KEY || isExhausted() || !aiAllowed()) return null;
 
   const system = `You are the Mannai HVAC WhatsApp assistant. A customer's message did NOT match any document or command. Act like a helpful human colleague: figure out what they probably want and point them to a command that actually works.
 
@@ -398,6 +412,7 @@ RULES:
     return out;
   } catch (err) {
     console.error("AI guidance error:", err.message);
+    if (isCreditError(err)) markExhausted();
     return null;
   }
 }
@@ -409,7 +424,7 @@ RULES:
 // `folderFiles` are already filtered to the right folder.
 // Returns one file object, or null.
 async function aiMatchSeriesFile(series, docType, folderFiles) {
-  if (!ANTHROPIC_API_KEY || !folderFiles.length) return null;
+  if (!ANTHROPIC_API_KEY || isExhausted() || !aiAllowed() || !folderFiles.length) return null;
 
   const list = folderFiles
     .map((f, i) => `${i + 1}. ${f.name.replace(/\.[^.]+$/, "")}`)
@@ -442,6 +457,7 @@ ${list}`;
     return folderFiles[n - 1];
   } catch (err) {
     console.error("AI series-match error:", err.message);
+    if (isCreditError(err)) markExhausted();
     return null;
   }
 }
@@ -648,6 +664,24 @@ async function sendFileOptions(to, matchedFiles, prompt, autoSendSingle = true) 
 // caller has one in scope; otherwise it's fetched here (cheap:
 // listFolderFiles() caches for FILE_CACHE_MS).
 async function sendNotFoundWithSuggestions(to, text, files) {
+  // Free account: the steps below are all Claude calls this number isn't
+  // entitled to, so they'd return empty and dump the user on a generic menu.
+  // Tell them why and point at the exact-filename path, which still works.
+  if (!aiAllowed()) {
+    const account = currentAccount();
+    console.log(`🔒 Free account ${account?.number} -> upgrade message for "${text}"`);
+    return sendText(to, freePlanMessage(account?.name));
+  }
+
+  // Out of Anthropic credit: every step below (related-files, guidance) is a
+  // Claude call that would fail, leaving the user on a generic menu with no
+  // explanation. Say what's unavailable and point at the exact-filename path,
+  // which is pure filename matching and still works.
+  if (isExhausted()) {
+    console.log(`💳 AI credits exhausted -> premium message for "${text}"`);
+    return sendText(to, PREMIUM_UNAVAILABLE_MSG);
+  }
+
   const fileList = files || (await listFolderFiles());
   const hits = await aiRelatedFiles(text, fileList);
   console.log(`🔎 Related-files fallback for "${text}": ${hits.length} suggestion(s)`);
@@ -1393,7 +1427,9 @@ async function handleIncomingMessage(value, message) {
 
     // CRM: log who asked what, when. The profile name rides along in the
     // webhook payload; the reply is attached later via the send() hook.
-    const profileName = value?.contacts?.[0]?.profile?.name || "";
+    // The name you set in the Sheet's Allowed tab wins over the WhatsApp
+    // profile name — it's the one you control and keep accurate.
+    const profileName = currentAccount()?.name || value?.contacts?.[0]?.profile?.name || "";
     const inboundText =
       message.type === "text" ? message.text.body.trim()
       : message.type === "interactive" && message.interactive?.type === "button_reply"
@@ -2062,7 +2098,12 @@ app.post("/webhook", (req, res) => {
 
   enqueue(message.from, async () => {
     try {
-      await handleIncomingMessage(value, message);
+      // Resolve who's asking and pin it to this request's async context, so
+      // every nested Claude call knows their plan without a threaded flag.
+      // loadSheet() is cached for CACHE_MS, so this lookup is effectively free.
+      const { accounts } = await loadSheet();
+      const account = accounts.get(String(message.from).replace(/\D/g, "")) || null;
+      await runWithAccount(account, () => handleIncomingMessage(value, message));
     } catch (err) {
       console.error("Handler error:", err.stack || err.message);
       // Never leave the user with silence on a crash.
