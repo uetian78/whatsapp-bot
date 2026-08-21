@@ -10,7 +10,7 @@ const { parseListRequest } = require("./product-facts.js");
 const { parseSplitListRequest } = require("./split-engine.js");
 const { isMenuTrigger, smallTalkReply } = require("./menu.js");
 const { isVrfTrigger } = require("./vrf/trigger.js");
-const { isSearchAllTrigger } = require("./lib/broad-search.js");
+const { isSearchAllTrigger, isAiSearchTrigger } = require("./lib/broad-search.js");
 
 const MENTIONS_DOC = /\b(datasheet|data ?sheet|catalog(?:ue)?|iom|manual|brochure|drawing|pdf|document|file)\b/i;
 const QUESTION_WORDS = /\b(what|whats|what's|how many|how much|which|tell me|explain|compare|difference|capacity|cooling|airflow|eer|iplv|tonnage|weight|dimensions?|sound|dba|refrigerant)\b/i;
@@ -30,6 +30,7 @@ const INTENTS = [
   { name: "admin-stats",        match: (t) => /^stats$/i.test(t) },
   { name: "small-talk",         match: (t) => !!smallTalkReply(t) },
   { name: "search-all",         match: (t) => isSearchAllTrigger(t) },
+  { name: "ai-search",          match: (t) => isAiSearchTrigger(t) },
   { name: "split-list",         match: safe(parseSplitListRequest) },
   { name: "list-units",         match: safe(parseListRequest) },
   { name: "question",           match: (t) => !MENTIONS_DOC.test(t) && (/\?/.test(t) || QUESTION_WORDS.test(t)) },

@@ -24,7 +24,7 @@ const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSerie
 const { routeChillerText, handleChillerButton } = require("./chillers.js");
 const { findBrandDocs } = require("./brand-docs.js");
 const { findFilesByName } = require("./lib/find-files-by-name.js");
-const { hasSearchableExtras, rankFiles, isSearchAllTrigger, SEARCH_ALL_HINT } = require("./lib/broad-search.js");
+const { hasSearchableExtras, rankFiles, isSearchAllTrigger, SEARCH_ALL_HINT, isAiSearchTrigger, AI_SEARCH_HINT } = require("./lib/broad-search.js");
 const { isCreditError, markExhausted, isExhausted, creditsExhaustedMessage } = require("./lib/ai-credits.js");
 const { parseAccounts, runWithAccount, currentAccount, aiAllowed, freePlanMessage } = require("./lib/accounts.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
@@ -1811,12 +1811,41 @@ async function handleIncomingMessage(value, message) {
       const hits = rankFiles(lastQuery, await listFolderFiles(), 10);
       console.log(`🗂️  search-all "${lastQuery}" -> ${hits.length} hit(s)`);
       if (!hits.length) {
+        // Free scan exhausted. NOW offer the paid option — never before, so a
+        // Claude call only happens once the free path has genuinely failed.
         return await sendText(from,
-          `I searched every file in the Drive folder and found nothing close to "${lastQuery}".\n\n` +
-          "Try a word from the document's title, or email hassan.saleem@mannai.com.qa.");
+          `I searched every file name and folder in the Drive folder and found nothing close to "${lastQuery}".\n\n` +
+          (aiAllowed()
+            ? AI_SEARCH_HINT
+            : "Try a word from the document's title, or email hassan.saleem@mannai.com.qa."));
       }
       return await sendFileOptions(from, hits,
         `Closest matches for "${lastQuery}" across all folders:`, false);
+    }
+
+    // ── "ai search": last resort, costs a Claude call ────────────
+    // Only reachable after the free scan missed. Reads the whole index, not a
+    // doc-type-filtered slice, so it can reach Submittal Files and the like.
+    if (isAiSearchTrigger(text)) {
+      const lastQuery = store.getCtx(from, "lastquery");
+      if (!lastQuery) {
+        return await sendText(from, "Tell me what to look for first, then reply *ai search*.");
+      }
+      if (!aiAllowed()) {
+        console.log(`🔒 Free account tried ai search for "${lastQuery}"`);
+        return await sendText(from, freePlanMessage(currentAccount()?.name));
+      }
+      await announceSearch(`🤖 Asking AI to look through every file for "${lastQuery}"…`);
+      const files = await listFolderFiles();
+      const hits = await aiRelatedFiles(lastQuery, files);
+      console.log(`🤖 ai-search "${lastQuery}" -> ${hits.length} hit(s)`);
+      if (!hits.length) {
+        return await sendText(from,
+          `Even AI couldn't find anything matching "${lastQuery}" in the Drive folder.\n\n` +
+          "It may not be uploaded yet. Email hassan.saleem@mannai.com.qa and we'll get it to you.");
+      }
+      return await sendFileOptions(from, hits,
+        `AI's closest matches for "${lastQuery}":`, false);
     }
 
     // Remember what they actually asked for, so a later "search all" knows

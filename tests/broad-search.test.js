@@ -1,8 +1,10 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const {
-  meaningfulTokens, hasSearchableExtras, rankFiles, isSearchAllTrigger,
+  meaningfulTokens, hasSearchableExtras, rankFiles,
+  isSearchAllTrigger, isAiSearchTrigger,
 } = require("../lib/broad-search.js");
+const { isIndexableFile, displayName } = require("../lib/drive-index.js");
 
 // A slice of the real Drive layout (folder names taken from the live index
 // dump), plus the coil connection sheet this feature exists to find.
@@ -91,4 +93,61 @@ test("search-all trigger matches its phrasings and nothing else", () => {
   for (const t of ["search all fcu files", "fcu coil connection sheet", "search", ""]) {
     assert.equal(isSearchAllTrigger(t), false, `${JSON.stringify(t)} should not trigger`);
   }
+});
+
+test("ai-search trigger matches its phrasings and nothing else", () => {
+  for (const t of ["ai search", "AI Search", "search ai", "search with ai",
+                   "deep search", "ask ai", "  ai search  "]) {
+    assert.equal(isAiSearchTrigger(t), true, `${JSON.stringify(t)} should trigger`);
+  }
+  for (const t of ["ai search for fcu", "search all", "ai", ""]) {
+    assert.equal(isAiSearchTrigger(t), false, `${JSON.stringify(t)} should not trigger`);
+  }
+});
+
+// The two escape hatches must stay distinct — "search all" is free, "ai
+// search" costs a call, and one must never fire for the other's phrasing.
+test("the free and AI triggers never overlap", () => {
+  for (const t of ["search all", "search everything", "search drive"]) {
+    assert.equal(isSearchAllTrigger(t), true);
+    assert.equal(isAiSearchTrigger(t), false);
+  }
+  for (const t of ["ai search", "deep search", "ask ai"]) {
+    assert.equal(isAiSearchTrigger(t), true);
+    assert.equal(isSearchAllTrigger(t), false);
+  }
+});
+
+// The actual root cause of the reported bug: the file is a spreadsheet, and
+// the index only ever collected PDFs and images.
+test("spreadsheets and Word docs are indexed, native Google files are not", () => {
+  assert.equal(isIndexableFile({ name: "FCU Coil Connection Sheet.xlsx" }), true);
+  assert.equal(isIndexableFile({ name: "FCU Coil Connection Sheet.xls" }), true);
+  assert.equal(isIndexableFile({ name: "Draft Warranty.docx" }), true);
+  assert.equal(isIndexableFile({ name: "APMR-A.pdf" }), true);
+  assert.equal(isIndexableFile({ name: "cert.jpeg" }), true);
+
+  // Not sendable / not a document.
+  assert.equal(isIndexableFile({ name: "notes.txt" }), false);
+  assert.equal(isIndexableFile({ name: "Sub", mimeType: "application/vnd.google-apps.folder" }), false);
+  // Native Google Sheet: no extension, needs an export step, so indexing it
+  // would offer the user a file the bot then fails to send.
+  assert.equal(isIndexableFile({ name: "Coil Sheet", mimeType: "application/vnd.google-apps.spreadsheet" }), false);
+  assert.equal(isIndexableFile(null), false);
+});
+
+test("display name drops the extension for every indexed type", () => {
+  assert.equal(displayName({ name: "FCU Coil Connection Sheet.xlsx" }), "FCU Coil Connection Sheet");
+  assert.equal(displayName({ name: "Draft Warranty.docx" }), "Draft Warranty");
+  assert.equal(displayName({ name: "APMR-A_catalogue.pdf" }), "APMR-A");
+});
+
+// The spreadsheet must be findable by the free scan once indexed.
+test("an indexed spreadsheet is findable by the free ranked scan", () => {
+  const files = [
+    { id: "x", name: "FCU Coil Connection Sheet.xlsx", folder: "Submittal Files/07 - Coil Connection" },
+    { id: "y", name: "FCU_catalogue.pdf", folder: "Catalogues" },
+  ];
+  assert.equal(rankFiles("fcu coil connection sheet", files)[0].name,
+    "FCU Coil Connection Sheet.xlsx");
 });

@@ -92,8 +92,36 @@ Replaying the real router branch:
 | `fcu pdf` | Catalogue/IOM menu | unchanged |
 | `search all` | fell through | ranked scan of the whole index |
 
-## Open item
+## Root cause #2: the file was never indexed
 
-The local index dump `_drive-index.txt` is from 24 June and contains no coil
-connection sheet. If the live index doesn't have the file either, no search logic will
-surface it — check the bot's `/drive-index` endpoint.
+The coil connection sheet is an **Excel file**, and `lib/drive-index.js` only ever
+collected PDFs and images:
+
+```js
+} else if (f.mimeType === "application/pdf" || /\.(pdf|png|jpe?g)$/i.test(f.name)) {
+```
+
+So no search path — free or AI — could have found it. `EXT_MIME` in `lib/wa.js`
+already carried `xls`, `xlsx`, `doc`, `docx`, and `validatePdfBuffer` already skipped
+non-PDFs, so the send path needed no change at all; only the index filter did.
+
+`isIndexableFile()` now accepts `pdf, xlsx, xls, docx, doc, pptx, ppt, csv, png,
+jpg, jpeg`. Native Google Docs/Sheets are deliberately excluded — they carry a
+`google-apps` mimeType, have no extension, and need an export rather than a download,
+so indexing them would offer files the bot then fails to send. `displayName()` strips
+any indexed extension, not just `.pdf`.
+
+## Escalation ladder
+
+Three tiers, cheapest first, each only reached when the one before it fails:
+
+1. **Filename match** — exact / substring / all-tokens. Free, auto-sends a single
+   confident hit.
+2. **`search all`** — ranked scan of the whole index including folder paths. Free,
+   offered wherever the bot is guessing.
+3. **`ai search`** — Claude reads the entire file list. Costs a call, so it is only
+   *offered* once the free scan has returned nothing, and is gated by `aiAllowed()`
+   so a free account gets the upgrade message instead.
+
+The ladder is what makes this cheaper overall: tiers 1 and 2 resolve most queries that
+previously fell through to `aiMatchFile`.

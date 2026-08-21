@@ -6,7 +6,7 @@ test("intent order matches the webhook router order", () => {
   assert.deepEqual(INTENTS.map((i) => i.name), [
     "media", "button-tap", "numbered-reply", "menu",
     "vrf-selection", "schedule-selection", "split-selection", "mtz-selection", "print",
-    "admin-stats", "small-talk", "search-all",
+    "admin-stats", "small-talk", "search-all", "ai-search",
     "split-list", "list-units", "question", "chiller", "datasheet", "selection",
     "catalogue-iom", "model-code", "doc-search",
   ]);
