@@ -631,12 +631,20 @@ app.get("/webhook", (req, res) => {
 //   2-3       → WhatsApp reply buttons (tappable)
 //   4-10      → WhatsApp interactive list (tappable rows)
 //   11+       → numbered text list (user replies "1", "2", …) — API row cap
+// Both escape hatches, in cost order. The AI one is only advertised to
+// accounts entitled to it — offering a free account a button that returns the
+// upgrade message is a worse experience than not offering it.
+function escapeHatchHint() {
+  return aiAllowed() ? `${SEARCH_ALL_HINT}\n${AI_SEARCH_HINT}` : SEARCH_ALL_HINT;
+}
+
 async function sendFileOptions(to, matchedFiles, prompt, autoSendSingle = true) {
   if (autoSendSingle && matchedFiles.length === 1) return sendDriveFile(to, matchedFiles[0]);
 
   // autoSendSingle === false means these are GUESSES, not a confident match.
-  // Whenever we're guessing, offer the full-index escape hatch.
-  if (!autoSendSingle) prompt = `${prompt || "I found several matches:"}\n\n${SEARCH_ALL_HINT}`;
+  // Whenever we're guessing, offer BOTH escape hatches so the user can jump
+  // straight to AI instead of being made to try the free scan first.
+  if (!autoSendSingle) prompt = `${prompt || "I found several matches:"}\n\n${escapeHatchHint()}`;
 
   if (matchedFiles.length <= 3) {
     const buttons = matchedFiles.map((f) => ({ id: `fileid|${f.id}`, title: displayName(f).slice(0, 20) }));
@@ -700,13 +708,22 @@ async function sendNotFoundWithSuggestions(to, text, files) {
   // typed "SKM package selection" -> tell them how to get the catalogue, IOM,
   // datasheet, run a selection, or list the range). If even the AI can't tell
   // what they meant, fall back to the full capabilities menu.
+  // Nothing confident to offer. Before falling back to generic guidance or the
+  // capabilities menu, try the free ranked scan of the WHOLE index — it costs
+  // nothing and reaches folders (Submittal Files etc.) the doc-type paths miss.
+  const ranked = rankFiles(text, fileList, 10);
+  if (ranked.length) {
+    console.log(`🗂️  Ranked fallback for "${text}": ${ranked.length} hit(s)`);
+    return sendFileOptions(to, ranked, `Closest matches for "${text}":`, false);
+  }
+
   const guidance = await aiGuidance(text);
   if (guidance) {
     console.log(`🧭 Smart guidance for "${text}"`);
-    return sendText(to, `${guidance}\n\n${MENU_HINT}`);
+    return sendText(to, `${guidance}\n\n${MENU_HINT}\n\n${escapeHatchHint()}`);
   }
   console.log(`📋 No guess for "${text}" -> capabilities menu`);
-  return sendText(to, BOT_CAPABILITIES);
+  return sendText(to, `${BOT_CAPABILITIES}\n\n${escapeHatchHint()}`);
 }
 
 
@@ -2011,7 +2028,7 @@ async function handleIncomingMessage(value, message) {
           return await sendText(from, menu.text);
         }
         console.log(`📚 Series menu: ${seriesReq.series}`);
-        return await sendButtons(from, `${menu.text}\n\n${SEARCH_ALL_HINT}`, menu.buttons);
+        return await sendButtons(from, `${menu.text}\n\n${escapeHatchHint()}`, menu.buttons);
       }
       // direct: user named both series and doc type
       console.log(`📚 Series direct: ${seriesReq.series} ${seriesReq.docType}`);
@@ -2199,15 +2216,32 @@ app.post("/webhook", (req, res) => {
 app.get("/", (_, res) => res.send("WhatsApp AI bot running ✅"));
 
 // Temporary: list all indexed Drive files so we can update brand-docs.js
-app.get("/drive-index", async (_, res) => {
+// /drive-index            -> everything the bot can see
+// /drive-index?q=coil     -> only files/folders matching "coil" (diagnosing
+//                            "why can't the bot find X?" without scrolling)
+app.get("/drive-index", async (req, res) => {
   try {
-    const files = await listFolderFiles();
+    const all = await listFolderFiles();
+    const q = String(req.query.q || "").toLowerCase().trim();
+    const files = q
+      ? all.filter((f) => `${f.folder}/${f.name}`.toLowerCase().includes(q))
+      : all;
+    if (q && !files.length) {
+      return res.type("text/plain").send(
+        `No indexed file matches "${q}".\n\n` +
+        `The index holds ${all.length} files. If the document exists in Drive but ` +
+        `isn't here, it is either a native Google Doc/Sheet (needs an export, not ` +
+        `indexed), an unsupported type, or outside DRIVE_FOLDER_ID.\n`
+      );
+    }
     const grouped = {};
     for (const f of files) {
       if (!grouped[f.folder]) grouped[f.folder] = [];
       grouped[f.folder].push(f.name);
     }
-    let out = `Total: ${files.length} files\n\n`;
+    let out = q
+      ? `Matching "${q}": ${files.length} of ${all.length} indexed files\n\n`
+      : `Total: ${files.length} files\n\n`;
     for (const [folder, names] of Object.entries(grouped).sort()) {
       out += `📁 ${folder}\n`;
       for (const n of names.sort()) out += `   ${n}\n`;
