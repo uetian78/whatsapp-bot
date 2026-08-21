@@ -24,6 +24,7 @@ const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSerie
 const { routeChillerText, handleChillerButton } = require("./chillers.js");
 const { findBrandDocs } = require("./brand-docs.js");
 const { findFilesByName } = require("./lib/find-files-by-name.js");
+const { hasSearchableExtras, rankFiles, isSearchAllTrigger, SEARCH_ALL_HINT } = require("./lib/broad-search.js");
 const { isCreditError, markExhausted, isExhausted, creditsExhaustedMessage } = require("./lib/ai-credits.js");
 const { parseAccounts, runWithAccount, currentAccount, aiAllowed, freePlanMessage } = require("./lib/accounts.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
@@ -632,6 +633,10 @@ app.get("/webhook", (req, res) => {
 //   11+       → numbered text list (user replies "1", "2", …) — API row cap
 async function sendFileOptions(to, matchedFiles, prompt, autoSendSingle = true) {
   if (autoSendSingle && matchedFiles.length === 1) return sendDriveFile(to, matchedFiles[0]);
+
+  // autoSendSingle === false means these are GUESSES, not a confident match.
+  // Whenever we're guessing, offer the full-index escape hatch.
+  if (!autoSendSingle) prompt = `${prompt || "I found several matches:"}\n\n${SEARCH_ALL_HINT}`;
 
   if (matchedFiles.length <= 3) {
     const buttons = matchedFiles.map((f) => ({ id: `fileid|${f.id}`, title: displayName(f).slice(0, 20) }));
@@ -1791,6 +1796,34 @@ async function handleIncomingMessage(value, message) {
       try { await sendText(from, label || "🔍 Searching our library, one moment…"); } catch (_) {}
     };
 
+    // ── "search all" escape hatch ────────────────────────────────
+    // Offered whenever a guess might be wrong. Re-runs the user's LAST query
+    // as a ranked scan of the entire Drive index (filename + folder path),
+    // deterministic and free — no Claude call, so it works on the free plan.
+    if (isSearchAllTrigger(text)) {
+      const lastQuery = store.getCtx(from, "lastquery");
+      if (!lastQuery) {
+        return await sendText(from,
+          "Tell me what to look for first — send the document name or a few words about it, " +
+          "then reply *search all* if my suggestions miss.");
+      }
+      await announceSearch(`🔍 Searching every file for "${lastQuery}"…`);
+      const hits = rankFiles(lastQuery, await listFolderFiles(), 10);
+      console.log(`🗂️  search-all "${lastQuery}" -> ${hits.length} hit(s)`);
+      if (!hits.length) {
+        return await sendText(from,
+          `I searched every file in the Drive folder and found nothing close to "${lastQuery}".\n\n` +
+          "Try a word from the document's title, or email hassan.saleem@mannai.com.qa.");
+      }
+      return await sendFileOptions(from, hits,
+        `Closest matches for "${lastQuery}" across all folders:`, false);
+    }
+
+    // Remember what they actually asked for, so a later "search all" knows
+    // what to re-run. Set once here rather than in each lookup path, so every
+    // route that can produce a wrong guess gets the escape hatch for free.
+    store.setCtx(from, "lastquery", text, 30 * 60 * 1000);
+
     // ── List split units ─────────────────────────────────────────
     // "list of split units", "show toshiba splits", "list hi-wall splits" ->
     // every split model with total cooling at T1/T3 + EER. Checked before the
@@ -1915,6 +1948,26 @@ async function handleIncomingMessage(value, message) {
     const seriesReq = parseSeriesRequest(text);
     if (seriesReq) {
       if (seriesReq.mode === "menu") {
+        // "fcu" is a menu request. "fcu coil connection sheet" is a SEARCH —
+        // the series detector sees only "fcu" and would throw the rest away,
+        // offering Catalogue/IOM for a document that is neither. Look across
+        // the whole index first; fall through to the menu if nothing matches,
+        // so this can only ever add a result, never remove one.
+        if (hasSearchableExtras(text, seriesReq.series)) {
+          const allFiles = await listFolderFiles();
+          const named = findFilesByName(text, allFiles);
+          if (named.length) {
+            console.log(`🗂️  Name match beat the series menu: "${text}" -> ${named.map((f) => f.name).join(", ")}`);
+            return await sendFileOptions(from, named, `Here's what I found for "${text}":`);
+          }
+          const ranked = rankFiles(text, allFiles, 10);
+          if (ranked.length) {
+            console.log(`🗂️  Ranked match beat the series menu: "${text}" -> ${ranked.length} hit(s)`);
+            return await sendFileOptions(from, ranked,
+              `Closest matches for "${text}":`, false);
+          }
+        }
+
         const menu = seriesMenu(seriesReq.series);
         // Only one document type exists -> send it directly, no extra tap.
         if (menu.only) {
@@ -1929,7 +1982,7 @@ async function handleIncomingMessage(value, message) {
           return await sendText(from, menu.text);
         }
         console.log(`📚 Series menu: ${seriesReq.series}`);
-        return await sendButtons(from, menu.text, menu.buttons);
+        return await sendButtons(from, `${menu.text}\n\n${SEARCH_ALL_HINT}`, menu.buttons);
       }
       // direct: user named both series and doc type
       console.log(`📚 Series direct: ${seriesReq.series} ${seriesReq.docType}`);
