@@ -120,19 +120,21 @@ test("the free and AI triggers never overlap", () => {
 
 // The actual root cause of the reported bug: the file is a spreadsheet, and
 // the index only ever collected PDFs and images.
-test("spreadsheets and Word docs are indexed, native Google files are not", () => {
+test("spreadsheets, Word docs and native Google files are all indexed", () => {
   assert.equal(isIndexableFile({ name: "FCU Coil Connection Sheet.xlsx" }), true);
   assert.equal(isIndexableFile({ name: "FCU Coil Connection Sheet.xls" }), true);
   assert.equal(isIndexableFile({ name: "Draft Warranty.docx" }), true);
   assert.equal(isIndexableFile({ name: "APMR-A.pdf" }), true);
   assert.equal(isIndexableFile({ name: "cert.jpeg" }), true);
 
+  // Native Google files ARE indexed — they're rendered via files.export on
+  // the way out, which is how the reported spreadsheet becomes reachable.
+  assert.equal(isIndexableFile({ name: "Coil Sheet", mimeType: "application/vnd.google-apps.spreadsheet" }), true);
+  assert.equal(isIndexableFile({ name: "Warranty", mimeType: "application/vnd.google-apps.document" }), true);
+
   // Not sendable / not a document.
   assert.equal(isIndexableFile({ name: "notes.txt" }), false);
   assert.equal(isIndexableFile({ name: "Sub", mimeType: "application/vnd.google-apps.folder" }), false);
-  // Native Google Sheet: no extension, needs an export step, so indexing it
-  // would offer the user a file the bot then fails to send.
-  assert.equal(isIndexableFile({ name: "Coil Sheet", mimeType: "application/vnd.google-apps.spreadsheet" }), false);
   assert.equal(isIndexableFile(null), false);
 });
 
@@ -149,5 +151,53 @@ test("an indexed spreadsheet is findable by the free ranked scan", () => {
     { id: "y", name: "FCU_catalogue.pdf", folder: "Catalogues" },
   ];
   assert.equal(rankFiles("fcu coil connection sheet", files)[0].name,
+    "FCU Coil Connection Sheet.xlsx");
+});
+
+// The reported file is a NATIVE Google Sheet: created in Drive, so it has no
+// stored bytes and no file extension. A plain download 403s — it has to be
+// rendered via files.export first.
+test("native Google files are indexed and given a real filename", () => {
+  const { toIndexRecord } = require("../lib/drive-index.js");
+
+  const sheet = toIndexRecord(
+    { id: "abc", name: "FCU Coil Connection Sheet",
+      mimeType: "application/vnd.google-apps.spreadsheet" },
+    "Submittal Files"
+  );
+  assert.equal(sheet.name, "FCU Coil Connection Sheet.xlsx",
+    "extension is appended so mime lookup and matching work");
+  assert.equal(sheet.exportMime,
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+  assert.equal(sheet.folder, "Submittal Files");
+
+  const doc = toIndexRecord(
+    { id: "d", name: "Draft Warranty", mimeType: "application/vnd.google-apps.document" }, "x");
+  assert.equal(doc.name, "Draft Warranty.docx");
+
+  const deck = toIndexRecord(
+    { id: "p", name: "Company Intro", mimeType: "application/vnd.google-apps.presentation" }, "x");
+  assert.equal(deck.name, "Company Intro.pptx");
+});
+
+test("uploaded files are recorded unchanged, with no exportMime", () => {
+  const { toIndexRecord } = require("../lib/drive-index.js");
+  const pdf = toIndexRecord({ id: "1", name: "APMR-A.pdf", mimeType: "application/pdf" }, "Catalogues");
+  assert.deepEqual(pdf, { id: "1", name: "APMR-A.pdf", folder: "Catalogues" });
+  assert.equal(pdf.exportMime, undefined, "a plain download must not be exported");
+});
+
+test("a native Google Sheet is now indexable, searchable and displayed cleanly", () => {
+  const { isIndexableFile, toIndexRecord, displayName } = require("../lib/drive-index.js");
+  const raw = { id: "abc", name: "FCU Coil Connection Sheet",
+                mimeType: "application/vnd.google-apps.spreadsheet" };
+
+  assert.equal(isIndexableFile(raw), true);
+
+  const rec = toIndexRecord(raw, "Submittal Files");
+  assert.equal(displayName(rec), "FCU Coil Connection Sheet", "extension hidden from the user");
+
+  // The query from the bug report must find it.
+  assert.equal(rankFiles("fcu coil connection sheet", [rec])[0].name,
     "FCU Coil Connection Sheet.xlsx");
 });
