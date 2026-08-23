@@ -682,12 +682,7 @@ async function sendFileOptions(to, matchedFiles, prompt, autoSendSingle = true) 
   // straight to AI instead of being made to try the free scan first.
   if (!autoSendSingle) prompt = `${prompt || "I found several matches:"}\n\n${escapeHatchHint()}`;
 
-  if (matchedFiles.length <= 3) {
-    const buttons = matchedFiles.map((f) => ({ id: `fileid|${f.id}`, title: displayName(f).slice(0, 20) }));
-    return sendButtons(to, prompt || "Which one would you like?", buttons);
-  }
-
-  // 4-10 matches: tappable list rows (title = short name, description = the
+  // 1-10 matches: tappable list rows (title = short name, description = the
   // folder the file sits in, so two similarly-named documents are tellable
   // apart by where they live). buildListPayload enforces WhatsApp's hard
   // limits — 10 rows, title 24 chars, description 72 — for every caller.
@@ -704,17 +699,21 @@ async function sendFileOptions(to, matchedFiles, prompt, autoSendSingle = true) 
       title: displayName(f).slice(0, 24),
       description: shortPath(f.folder),
     }));
-    // A section holds 10 rows, so "Send all" only fits when a slot is spare.
-    // With a full 10 the body hint still offers "all" as a text reply.
-    if (rows.length < 10) {
+    // "Send all" needs something to send all OF, and needs a spare row — a
+    // section holds 10. At a full 10 the body hint still offers "all" as a
+    // text reply.
+    const multi = matchedFiles.length >= 2;
+    if (multi && rows.length < 10) {
       rows.push({
         id: "sendall",
         title: `📦 Send all ${matchedFiles.length}`,
         description: "Get every document above in one go",
       });
     }
-    return sendList(to, `${prompt || "I found several matches:"}\n\n${MULTI_PICK_HINT}`,
-      "Choose a document", rows);
+    const body = multi
+      ? `${prompt || "I found several matches:"}\n\n${MULTI_PICK_HINT}`
+      : (prompt || "Is this the one?");
+    return sendList(to, body, "Choose a document", rows);
   }
 
   // 11+ matches: numbered text list stored for the next reply.

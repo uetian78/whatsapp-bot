@@ -21,6 +21,9 @@ const INDEX = [
   { id: "a8", name: "APMRA 51004 A - T3.pdf", folder: "Datasheets/APMR-A Selections" },
   { id: "a9", name: "Organization Chart - Mannai.pdf", folder: "Submittal Files" },
   { id: "a10", name: "SKM FCU Previous Approval Compilation Document.pdf", folder: "Submittal Files/14 - Previous Project Approvals/SKM FCUs - Previous Approvals" },
+  { id: "b1", name: "Toshiba ISO 9001 Certificate.pdf", folder: "Submittal Files/11 - ISO Certificates" },
+  { id: "b2", name: "Toshiba ISO 14001 Certificate.pdf", folder: "Submittal Files/11 - ISO Certificates" },
+  { id: "b3", name: "Toshiba ISO 45001 Certificate.pdf", folder: "Submittal Files/11 - ISO Certificates" },
 ];
 
 function rowsFor(files) {
@@ -29,7 +32,7 @@ function rowsFor(files) {
     title: displayName(f).slice(0, 24),
     description: shortPath(f.folder),
   }));
-  if (rows.length < 10) {
+  if (files.length >= 2 && rows.length < 10) {
     rows.push({
       id: "sendall",
       title: `📦 Send all ${files.length}`,
@@ -52,6 +55,7 @@ function show(query) {
   }
 }
 
+show("toshiba iso certificates");
 show("fcu coil connection sheet");
 show("coil certificates");
 show("apmra 51004");

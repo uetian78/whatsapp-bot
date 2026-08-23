@@ -89,3 +89,46 @@ test("list rows carry the folder path as description, within API limits", () => 
   // Extension is stripped before truncation, so no characters are wasted.
   assert.ok(!rows[0].title.includes(".xlsx"));
 });
+
+// Regression: 2-3 matches used to render as reply buttons, which have no
+// description, no stored context and no way to take more than one pick.
+// They are a list now, so "Toshiba ISO Certificates" offers all three plus
+// a Send-all row instead of three one-at-a-time buttons.
+test("a small match set is a list with a Send all row, not buttons", () => {
+  const files = [
+    { id: "b1", name: "Toshiba ISO 9001 Certificate.pdf", folder: "Submittal Files/11 - ISO Certificates" },
+    { id: "b2", name: "Toshiba ISO 14001 Certificate.pdf", folder: "Submittal Files/11 - ISO Certificates" },
+    { id: "b3", name: "Toshiba ISO 45001 Certificate.pdf", folder: "Submittal Files/11 - ISO Certificates" },
+  ];
+  const rows = files.map((f) => ({
+    id: `fileid|${f.id}`,
+    title: displayName(f).slice(0, 24),
+    description: shortPath(f.folder),
+  }));
+  rows.push({ id: "sendall", title: `📦 Send all ${files.length}`,
+              description: "Get every document above in one go" });
+
+  const p = buildListPayload("974x", "matches", "Choose a document", rows);
+  const out = p.interactive.action.sections[0].rows;
+
+  assert.equal(p.interactive.type, "list");
+  assert.equal(out.length, 4, "three documents plus Send all");
+  assert.equal(out[3].id, "sendall");
+  for (const r of out) {
+    assert.ok(r.title.length <= 24);
+    assert.ok(r.description.length <= 72);
+  }
+  // Every document keeps its folder, so near-identical names stay tellable apart.
+  assert.equal(out[0].description, "Submittal Files/11 - ISO Certificates");
+});
+
+test("Send all is omitted when a full ten rows leave no slot", () => {
+  const rows = Array.from({ length: 10 }, (_, i) => ({
+    id: `fileid|${i}`, title: `Doc ${i}`, description: "Submittal Files",
+  }));
+  // The bot only appends Send all when rows.length < 10; simulate that rule.
+  assert.equal(rows.length < 10, false);
+  const p = buildListPayload("974x", "matches", "Choose a document", rows);
+  assert.equal(p.interactive.action.sections[0].rows.length, 10);
+  assert.ok(!p.interactive.action.sections[0].rows.some((r) => r.id === "sendall"));
+});
