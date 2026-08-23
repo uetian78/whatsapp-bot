@@ -201,3 +201,44 @@ test("a native Google Sheet is now indexable, searchable and displayed cleanly",
   assert.equal(rankFiles("fcu coil connection sheet", [rec])[0].name,
     "FCU Coil Connection Sheet.xlsx");
 });
+
+// A word matching one file is far more informative than one matching forty.
+// Without this, "trane" hitting every MTZ document scored the same as
+// "mcwfa" hitting the one file wanted, and brand-only matches outranked it.
+test("a rare word outweighs a common one", () => {
+  const { tokenWeights } = require("../lib/broad-search.js");
+  const index = [
+    ...Array.from({ length: 20 }, (_, i) => ({ id: `t${i}`, name: `Trane MTZ Doc ${i}.pdf`, folder: "Catalogues" })),
+    { id: "x", name: "MCWFA-2024 Selections.pdf", folder: "Catalogues" },
+  ];
+  const w = tokenWeights(["trane", "mcwfa"], index);
+  assert.ok(w.get("mcwfa") > w.get("trane"),
+    `rare word should weigh more (mcwfa ${w.get("mcwfa")} vs trane ${w.get("trane")})`);
+});
+
+test("the distinctive model beats brand-only matches", () => {
+  const index = [
+    { id: "n1", name: "Trane MTZ Catalogue.pdf", folder: "Catalogues" },
+    { id: "n2", name: "TRANE - MTZ - IOM.pdf", folder: "IOM" },
+    { id: "n3", name: "Trane Package Units MTZ - QCS.pdf", folder: "Submittal Files/05 - Compliance" },
+    { id: "n4", name: "Trane Chiller Brochure.pdf", folder: "Catalogues" },
+    { id: "x", name: "MCWFA-2024 Selections.pdf", folder: "Catalogues" },
+  ];
+  // Shortest-name tie-break used to push this to #3 behind two Trane files.
+  assert.equal(rankFiles("Trane MCWFA", index)[0].name, "MCWFA-2024 Selections.pdf");
+
+  // Also when the model word is buried mid-name.
+  const split = index.slice(0, 4).concat([
+    { id: "y", name: "Water Cooled MCWFA Series.pdf", folder: "Catalogues" },
+  ]);
+  assert.equal(rankFiles("Trane MCWFA", split)[0].name, "Water Cooled MCWFA Series.pdf");
+});
+
+test("weighting doesn't break a query whose words are all common", () => {
+  const index = [
+    { id: "1", name: "Trane MTZ Catalogue.pdf", folder: "Catalogues" },
+    { id: "2", name: "Trane MTZ IOM.pdf", folder: "IOM" },
+  ];
+  // Every word is common here; both still rank, nothing is dropped.
+  assert.equal(rankFiles("trane mtz", index).length, 2);
+});
