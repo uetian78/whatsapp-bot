@@ -540,6 +540,14 @@ async function fallbackResolve(seriesNameOrText, docType, files) {
 
   const folderFiles = files.filter((f) => folderMatchesDocType(f.folder, docType));
   if (!folderFiles.length) return null;
+  // Last resort was an AI match on the folder's filenames. That is a search
+  // call, so it now needs consent like every other one. Without it we return
+  // null and the caller drops to sendNotFoundWithSuggestions, which runs the
+  // free scan and then offers AI — one extra tap, but never a silent spend.
+  if (!aiSearchConsented(null, seriesNameOrText)) {
+    console.log(`⏭️  Skipping AI series match for ${seriesNameOrText} ${docType} (no consent)`);
+    return null;
+  }
   const ai = await aiMatchSeriesFile(seriesNameOrText, docType, folderFiles);
   if (ai) console.log(`🤖 AI matched ${seriesNameOrText} ${docType} -> ${ai.name}`);
   return ai;
@@ -731,53 +739,79 @@ async function sendFileOptions(to, matchedFiles, prompt, autoSendSingle = true) 
 // caller has one in scope; otherwise it's fetched here (cheap:
 // listFolderFiles() caches for FILE_CACHE_MS).
 async function sendNotFoundWithSuggestions(to, text, files) {
-  // Free account: the steps below are all Claude calls this number isn't
-  // entitled to, so they'd return empty and dump the user on a generic menu.
-  // Tell them why and point at the exact-filename path, which still works.
+  const fileList = files || (await listFolderFiles());
+
+  // ── FREE FIRST ────────────────────────────────────────────────
+  // Ranked keyword scan of the WHOLE index — filenames and folder paths,
+  // pure JS, no API call. This runs before anything that costs money, for
+  // every account, whatever their plan and whatever the credit balance.
+  const ranked = rankFiles(text, fileList, 10);
+  if (ranked.length) {
+    console.log(`🗂️  Free scan matched "${text}": ${ranked.length} hit(s)`);
+    return sendFileOptions(to, ranked, `Closest matches for "${text}":`, false);
+  }
+
+  // ── Nothing free matched. AI could look harder — but ASK first ──
+  // Never spend a call on a guess the user didn't ask for.
   if (!aiAllowed()) {
     const account = currentAccount();
     console.log(`🔒 Free account ${account?.number} -> upgrade message for "${text}"`);
     return sendText(to, freePlanMessage(account?.name));
   }
-
-  // Paid account, but the Anthropic balance is empty: every step below is a
-  // Claude call that would fail, leaving the user on a generic menu with no
-  // explanation. Say the credits are gone and point at the exact-filename
-  // path, which is pure filename matching and still works.
   if (isExhausted()) {
     console.log(`💳 AI credits exhausted -> credits message for "${text}"`);
     return sendText(to, creditsExhaustedMessage(currentAccount()?.name));
   }
 
-  const fileList = files || (await listFolderFiles());
-  const hits = await aiRelatedFiles(text, fileList);
-  console.log(`🔎 Related-files fallback for "${text}": ${hits.length} suggestion(s)`);
+  store.setCtx(to, "aiask", text, 30 * 60 * 1000);
+  console.log(`❓ Offering AI search for "${text}"`);
+  return sendButtons(to,
+    `I couldn't find anything matching *"${text}"* by name or folder.\n\n` +
+    "🤖 Shall I search with AI? It reads every file name in the Drive folder " +
+    "and suggests the closest ones.",
+    [
+      { id: "aiyes", title: "Yes, search with AI" },
+      { id: "aino", title: "No thanks" },
+    ]
+  );
+}
+
+// Has this user agreed to spend a call on THIS query? Set by the "Yes" button
+// or the "ai search" command, and cleared once used, so consent is per-query
+// rather than a standing permission.
+function aiSearchConsented(from, text) {
+  // `from` is absent deep in the resolver chain (fallbackResolve), where only
+  // the async-local account is in scope. Fall back to its number; if that
+  // doesn't resolve, we return false and simply don't spend a call.
+  const key = from || currentAccount()?.number;
+  if (!key) return false;
+  const consented = store.getCtx(key, "aiok");
+  return !!consented && consented === text;
+}
+
+// The actual AI pass, shared by the "Yes" button and the "ai search" command.
+// Reads the whole index, not a doc-type-filtered slice.
+async function runAiSearch(to, query, announce) {
+  if (!aiAllowed()) return sendText(to, freePlanMessage(currentAccount()?.name));
+  if (isExhausted()) return sendText(to, creditsExhaustedMessage(currentAccount()?.name));
+
+  if (announce) await announce(`🤖 Searching every file with AI for "${query}"…`);
+  const files = await listFolderFiles();
+  const hits = await aiRelatedFiles(query, files);
+  console.log(`🤖 AI search "${query}" -> ${hits.length} hit(s)`);
   if (hits.length) {
-    const caveat = `I couldn't find an exact match for "${text}". We might not have that exact document, but here are the closest ones I have — pick one below. If none fit, email hassan.saleem@mannai.com.qa.`;
-    return sendFileOptions(to, hits, caveat, false);
+    return sendFileOptions(to, hits,
+      `AI's closest matches for "${query}":`, false);
   }
 
-  // No related files either. Instead of a flat "not found", let the AI give a
-  // human-like reply that steers the user to a command that works (e.g. they
-  // typed "SKM package selection" -> tell them how to get the catalogue, IOM,
-  // datasheet, run a selection, or list the range). If even the AI can't tell
-  // what they meant, fall back to the full capabilities menu.
-  // Nothing confident to offer. Before falling back to generic guidance or the
-  // capabilities menu, try the free ranked scan of the WHOLE index — it costs
-  // nothing and reaches folders (Submittal Files etc.) the doc-type paths miss.
-  const ranked = rankFiles(text, fileList, 10);
-  if (ranked.length) {
-    console.log(`🗂️  Ranked fallback for "${text}": ${ranked.length} hit(s)`);
-    return sendFileOptions(to, ranked, `Closest matches for "${text}":`, false);
-  }
-
-  const guidance = await aiGuidance(text);
+  const guidance = await aiGuidance(query);
   if (guidance) {
-    console.log(`🧭 Smart guidance for "${text}"`);
-    return sendText(to, `${guidance}\n\n${MENU_HINT}\n\n${escapeHatchHint()}`);
+    console.log(`🧭 Smart guidance for "${query}"`);
+    return sendText(to, `${guidance}\n\n${MENU_HINT}`);
   }
-  console.log(`📋 No guess for "${text}" -> capabilities menu`);
-  return sendText(to, `${BOT_CAPABILITIES}\n\n${escapeHatchHint()}`);
+  return sendText(to,
+    `Even AI couldn't find anything matching "${query}" in the Drive folder.\n\n` +
+    "It may not be uploaded yet. Email hassan.saleem@mannai.com.qa and we'll get it to you.");
 }
 
 
@@ -1592,8 +1626,12 @@ async function handleIncomingMessage(value, message) {
         const query = queryParts.join("|");
         const files = await listFolderFiles();
         const filtered = files.filter((f) => fileMatchesDocType(f, docType));
-        const aiHits = await aiMatchFile(query, filtered);
-        if (aiHits && aiHits.length >= 1) return await sendFileOptions(from, aiHits, `${docType} — which product?`);
+        // Free first: exact/substring, then the ranked keyword scan. Only if
+        // both miss do we hand off to the consent prompt.
+        const named = findFilesByName(query, filtered);
+        if (named.length) return await sendFileOptions(from, named, `${docType} — which product?`);
+        const ranked = rankFiles(query, filtered, 10);
+        if (ranked.length) return await sendFileOptions(from, ranked, `${docType} — closest matches:`, false);
         return await sendNotFoundWithSuggestions(from, query, files);
       }
       // FCU model sheet: "fcu-sheet|DMP-10" -> find 3-row & 4-row datasheets for that model.
@@ -1613,6 +1651,24 @@ async function handleIncomingMessage(value, message) {
         const fallback = files.filter((f) => norm(f.name.replace(/\.[^.]+$/, "")).startsWith(q) && f.name.toLowerCase().endsWith(".pdf"));
         if (fallback.length >= 1) return await sendFileOptions(from, fallback, `${model} datasheets:`);
         return await sendNotFoundWithSuggestions(from, model, files);
+      }
+
+      // "Search with AI?" answer. Consent is per-query and consumed once.
+      if (btnId === "aiyes" || btnId === "aino") {
+        const pendingQuery = store.getCtx(from, "aiask");
+        store.clearCtx(from, "aiask");
+        if (!pendingQuery) {
+          return await sendText(from, "That search has expired — send me what you're looking for again.");
+        }
+        if (btnId === "aino") {
+          console.log(`🙅 ${from} declined AI search for "${pendingQuery}"`);
+          return await sendText(from,
+            `No problem — nothing spent.\n\nIf you know the document's name, type it exactly ` +
+            `(for example "APMR-A" or "ACMR IOM"), or email hassan.saleem@mannai.com.qa.`);
+        }
+        console.log(`✅ ${from} approved AI search for "${pendingQuery}"`);
+        store.setCtx(from, "aiok", pendingQuery, 5 * 60 * 1000);
+        return await runAiSearch(from, pendingQuery, (t) => sendText(from, t));
       }
 
       // "📦 Send all" row from a document picker.
@@ -1933,26 +1989,14 @@ async function handleIncomingMessage(value, message) {
     // ── "ai search": last resort, costs a Claude call ────────────
     // Only reachable after the free scan missed. Reads the whole index, not a
     // doc-type-filtered slice, so it can reach Submittal Files and the like.
+    // Typing "ai search" IS the consent — the user asked for it explicitly.
     if (isAiSearchTrigger(text)) {
       const lastQuery = store.getCtx(from, "lastquery");
       if (!lastQuery) {
         return await sendText(from, "Tell me what to look for first, then reply *ai search*.");
       }
-      if (!aiAllowed()) {
-        console.log(`🔒 Free account tried ai search for "${lastQuery}"`);
-        return await sendText(from, freePlanMessage(currentAccount()?.name));
-      }
-      await announceSearch(`🤖 Asking AI to look through every file for "${lastQuery}"…`);
-      const files = await listFolderFiles();
-      const hits = await aiRelatedFiles(lastQuery, files);
-      console.log(`🤖 ai-search "${lastQuery}" -> ${hits.length} hit(s)`);
-      if (!hits.length) {
-        return await sendText(from,
-          `Even AI couldn't find anything matching "${lastQuery}" in the Drive folder.\n\n` +
-          "It may not be uploaded yet. Email hassan.saleem@mannai.com.qa and we'll get it to you.");
-      }
-      return await sendFileOptions(from, hits,
-        `AI's closest matches for "${lastQuery}":`, false);
+      store.setCtx(from, "aiok", lastQuery, 5 * 60 * 1000);
+      return await runAiSearch(from, lastQuery, announceSearch);
     }
 
     // Remember what they actually asked for, so a later "search all" knows
@@ -2239,7 +2283,12 @@ async function handleIncomingMessage(value, message) {
     // 3) Product-ish request that filename search missed -> AI matches by meaning
     //    (e.g. "AHU IOM" / "air handling unit" / "do you have the fresh air unit").
     //    Pass only the doc-type-filtered file list so AI never suggests wrong type.
-    if (!isKnowledgeQuestion) {
+    //
+    //    OPT-IN ONLY. This used to fire automatically on every miss, spending a
+    //    call before the free ranked scan had even been tried. Now it runs only
+    //    when the user has said yes to the "Search with AI?" prompt (or typed
+    //    "ai search"), which sets the consent flag for this query.
+    if (!isKnowledgeQuestion && aiSearchConsented(from, text)) {
       const aiHits = await aiMatchFile(text, searchFiles);
       if (aiHits && aiHits.length >= 1) {
         console.log(`🤖 AI matched "${text}" -> ${aiHits.map(f => f.name).join(", ")}`);
@@ -2263,10 +2312,16 @@ async function handleIncomingMessage(value, message) {
       }
     }
 
-    // 4) General question -> answer from the Knowledge tab via Claude Haiku
-    const aiReply = await askClaude(text, knowledge);
-    if (aiReply && !/connect you with a team member/i.test(aiReply)) {
-      return await sendText(from, aiReply);
+    // 4) General question -> answer from the Knowledge tab via Claude Haiku.
+    //    Gated on isKnowledgeQuestion: someone who ASKED something expects an
+    //    answer, not a permission prompt. A document search that merely missed
+    //    ("MCWFA") is not a question and must not silently spend a call here —
+    //    it drops to step 5, which tries the free scan and then asks.
+    if (isKnowledgeQuestion || aiSearchConsented(from, text)) {
+      const aiReply = await askClaude(text, knowledge);
+      if (aiReply && !/connect you with a team member/i.test(aiReply)) {
+        return await sendText(from, aiReply);
+      }
     }
 
     // 5) Nothing matched -> AI suggests related documents, or the standard apology
