@@ -103,3 +103,50 @@ test("credits message still reads correctly with no name on file", () => {
   assert.doesNotMatch(msg, /Hi \*\*/, "no empty bold greeting");
   assert.match(msg, /\*0\*/);
 });
+
+const { isAiUnavailableError, aiFeatureUnavailableMessage } = require("../lib/ai-credits.js");
+
+// The vision helpers throw plain Errors shaped "... API <status>: <json>", so
+// the status has to be read out of the message text, not just off the object.
+test("a refused API call is recognised from the thrown message", () => {
+  const refused = [
+    'schedule extraction API 401: {"error":{"type":"authentication_error","message":"invalid x-api-key"}}',
+    'extraction API 401: {"error":{"type":"authentication_error","message":"missing x-api-key"}}',
+    'extraction API 403: {"error":{"type":"permission_error"}}',
+    'schedule extraction API 400: {"error":{"message":"Your credit balance is too low to access the Anthropic API."}}',
+  ];
+  for (const m of refused) {
+    assert.equal(isAiUnavailableError(new Error(m)), true, m.slice(0, 45));
+  }
+});
+
+// A blurry photo is fixable by resending; a rate limit by waiting. Neither
+// should tell the customer to buy a plan.
+test("a real extraction failure is NOT reported as a billing problem", () => {
+  const normal = [
+    "no JSON found in model reply",
+    'schedule extraction API 400: {"error":{"message":"could not process image"}}',
+    'extraction API 429: {"error":{"type":"rate_limit_error"}}',
+    "socket hang up",
+  ];
+  for (const m of normal) {
+    assert.equal(isAiUnavailableError(new Error(m)), false, m.slice(0, 45));
+  }
+  assert.equal(isAiUnavailableError(null), false);
+});
+
+// A disabled key must NOT latch the credits flag — the balance is fine, and
+// latching would mask the real fault for 10 minutes.
+test("a disabled key is unavailable but is not a credit error", () => {
+  const err = new Error('extraction API 401: {"error":{"type":"authentication_error"}}');
+  assert.equal(isAiUnavailableError(err), true);
+  assert.equal(isCreditError(err), false, "must not be mistaken for an empty balance");
+});
+
+test("the feature message names credits and the paid plan", () => {
+  const msg = aiFeatureUnavailableMessage("Hassan");
+  assert.match(msg, /Hassan/);
+  assert.match(msg, /AI credits are required/i);
+  assert.match(msg, /PAID/);
+  assert.doesNotMatch(aiFeatureUnavailableMessage(""), /Hi \*\*/);
+});

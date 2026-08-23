@@ -29,7 +29,7 @@ const { parseSelection } = require("./lib/multi-select.js");
 
 // One reply must not trigger dozens of Drive downloads and media uploads.
 const MAX_BATCH_FILES = 10;
-const { isCreditError, markExhausted, isExhausted, creditsExhaustedMessage } = require("./lib/ai-credits.js");
+const { isCreditError, isAiUnavailableError, markExhausted, isExhausted, creditsExhaustedMessage, aiFeatureUnavailableMessage } = require("./lib/ai-credits.js");
 const { parseAccounts, runWithAccount, currentAccount, aiAllowed, freePlanMessage } = require("./lib/accounts.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
 const { isMenuTrigger, smallTalkReply, welcomeMenu, welcomeMenuList, tipFor, MENU_HINT } = require("./menu.js");
@@ -1128,6 +1128,14 @@ async function handleScheduleStep(from, s, message, vText) {
     catch (err) {
       console.error("❌ Schedule extraction error:", err.message);
       s.step = "awaitImage";
+      // "The API refused us" and "the model couldn't make out the photo" both
+      // land here, but they need opposite advice — a clearer image won't help
+      // when there's no key or no credit.
+      if (isAiUnavailableError(err)) {
+        if (isCreditError(err)) markExhausted();
+        console.error("💳 Schedule reading unavailable — AI refused the request");
+        return await sendText(from, aiFeatureUnavailableMessage(currentAccount()?.name));
+      }
       return await sendText(from, "Sorry, I couldn't read that schedule. Try a clearer image or a PDF.");
     }
     if (!extracted.rows.length) {

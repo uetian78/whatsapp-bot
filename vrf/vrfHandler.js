@@ -14,6 +14,8 @@ const {
   rowsFromWorkbook, rowsFromImageOrPdf,
   extractionConfirmText,
 } = require('./vrfIntake');
+const { isCreditError, isAiUnavailableError, markExhausted, aiFeatureUnavailableMessage } = require('../lib/ai-credits.js');
+const { currentAccount } = require('../lib/accounts.js');
 
 // ---- injected by the bot via initVrf() -------------------------------------
 // deps.sendText(userId, text)            -> outbound WhatsApp text
@@ -171,6 +173,16 @@ async function onVrfMessage(userId, text, attachment) {
     }
     return true;
   } catch (err) {
+    // A refused API call (no key, disabled key, no credit) used to surface to
+    // the customer as the raw error text, leaking internals and telling them
+    // nothing useful. Say what it actually means instead.
+    if (isAiUnavailableError(err)) {
+      if (isCreditError(err)) markExhausted();
+      console.error("💳 VRF extraction unavailable — AI refused the request:", err.message);
+      await sendWhatsApp(userId, aiFeatureUnavailableMessage(currentAccount()?.name));
+      return true;
+    }
+    console.error("❌ VRF handler error:", err.message);
     await sendWhatsApp(userId, `Something went wrong: ${err.message}\n\n(Type *exit* to cancel, or try again.)`);
     return true;
   }
