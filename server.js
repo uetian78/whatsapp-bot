@@ -43,7 +43,7 @@ const {
 const { getSheets, getDrive, withRetry, driveFileId, downloadBytes, normalizeDriveLink } = require("./lib/google.js");
 const {
   listFolderFiles, docTypeFromFilename, folderMatchesDocType, fileMatchesDocType,
-  findFilesInFolder, findExactFileInDoc, findDatasheetFiles, findChillerDatasheetFiles, displayName,
+  findFilesInFolder, findExactFileInDoc, findDatasheetFiles, findChillerDatasheetFiles, displayName, shortPath,
 } = require("./lib/drive-index.js");
 const wa = require("./lib/wa.js");
 const {
@@ -651,13 +651,18 @@ async function sendFileOptions(to, matchedFiles, prompt, autoSendSingle = true) 
     return sendButtons(to, prompt || "Which one would you like?", buttons);
   }
 
-  // 4-10 matches: tappable list rows (title = short name, description = full name).
+  // 4-10 matches: tappable list rows (title = short name, description = the
+  // folder the file sits in, so two similarly-named documents are tellable
+  // apart by where they live). buildListPayload enforces WhatsApp's hard
+  // limits — 10 rows, title 24 chars, description 72 — for every caller.
+  // displayName() has already stripped the extension, so a truncated title
+  // never wastes characters on ".pdf".
   if (matchedFiles.length <= 10) {
     store.clearCtx(to, "menu");
     const rows = matchedFiles.map((f) => ({
       id: `fileid|${f.id}`,
       title: displayName(f).slice(0, 24),
-      description: displayName(f).length > 24 ? f.name : undefined,
+      description: shortPath(f.folder),
     }));
     return sendList(to, prompt || "I found several matches:", "Choose a document", rows);
   }
