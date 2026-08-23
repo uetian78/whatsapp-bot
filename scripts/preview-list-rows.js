@@ -24,11 +24,19 @@ const INDEX = [
 ];
 
 function rowsFor(files) {
-  return files.map((f) => ({
+  const rows = files.map((f) => ({
     id: `fileid|${f.id}`,
     title: displayName(f).slice(0, 24),
     description: shortPath(f.folder),
   }));
+  if (rows.length < 10) {
+    rows.push({
+      id: "sendall",
+      title: `📦 Send all ${files.length}`,
+      description: "Get every document above in one go",
+    });
+  }
+  return rows;
 }
 
 function show(query) {
@@ -64,4 +72,18 @@ for (const c of cases) {
   const out = shortPath(c);
   console.log(`\n  in  (${String(c.length).padStart(3)})  ${c || "(empty)"}`);
   console.log(`  out (${String(out.length).padStart(3)})  ${out || "(empty)"}`);
+}
+
+// ---- What a text reply resolves to ----
+const { parseSelection } = require("../lib/multi-select.js");
+console.log(`\n${"=".repeat(78)}\nText replies against a 6-document list\n${"=".repeat(78)}`);
+for (const reply of ["2", "1,3,5", "1-4", "all", "3 and 5", "2, 99", "1-40",
+                     "fcu coil connection sheet"]) {
+  const r = parseSelection(reply, 6, { cap: 10 });
+  const shown = r
+    ? `docs ${r.indices.map((i) => i + 1).join(", ") || "(none)"}` +
+      (r.invalid.length ? `  [ignored: ${r.invalid.join(", ")}]` : "") +
+      (r.capped ? "  [capped]" : "")
+    : "not a pick -> falls through to normal search";
+  console.log(`  ${JSON.stringify(reply).padEnd(30)} -> ${shown}`);
 }

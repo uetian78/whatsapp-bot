@@ -25,6 +25,10 @@ const { routeChillerText, handleChillerButton } = require("./chillers.js");
 const { findBrandDocs } = require("./brand-docs.js");
 const { findFilesByName } = require("./lib/find-files-by-name.js");
 const { hasSearchableExtras, rankFiles, isSearchAllTrigger, SEARCH_ALL_HINT, isAiSearchTrigger, AI_SEARCH_HINT } = require("./lib/broad-search.js");
+const { parseSelection } = require("./lib/multi-select.js");
+
+// One reply must not trigger dozens of Drive downloads and media uploads.
+const MAX_BATCH_FILES = 10;
 const { isCreditError, markExhausted, isExhausted, creditsExhaustedMessage } = require("./lib/ai-credits.js");
 const { parseAccounts, runWithAccount, currentAccount, aiAllowed, freePlanMessage } = require("./lib/accounts.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
@@ -631,6 +635,38 @@ app.get("/webhook", (req, res) => {
 //   2-3       → WhatsApp reply buttons (tappable)
 //   4-10      → WhatsApp interactive list (tappable rows)
 //   11+       → numbered text list (user replies "1", "2", …) — API row cap
+// Shown under every document picker. Tapping a row gives one file; several
+// are picked by replying with numbers, since WhatsApp lists are single-select.
+const MULTI_PICK_HINT =
+  "Tap one to get it — or reply with several numbers (*1,3,5* or *1-4*), or *all* for everything.";
+
+// Send several documents in one go. Sequential on purpose: each file is a
+// Drive download plus a WhatsApp media upload, and firing ten at once invites
+// rate-limiting and out-of-order delivery. One failure must not kill the
+// batch, so each send is isolated and the misses are reported at the end.
+async function sendManyFiles(to, files) {
+  if (!files.length) return;
+  if (files.length === 1) return sendDriveFile(to, files[0]);
+
+  await sendText(to, `📦 Sending ${files.length} documents…`);
+  const failed = [];
+  for (const file of files) {
+    try {
+      await sendDriveFile(to, file);
+    } catch (err) {
+      console.error(`❌ batch send failed for ${file.name}:`, err.message);
+      failed.push(file);
+    }
+  }
+  console.log(`📦 batch: ${files.length - failed.length}/${files.length} sent to ${to}`);
+  if (failed.length) {
+    return sendText(to,
+      `⚠️ I couldn't send ${failed.length} of them:\n` +
+      failed.map((f) => `• ${displayName(f)}`).join("\n") +
+      "\n\nAsk for those by name and I'll try again.");
+  }
+}
+
 // Both escape hatches, in cost order. The AI one is only advertised to
 // accounts entitled to it — offering a free account a button that returns the
 // upgrade message is a worse experience than not offering it.
@@ -659,19 +695,33 @@ async function sendFileOptions(to, matchedFiles, prompt, autoSendSingle = true) 
   // never wastes characters on ".pdf".
   if (matchedFiles.length <= 10) {
     store.clearCtx(to, "menu");
+    // Remember the candidates so a text reply can pick several ("1,3" / "all").
+    // A list row tap only ever returns ONE id — WhatsApp has no multi-select.
+    store.setCtx(to, "list", matchedFiles, 30 * 60 * 1000);
+
     const rows = matchedFiles.map((f) => ({
       id: `fileid|${f.id}`,
       title: displayName(f).slice(0, 24),
       description: shortPath(f.folder),
     }));
-    return sendList(to, prompt || "I found several matches:", "Choose a document", rows);
+    // A section holds 10 rows, so "Send all" only fits when a slot is spare.
+    // With a full 10 the body hint still offers "all" as a text reply.
+    if (rows.length < 10) {
+      rows.push({
+        id: "sendall",
+        title: `📦 Send all ${matchedFiles.length}`,
+        description: "Get every document above in one go",
+      });
+    }
+    return sendList(to, `${prompt || "I found several matches:"}\n\n${MULTI_PICK_HINT}`,
+      "Choose a document", rows);
   }
 
   // 11+ matches: numbered text list stored for the next reply.
   store.clearCtx(to, "menu");
   store.setCtx(to, "list", matchedFiles, 30 * 60 * 1000);
   const list = matchedFiles.map((f, i) => `${i + 1}. ${displayName(f)}`).join("\n");
-  return sendText(to, `${prompt || "I found several matches:"}\n\n${list}\n\nReply with a number to get the file.`);
+  return sendText(to, `${prompt || "I found several matches:"}\n\n${list}\n\n${MULTI_PICK_HINT}`);
 }
 
 // Last-resort reply for a lookup miss: ask AI for documents that are
@@ -1566,6 +1616,17 @@ async function handleIncomingMessage(value, message) {
         return await sendNotFoundWithSuggestions(from, model, files);
       }
 
+      // "📦 Send all" row from a document picker.
+      if (btnId === "sendall") {
+        const pending = store.getCtx(from, "list");
+        if (!pending || !pending.length) {
+          return await sendText(from, "That list has expired — search again and I'll offer it fresh.");
+        }
+        store.clearCtx(from, "list");
+        console.log(`📦 ${from} tapped send-all: ${pending.length} file(s)`);
+        return await sendManyFiles(from, pending.slice(0, MAX_BATCH_FILES));
+      }
+
       // Direct file by Drive ID (used by sendFileOptions buttons)
       if (btnId.startsWith("fileid|")) {
         const fileId = btnId.slice(7);
@@ -1667,16 +1728,41 @@ async function handleIncomingMessage(value, message) {
     if (message.type !== "text") return;
     const text = message.text.body.trim();
 
-    // Numeric reply to a pending numbered list ("1", "2", etc.)
+    // Reply to a pending document list: "2", "1,3,5", "1-4", or "all".
+    // parseSelection returns null for anything that isn't a pick, so real
+    // queries fall straight through to normal routing.
     const pendingList = store.getCtx(from, "list");
-    if (/^\d+$/.test(text) && pendingList) {
-      const idx = parseInt(text, 10) - 1;
-      store.clearCtx(from, "list");
-      if (idx >= 0 && idx < pendingList.length) {
-        console.log(`🔢 ${from} selected #${idx + 1}: ${pendingList[idx].name}`);
-        return await sendDriveFile(from, pendingList[idx]);
+    if (pendingList) {
+      const picked = parseSelection(text, pendingList.length, { cap: MAX_BATCH_FILES });
+      if (picked) {
+        const chosen = picked.indices.map((i) => pendingList[i]);
+
+        if (!chosen.length) {
+          return await sendText(from,
+            `There ${pendingList.length === 1 ? "is" : "are"} only ${pendingList.length} ` +
+            `document${pendingList.length === 1 ? "" : "s"} on that list — reply with a number ` +
+            `between 1 and ${pendingList.length}, or *all*.`);
+        }
+
+        store.clearCtx(from, "list");
+        console.log(`🔢 ${from} selected ${chosen.length}: ${chosen.map((f) => f.name).join(", ")}`);
+
+        // Tell them about anything skipped BEFORE the files start arriving,
+        // otherwise the note is buried under a stack of documents.
+        const notes = [];
+        if (picked.invalid.length) {
+          // "1-40" on a 6-item list would otherwise enumerate 34 numbers.
+          notes.push(picked.invalid.length > 3
+            ? `The list only goes up to ${pendingList.length}, so I ignored the higher numbers.`
+            : `Ignoring ${picked.invalid.join(", ")} — the list only goes up to ${pendingList.length}.`);
+        }
+        if (picked.capped) {
+          notes.push(`Sending the first ${MAX_BATCH_FILES}; ask again for the rest.`);
+        }
+        if (notes.length) await sendText(from, `⚠️ ${notes.join(" ")}`);
+
+        return await sendManyFiles(from, chosen);
       }
-      return await sendText(from, `Please reply with a number between 1 and ${pendingList.length}.`);
     }
 
     // ── Split / Schedule PDF print request ───────────────────────
