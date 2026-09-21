@@ -464,6 +464,90 @@ test("upload: uploadStream failure is 502", async () => {
   });
 });
 
+test("upload: client disconnecting mid-upload aborts the outbound Graph request quickly", async () => {
+  let receivedSignal = null;
+  let sawAbort = false;
+  let abortedAfterMs = null;
+  let unhandled = null;
+  const onUnhandledRejection = (err) => { unhandled = err; };
+  process.on("unhandledRejection", onUnhandledRejection);
+
+  try {
+    await withServer({
+      // Mimics wa.uploadMediaStream sitting in a long axios POST that only
+      // settles once the caller aborts it — never resolves on its own.
+      uploadStream: (stream, name, length, signal) => {
+        receivedSignal = signal;
+        return new Promise((_resolve, reject) => {
+          const start = Date.now();
+          signal.addEventListener("abort", () => {
+            sawAbort = true;
+            abortedAfterMs = Date.now() - start;
+            reject(new Error("aborted"));
+          });
+        });
+      },
+    }, async (_call, _store, base) => {
+      const url = new URL(base + "/upload");
+      await new Promise((resolve) => {
+        const req = http.request(url, {
+          method: "POST",
+          headers: {
+            "X-Sender-Pin": PIN,
+            "X-File-Name": "big.pdf",
+            "Content-Type": "application/octet-stream",
+            "Content-Length": "5000000", // declares far more than we actually send
+          },
+        });
+        req.on("error", () => {}); // destroying the socket also errors this local request object; expected, ignore
+        req.write(Buffer.from("only a few bytes, nowhere near the declared length"));
+        // Give the server a tick to reach the route and call uploadStream
+        // before we pull the rug out from under it.
+        setTimeout(() => { req.destroy(); resolve(); }, 50);
+      });
+
+      const deadline = Date.now() + 900;
+      while (!sawAbort && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 10));
+      }
+    });
+  } finally {
+    process.off("unhandledRejection", onUnhandledRejection);
+  }
+
+  assert.ok(receivedSignal instanceof AbortSignal, "uploadStream must receive an AbortSignal as its 4th argument");
+  assert.ok(sawAbort, "the signal should abort once the client disconnects");
+  assert.ok(abortedAfterMs < 1000, `abort should happen well under a second (took ${abortedAfterMs}ms)`);
+  assert.equal(unhandled, null, `route must not produce an unhandled rejection: ${unhandled}`);
+});
+
+test("upload: success streams the exact raw bytes to uploadStream and strips the path (still green with the signal arg added)", async () => {
+  const received = {};
+  await withServer({
+    uploadStream: async (stream, name, length, signal) => {
+      received.name = name;
+      received.length = length;
+      received.hasSignal = signal instanceof AbortSignal;
+      const chunks = [];
+      for await (const chunk of stream) chunks.push(chunk);
+      received.bytes = Buffer.concat(chunks);
+      return "media.upload.2";
+    },
+  }, async (_call, _store, base) => {
+    const body = Buffer.from("another full body, sent completely this time");
+    const r = await rawPost(base, "/upload", {
+      "X-Sender-Pin": PIN,
+      "X-File-Name": "report2.pdf",
+      "Content-Type": "application/octet-stream",
+      "Content-Length": String(body.length),
+    }, body);
+    assert.equal(r.status, 200);
+    assert.deepEqual(r.json, { mediaId: "media.upload.2", name: "report2.pdf" });
+    assert.equal(received.hasSignal, true);
+    assert.ok(received.bytes.equals(body));
+  });
+});
+
 test("upload: wrong PIN is 401 (PIN gate applies to /upload too)", async () => {
   await withServer({}, async (_call, _store, base) => {
     const r = await rawPost(base, "/upload", {

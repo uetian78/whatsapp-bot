@@ -92,3 +92,27 @@ test("uploadMediaStream: never buffers the stream itself, propagates axios failu
   const stream = Readable.from(["x"]);
   await assert.rejects(() => wa.uploadMediaStream(stream, "a.pdf", 1), /Graph rejected upload/);
 });
+
+test("uploadMediaStream: passes an AbortSignal through to axios when given", async (t) => {
+  let config;
+  t.mock.method(axios, "post", async (url, payload, cfg) => {
+    config = cfg;
+    return { data: { id: "media.signal.1" } };
+  });
+  const controller = new AbortController();
+  const stream = Readable.from(["x"]);
+  await wa.uploadMediaStream(stream, "a.pdf", 1, controller.signal);
+  assert.equal(config.signal, controller.signal);
+});
+
+test("uploadMediaStream: signal is optional (omitting it must not throw or set a bogus signal)", async (t) => {
+  let config;
+  t.mock.method(axios, "post", async (url, payload, cfg) => {
+    config = cfg;
+    return { data: { id: "media.no.signal" } };
+  });
+  const stream = Readable.from(["x"]);
+  const id = await wa.uploadMediaStream(stream, "a.pdf", 1);
+  assert.equal(id, "media.no.signal");
+  assert.equal(config.signal, undefined);
+});
