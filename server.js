@@ -2414,6 +2414,15 @@ app.use("/api/sender", createSenderRouter({
   },
   sendMessage: wa.sendTextDetailed,
   statusStore: senderStatus,
+  searchFiles: async (q) => {
+    const files = await listFolderFiles();
+    const named = findFilesByName(q, files);
+    return (named.length ? named : rankFiles(q, files, 20)).slice(0, 20).map((f) => ({ id: f.id, name: f.name, folder: f.folder || "" }));
+  },
+  findFileById: async (id) => (await listFolderFiles()).find((f) => f.id === id) || null,
+  uploadDriveFile: (f) => wa.uploadMedia({ fileId: f.id, filename: f.name, exportMime: f.exportMime }),
+  uploadStream: wa.uploadMediaStream,
+  sendDocument: wa.sendDocumentDetailed,
 }));
 
 app.post("/webhook", (req, res) => {
