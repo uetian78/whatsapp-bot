@@ -10,8 +10,11 @@ test("request button and list row fit WhatsApp's title limits", () => {
   assert.ok(dr.REQUEST_ROW.description.length <= 72);
 });
 
-test("prompt names the HVAC Assistant library", () => {
+test("prompt names the HVAC Assistant library and the 1-4 hour turnaround", () => {
   assert.match(dr.REQUEST_PROMPT, /HVAC Assistant library/);
+  for (const s of [dr.REQUEST_PROMPT, dr.REQUEST_BUTTON.title, dr.REQUEST_ROW.title, dr.confirmText("x"), dr.duplicateText("x")]) {
+    assert.match(s, /1-4 h/);
+  }
 });
 
 test("alertNumbers: defaults to the admin number, digits only", () => {
