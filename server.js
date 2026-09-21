@@ -50,6 +50,9 @@ const {
   findFilesInFolder, findExactFileInDoc, findDatasheetFiles, findChillerDatasheetFiles, displayName, shortPath,
 } = require("./lib/drive-index.js");
 const wa = require("./lib/wa.js");
+const { createSenderRouter } = require("./lib/sender-api.js");
+const { createStatusStore } = require("./lib/sender-status.js");
+const { polishDraft } = require("./lib/sender-polish.js");
 const {
   send, sendText, sendLongText, sendButtons, sendList, sendDocument, sendDriveFile,
   sendPdfBuffer, uploadMedia, uploadMediaBuffer, downloadWhatsAppMedia, markReadWithTyping,
@@ -2336,9 +2339,32 @@ async function handleIncomingMessage(value, message) {
     await sendNotFoundWithSuggestions(from, text, files);
 }
 
+// ── Bot Sender app API ──────────────────────────────────────────────────────
+// Lets the owner's Android app send messages as the bot. Off unless
+// SENDER_PIN is set. Delivery results arrive via the webhook's `statuses`.
+const senderStatus = createStatusStore();
+app.use("/api/sender", createSenderRouter({
+  pin: process.env.SENDER_PIN,
+  loadAccounts: async () => (await loadSheet()).accounts,
+  polish: async (opts) => {
+    if (!ANTHROPIC_API_KEY) return { ok: false, message: "No Anthropic API key is configured on the server." };
+    if (isExhausted()) return { ok: false, message: "AI credits are exhausted — top up the Anthropic balance." };
+    try {
+      return { ok: true, draft: await polishDraft(anthropic, opts) };
+    } catch (err) {
+      if (isCreditError(err)) markExhausted();
+      console.error("Bot Sender polish error:", err.message);
+      return { ok: false, message: err.message };
+    }
+  },
+  sendMessage: wa.sendTextDetailed,
+  statusStore: senderStatus,
+}));
+
 app.post("/webhook", (req, res) => {
   res.sendStatus(200);
   const value = req.body.entry?.[0]?.changes?.[0]?.value;
+  for (const s of value?.statuses || []) senderStatus.record(s);
   const message = value?.messages?.[0];
   if (!message) return;
 
