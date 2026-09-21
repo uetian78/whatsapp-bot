@@ -47,6 +47,39 @@ test("other failures are not outsideWindow", () => {
   assert.equal(s.get("w").message, "Message undeliverable");
 });
 
+test("early event: a webhook status that beats track() is adopted, not lost", () => {
+  const s = createStatusStore();
+  s.record({
+    id: "w", status: "failed",
+    errors: [{ code: 131047, title: "Re-engagement message", error_data: { details: "More than 24 hours have passed" } }],
+  });
+  // get() must not expose the untracked/early entry yet
+  assert.equal(s.get("w"), null);
+  s.track("w");
+  const got = s.get("w");
+  assert.equal(got.status, "failed");
+  assert.equal(got.code, 131047);
+  assert.equal(got.outsideWindow, true);
+});
+
+test("early event expires after 60s if track() never arrives", () => {
+  let t = 0;
+  const s = createStatusStore({ now: () => t });
+  s.record({ id: "w", status: "sent" });
+  t = 60 * 1000 + 1;
+  s.track("w"); // early event is gone by now -> fresh pending, not the stale "sent"
+  assert.equal(s.get("w").status, "pending");
+});
+
+test("early event is adopted when track() arrives just under the 60s window", () => {
+  let t = 0;
+  const s = createStatusStore({ now: () => t });
+  s.record({ id: "w", status: "sent" });
+  t = 60 * 1000 - 1;
+  s.track("w");
+  assert.equal(s.get("w").status, "sent");
+});
+
 test("entries expire after one hour", () => {
   let t = 0;
   const s = createStatusStore({ now: () => t });

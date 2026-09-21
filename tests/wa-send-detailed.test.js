@@ -5,8 +5,10 @@ const wa = require("../lib/wa.js");
 
 test("success returns the wamid", async (t) => {
   let posted;
-  t.mock.method(axios, "post", async (url, payload) => {
+  let config;
+  t.mock.method(axios, "post", async (url, payload, cfg) => {
     posted = payload;
+    config = cfg;
     return { data: { messages: [{ id: "wamid.ABC" }] } };
   });
   const r = await wa.sendTextDetailed("97411111111", "Hello");
@@ -14,6 +16,7 @@ test("success returns the wamid", async (t) => {
   assert.equal(posted.type, "text");
   assert.equal(posted.to, "97411111111");
   assert.equal(posted.text.body, "Hello");
+  assert.equal(config.timeout, 20000);
 });
 
 test("Graph error returns code + details", async (t) => {

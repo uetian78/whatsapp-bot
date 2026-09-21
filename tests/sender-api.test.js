@@ -106,6 +106,55 @@ test("send: Graph error is 502 with outsideWindow flag", async () => {
   });
 });
 
+test("lockout: 20 wrong PINs lock every route for 15 minutes, even with the right PIN", async () => {
+  let t = 0;
+  await withServer({ now: () => t }, async (call) => {
+    for (let i = 0; i < 20; i++) {
+      const r = await call("/contacts", { pin: "9999" });
+      assert.equal(r.status, 401);
+    }
+    // 21st attempt (even with correct PIN) is locked
+    const locked = await call("/contacts");
+    assert.equal(locked.status, 429);
+    assert.deepEqual(locked.json, { error: "locked" });
+
+    // still locked just before 15 minutes pass
+    t = 15 * 60 * 1000 - 1;
+    const stillLocked = await call("/contacts");
+    assert.equal(stillLocked.status, 429);
+
+    // lockout expires after 15 minutes
+    t = 15 * 60 * 1000 + 1;
+    const ok = await call("/contacts");
+    assert.equal(ok.status, 200);
+  });
+});
+
+test("a correct PIN outside lockout resets the failure counter", async () => {
+  let t = 0;
+  await withServer({ now: () => t }, async (call) => {
+    for (let i = 0; i < 10; i++) {
+      assert.equal((await call("/contacts", { pin: "9999" })).status, 401);
+    }
+    // correct PIN resets the counter
+    assert.equal((await call("/contacts")).status, 200);
+    // another 19 failures shouldn't trip the lock (counter was reset)
+    for (let i = 0; i < 19; i++) {
+      assert.equal((await call("/contacts", { pin: "9999" })).status, 401);
+    }
+    assert.equal((await call("/contacts")).status, 200);
+  });
+});
+
+test("send: ok:true with no id is a 502 and nothing is tracked", async () => {
+  await withServer({ sendMessage: async () => ({ ok: true }) }, async (call, store) => {
+    const r = await call("/send", { method: "POST", body: { to: "97411111111", text: "Hello" } });
+    assert.equal(r.status, 502);
+    assert.deepEqual(r.json, { ok: false, code: null, message: "WhatsApp did not return a message id", outsideWindow: false });
+    assert.equal(store.get(undefined), null);
+  });
+});
+
 test("status reports the store and 404s unknown ids", async () => {
   await withServer({}, async (call, store) => {
     store.track("wamid.5");
