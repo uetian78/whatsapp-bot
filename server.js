@@ -776,7 +776,6 @@ async function handleDocRequest(from, name) {
   const logged = await crm.logDocRequest({ from, name, query });
   let alerted = 0;
   for (const admin of docReq.alertNumbers()) {
-    if (admin === from) continue;
     // send() never throws — false means Graph rejected it. Accepted can still
     // fail later with 131047 (admin outside the 24h window), via webhook status.
     if (await sendText(admin, docReq.adminAlertText({ from, name, query }))) alerted++;
