@@ -35,6 +35,8 @@ const { parseRelatedFilesResponse } = require("./lib/related-files.js");
 const { isMenuTrigger, smallTalkReply, welcomeMenu, welcomeMenuList, tipFor, MENU_HINT } = require("./menu.js");
 const { PRODUCT_KB, parseListRequest, parseUnsupportedSeriesListRequest, buildUnitList } = require("./product-facts.js");
 const crm = require("./crm.js");
+const docReq = require("./lib/doc-requests.js");
+const docReqDedupe = docReq.createDedupe();
 const { generateMtzPdf } = require("./mtz-pdf.js");
 const schedule = require("./schedule-select.js");
 const { FAMILY_MENU, rankSplit, parseSplitListRequest, listSplits } = require("./split-engine.js");
@@ -685,7 +687,10 @@ function escapeHatchHint() {
   return aiAllowed() ? `${SEARCH_ALL_HINT}\n${AI_SEARCH_HINT}` : SEARCH_ALL_HINT;
 }
 
-async function sendFileOptions(to, matchedFiles, prompt, autoSendSingle = true) {
+// `requestQuery`: when these are guesses for a search, a "📥 Not here?
+// Request it" row is added (if a row is free) so the user can ask for the
+// real document to be added to the library.
+async function sendFileOptions(to, matchedFiles, prompt, autoSendSingle = true, requestQuery = null) {
   if (autoSendSingle && matchedFiles.length === 1) return sendDriveFile(to, matchedFiles[0]);
 
   // autoSendSingle === false means these are GUESSES, not a confident match.
@@ -721,6 +726,10 @@ async function sendFileOptions(to, matchedFiles, prompt, autoSendSingle = true) 
         description: "Get every document above in one go",
       });
     }
+    if (requestQuery && rows.length < 10) {
+      rememberRequest(to, requestQuery);
+      rows.push(docReq.REQUEST_ROW);
+    }
     const body = multi
       ? `${prompt || "I found several matches:"}\n\n${MULTI_PICK_HINT}`
       : (prompt || "Is this the one?");
@@ -741,6 +750,47 @@ async function sendFileOptions(to, matchedFiles, prompt, autoSendSingle = true) 
 // bar. `files` is optional — pass the already-fetched Drive index when the
 // caller has one in scope; otherwise it's fetched here (cheap:
 // listFolderFiles() caches for FILE_CACHE_MS).
+// Dead end: send `body` with the "📥 Request it" button (after any `extra`
+// buttons — WhatsApp allows 3). The query is remembered so the tap knows
+// what to request.
+function rememberRequest(to, query) {
+  store.setCtx(to, docReq.CTX_KEY, query, docReq.DEDUPE_MS);
+}
+function sendWithRequestButton(to, query, body, extra = []) {
+  rememberRequest(to, query);
+  return sendButtons(to, `${body}\n\n${docReq.REQUEST_PROMPT}`, [...extra, docReq.REQUEST_BUTTON]);
+}
+
+// The "📥 Request it" tap: log to the CRM Requests tab, alert the admin(s),
+// confirm to the user. The admin alert is best-effort — Meta only delivers a
+// free-form message inside the admin's 24h window — the sheet row is the record.
+async function handleDocRequest(from, name) {
+  const query = store.getCtx(from, docReq.CTX_KEY);
+  if (!query) {
+    return sendText(from, "That request has expired — search for the document again and tap *Request it*.");
+  }
+  if (docReqDedupe.seen(from, query)) {
+    console.log(`📥 duplicate library request from ${from}: "${query}"`);
+    return sendText(from, docReq.duplicateText(query));
+  }
+  const logged = await crm.logDocRequest({ from, name, query });
+  let alerted = 0;
+  for (const admin of docReq.alertNumbers()) {
+    if (admin === from) continue;
+    // send() never throws — false means Graph rejected it. Accepted can still
+    // fail later with 131047 (admin outside the 24h window), via webhook status.
+    if (await sendText(admin, docReq.adminAlertText({ from, name, query }))) alerted++;
+    else console.error(`📥 admin alert to ${admin} was rejected`);
+  }
+  console.log(`📥 library request "${query}" from ${from}: sheet=${logged} alerts=${alerted}`);
+  if (!logged && !alerted) {
+    return sendText(from,
+      `Sorry, I couldn't send the request just now. Please email hassan.saleem@mannai.com.qa ` +
+      `and ask for *"${query}"*.`);
+  }
+  return sendText(from, docReq.confirmText(query));
+}
+
 async function sendNotFoundWithSuggestions(to, text, files) {
   const fileList = files || (await listFolderFiles());
 
@@ -751,7 +801,7 @@ async function sendNotFoundWithSuggestions(to, text, files) {
   const ranked = rankFiles(text, fileList, 10);
   if (ranked.length) {
     console.log(`🗂️  Free scan matched "${text}": ${ranked.length} hit(s)`);
-    return sendFileOptions(to, ranked, `Closest matches for "${text}":`, false);
+    return sendFileOptions(to, ranked, `Closest matches for "${text}":`, false, text);
   }
 
   // ── Nothing free matched. AI could look harder — but ASK first ──
@@ -759,16 +809,16 @@ async function sendNotFoundWithSuggestions(to, text, files) {
   if (!aiAllowed()) {
     const account = currentAccount();
     console.log(`🔒 Free account ${account?.number} -> upgrade message for "${text}"`);
-    return sendText(to, freePlanMessage(account?.name));
+    return sendWithRequestButton(to, text, freePlanMessage(account?.name));
   }
   if (isExhausted()) {
     console.log(`💳 AI credits exhausted -> credits message for "${text}"`);
-    return sendText(to, creditsExhaustedMessage(currentAccount()?.name));
+    return sendWithRequestButton(to, text, creditsExhaustedMessage(currentAccount()?.name));
   }
 
   store.setCtx(to, "aiask", text, 30 * 60 * 1000);
   console.log(`❓ Offering AI search for "${text}"`);
-  return sendButtons(to,
+  return sendWithRequestButton(to, text,
     `I couldn't find anything matching *"${text}"* by name or folder.\n\n` +
     "🤖 Shall I search with AI? It reads every file name in the Drive folder " +
     "and suggests the closest ones.",
@@ -795,8 +845,8 @@ function aiSearchConsented(from, text) {
 // The actual AI pass, shared by the "Yes" button and the "ai search" command.
 // Reads the whole index, not a doc-type-filtered slice.
 async function runAiSearch(to, query, announce) {
-  if (!aiAllowed()) return sendText(to, freePlanMessage(currentAccount()?.name));
-  if (isExhausted()) return sendText(to, creditsExhaustedMessage(currentAccount()?.name));
+  if (!aiAllowed()) return sendWithRequestButton(to, query, freePlanMessage(currentAccount()?.name));
+  if (isExhausted()) return sendWithRequestButton(to, query, creditsExhaustedMessage(currentAccount()?.name));
 
   if (announce) await announce(`🤖 Searching every file with AI for "${query}"…`);
   const files = await listFolderFiles();
@@ -804,17 +854,18 @@ async function runAiSearch(to, query, announce) {
   console.log(`🤖 AI search "${query}" -> ${hits.length} hit(s)`);
   if (hits.length) {
     return sendFileOptions(to, hits,
-      `AI's closest matches for "${query}":`, false);
+      `AI's closest matches for "${query}":`, false, query);
   }
 
   const guidance = await aiGuidance(query);
   if (guidance) {
     console.log(`🧭 Smart guidance for "${query}"`);
-    return sendText(to, `${guidance}\n\n${MENU_HINT}`);
+    await sendText(to, `${guidance}\n\n${MENU_HINT}`);
+    return sendWithRequestButton(to, query, `Still not what you need?`);
   }
-  return sendText(to,
+  return sendWithRequestButton(to, query,
     `Even AI couldn't find anything matching "${query}" in the Drive folder.\n\n` +
-    "It may not be uploaded yet. Email hassan.saleem@mannai.com.qa and we'll get it to you.");
+    "It may not be uploaded yet.");
 }
 
 
@@ -1642,7 +1693,7 @@ async function handleIncomingMessage(value, message) {
         const named = findFilesByName(query, filtered);
         if (named.length) return await sendFileOptions(from, named, `${docType} — which product?`);
         const ranked = rankFiles(query, filtered, 10);
-        if (ranked.length) return await sendFileOptions(from, ranked, `${docType} — closest matches:`, false);
+        if (ranked.length) return await sendFileOptions(from, ranked, `${docType} — closest matches:`, false, query);
         return await sendNotFoundWithSuggestions(from, query, files);
       }
       // FCU model sheet: "fcu-sheet|DMP-10" -> find 3-row & 4-row datasheets for that model.
@@ -1673,13 +1724,18 @@ async function handleIncomingMessage(value, message) {
         }
         if (btnId === "aino") {
           console.log(`🙅 ${from} declined AI search for "${pendingQuery}"`);
-          return await sendText(from,
+          return await sendWithRequestButton(from, pendingQuery,
             `No problem — nothing spent.\n\nIf you know the document's name, type it exactly ` +
-            `(for example "APMR-A" or "ACMR IOM"), or email hassan.saleem@mannai.com.qa.`);
+            `(for example "APMR-A" or "ACMR IOM").`);
         }
         console.log(`✅ ${from} approved AI search for "${pendingQuery}"`);
         store.setCtx(from, "aiok", pendingQuery, 5 * 60 * 1000);
         return await runAiSearch(from, pendingQuery, (t) => sendText(from, t));
+      }
+
+      // "📥 Request it" — ask for a missing document to be added to the library.
+      if (btnId === docReq.REQUEST_BUTTON.id) {
+        return await handleDocRequest(from, profileName);
       }
 
       // "📦 Send all" row from a document picker.

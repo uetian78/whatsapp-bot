@@ -4,6 +4,8 @@
 //   "Log"      -> Time (Qatar) | Phone | Name | Message | Intent | Bot response
 //   "Contacts" -> Phone | Name | First seen | Last seen | Messages |
 //                 Files received | Last intent | Last message
+//   "Requests" -> Time (Qatar) | Phone | Name | Requested | Status
+//                 (library requests from the "📥 Request it" button)
 //
 //  Design rules:
 //  - NEVER slows or breaks the bot: every write is fire-and-forget,
@@ -13,11 +15,13 @@
 // ============================================================
 
 const { classify } = require("./intents.js");
+const { requestRow } = require("./lib/doc-requests.js");
 
 const CRM_SHEET_ID = process.env.CRM_SHEET_ID || "1EbAXIZrjaelovg8APOaWhdg7FVnLxyO6-I2bMzIE2JM";
 const TZ = "Asia/Qatar";
 
 const LOG_HEADERS = ["Time (Qatar)", "Phone", "Name", "Message", "Intent", "Bot response"];
+const REQUEST_HEADERS = ["Time (Qatar)", "Phone", "Name", "Requested", "Status"];
 const CONTACT_HEADERS = ["Phone", "Name", "First seen", "Last seen", "Messages", "Files received", "Last intent", "Last message"];
 
 let getSheetsClient = null; // injected from server.js (shares its auth)
@@ -150,6 +154,7 @@ async function ensureTabs(sheets) {
   const requests = [];
   if (!titles.includes("Log")) requests.push({ addSheet: { properties: { title: "Log" } } });
   if (!titles.includes("Contacts")) requests.push({ addSheet: { properties: { title: "Contacts" } } });
+  if (!titles.includes("Requests")) requests.push({ addSheet: { properties: { title: "Requests" } } });
   if (requests.length) {
     await sheets.spreadsheets.batchUpdate({ spreadsheetId: CRM_SHEET_ID, requestBody: { requests } });
   }
@@ -161,6 +166,10 @@ async function ensureTabs(sheets) {
   await sheets.spreadsheets.values.update({
     spreadsheetId: CRM_SHEET_ID, range: "Contacts!A1:H1", valueInputOption: "RAW",
     requestBody: { values: [CONTACT_HEADERS] },
+  });
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: CRM_SHEET_ID, range: "Requests!A1:E1", valueInputOption: "RAW",
+    requestBody: { values: [REQUEST_HEADERS] },
   });
   tabsReady = true;
 }
@@ -196,6 +205,27 @@ async function flush() {
   }
 }
 
+// ── Library request ("📥 Request it") — written straight away, not queued:
+// the user is told it was sent, so it must not sit in a debounce buffer.
+// Returns true on success; never throws.
+async function logDocRequest({ from, name, query }) {
+  try {
+    if (!getSheetsClient) return false;
+    const sheets = await getSheetsClient();
+    await ensureTabs(sheets);
+    await sheets.spreadsheets.values.append({
+      spreadsheetId: CRM_SHEET_ID, range: "Requests!A:E",
+      valueInputOption: "RAW", insertDataOption: "INSERT_ROWS",
+      requestBody: { values: [requestRow({ ts: nowQatar(), from, name, query })] },
+    });
+    console.log(`📥 CRM: library request from ${from}: "${query}"`);
+    return true;
+  } catch (e) {
+    console.error("CRM logDocRequest error:", e.message);
+    return false;
+  }
+}
+
 // ── "stats" admin command — usage summary from the Log tab ──
 async function statsMessage() {
   try {
@@ -203,6 +233,8 @@ async function statsMessage() {
     await ensureTabs(sheets);
     const res = await sheets.spreadsheets.values.get({ spreadsheetId: CRM_SHEET_ID, range: "Log!A2:F" });
     const rows = res.data.values || [];
+    const reqRes = await sheets.spreadsheets.values.get({ spreadsheetId: CRM_SHEET_ID, range: "Requests!A2:E" });
+    const openRequests = (reqRes.data.values || []).filter((r) => /^open$/i.test((r[4] || "").trim())).length;
     const today = nowQatar().slice(0, 10);
     const cutoff = new Date(Date.now() - 7 * 24 * 3600 * 1000).toLocaleString("sv-SE", { timeZone: TZ }).slice(0, 10);
 
@@ -253,6 +285,7 @@ async function statsMessage() {
       `*Most-sent documents (7d):*\n${topDocs || "—"}\n\n` +
       `⚠️ Not-found (7d): *${notFound}*` +
       (lastMiss ? `\nLatest miss: "${(lastMiss[3] || "").slice(0, 60)}" — ${lastMiss[2] || lastMiss[1]}` : "") +
+      `\n📥 Open library requests: *${openRequests}*` +
       `\n\n📈 Dashboard: https://docs.google.com/spreadsheets/d/${CRM_SHEET_ID}`
     );
   } catch (e) {
@@ -274,4 +307,4 @@ async function warmUp() {
   }
 }
 
-module.exports = { init, classify, logInbound, logOutbound, isKnownContact, statsMessage, warmUp };
+module.exports = { init, classify, logInbound, logOutbound, isKnownContact, statsMessage, warmUp, logDocRequest };
