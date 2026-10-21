@@ -72,6 +72,41 @@ const PRODUCTS = {
     ],
   },
 
+  // APMRG1 High-Efficiency Packaged Air Conditioners (R-410A) — 19 models.
+  // Source: "APMR G1 updated catalogue.pdf", Engineering Specifications
+  // Tables 2-4. The catalogue gives ONE capacity only, already at T3:
+  // net capacity at 29.0°C DB / 19.0°C WB entering air, 46°C condenser air.
+  // No T1 figure is published, so none is stored (cap_kw = T3 net).
+  "apmr-g1": {
+    label: "APMRG1 High-Efficiency Packaged Air Conditioner",
+    refrigerant: "R-410A",
+    fileKeyword: "apmr g1",
+    namePrefix: "APMR ",
+    nameSuffix: "G1",
+    selectBy: "t3only", // single-condition capacity (T3 net)
+    models: [
+      { code: "51055", cfm: 1700,  cap_kw: 13.66,  eer: 8.45 },
+      { code: "51070", cfm: 2100,  cap_kw: 17.35,  eer: 8.33 },
+      { code: "51080", cfm: 2800,  cap_kw: 19.46,  eer: 8.38 },
+      { code: "51090", cfm: 3200,  cap_kw: 21.2,   eer: 8.45 },
+      { code: "51100", cfm: 3500,  cap_kw: 24.27,  eer: 8.39 },
+      { code: "51120", cfm: 4100,  cap_kw: 28.05,  eer: 8.41 },
+      { code: "52130", cfm: 4500,  cap_kw: 31.68,  eer: 8.40 },
+      { code: "52150", cfm: 5000,  cap_kw: 36.14,  eer: 8.40 },
+      { code: "52170", cfm: 5800,  cap_kw: 39.83,  eer: 8.33 },
+      { code: "52180", cfm: 6200,  cap_kw: 42.73,  eer: 8.20 },
+      { code: "52210", cfm: 6500,  cap_kw: 47.7,   eer: 8.21 },
+      { code: "52240", cfm: 7000,  cap_kw: 55.36,  eer: 8.18 },
+      { code: "52270", cfm: 8000,  cap_kw: 62.39,  eer: 8.26 },
+      { code: "52300", cfm: 9000,  cap_kw: 70.51,  eer: 8.32 },
+      { code: "52340", cfm: 10000, cap_kw: 80.48,  eer: 8.10 },
+      { code: "52385", cfm: 10800, cap_kw: 97.98,  eer: 8.00 },
+      { code: "52430", cfm: 11800, cap_kw: 111.43, eer: 7.84 },
+      { code: "52505", cfm: 13500, cap_kw: 124.63, eer: 8.00 },
+      { code: "52555", cfm: 15800, cap_kw: 136.01, eer: 7.93 },
+    ],
+  },
+
   // FCU DMP Standard chilled water fan coil units.
   // Source: FCUs DMP datasheets.pdf pages 1-2 (summary table).
   // Conditions: 26.67°C DB / 19.44°C WB entering air, 7.22°C (45°F) EWT, medium speed, 50 Pa ESP.
@@ -197,7 +232,8 @@ const PRODUCTS = {
 for (const key of Object.keys(PRODUCTS)) {
 
   const prefix = PRODUCTS[key].namePrefix || "APMR ";
-  const suffix = key === "apmr-a" ? "A" : "";
+  // nameSuffix: e.g. "G1" -> "APMR 51055G1"
+  const suffix = PRODUCTS[key].nameSuffix || (key === "apmr-a" ? "A" : "");
   for (const m of PRODUCTS[key].models) {
     if (m.cap_kw !== undefined) {
       m.cap_tr = Math.round((m.cap_kw / TR_KW) * 10) / 10;

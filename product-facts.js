@@ -19,6 +19,16 @@ function packagedLines(key) {
   );
 }
 
+// APMRG1: single catalogue capacity, already at T3 (net, 46°C condenser air,
+// 29.0°C DB / 19.0°C WB entering air). No T1 figure is published.
+function g1Lines(key) {
+  return PRODUCTS[key].models.map(
+    (m) =>
+      `${m.fullModel}: net cooling at T3(46°C) only = ${m.cap_tr} TR (${m.cap_kw} kW), ` +
+      `EER ${m.eer}; supply air ${m.cfm} CFM`
+  );
+}
+
 // PAC4A fresh-air / DOAS: single condition at 46.1°C.
 function freshLines(key) {
   return PRODUCTS[key].models.map(
@@ -58,6 +68,10 @@ function buildProductKnowledge() {
 
   out.push("## APMR Packaged Air Conditioners (R-410A, 5–28 TR):");
   out.push(...packagedLines("apmr"));
+  out.push("");
+
+  out.push("## APMRG1 High-Efficiency Packaged Air Conditioners (R-410A) — catalogue rates T3 ONLY (net, 46°C condenser air, 29.0°C DB / 19.0°C WB entering air); no T1 capacity is published:");
+  out.push(...g1Lines("apmr-g1"));
   out.push("");
 
   out.push("## APMR-A Packaged Air Conditioners (R-410A):");
@@ -114,6 +128,8 @@ function parseListRequest(text) {
   if (!wantsListIntent(t)) return null;
 
   if (/\bapmr-?a\b/.test(t)) return ["apmr-a"];
+  // APMRG1 before bare "apmr" — "apmr g1" would otherwise match "apmr".
+  if (/\bapmr[\s-]?g1\b/.test(t)) return ["apmr-g1"];
   // APMR-V is a distinct series with no spec table of its own — don't let the
   // bare "apmr" check below swallow it (word-boundary regex treats the
   // hyphen as a boundary, so "apmr-v" would otherwise match "apmr").
@@ -171,6 +187,20 @@ function packagedSection(key, system = "imp") {
   return head + lines.join("\n");
 }
 
+// APMRG1: one capacity column — T3 net (46°C), the only rating in the catalogue.
+function g1Section(key, system = "imp") {
+  const p = PRODUCTS[key];
+  const head =
+    `*${p.label}*${p.refrigerant ? ` (${p.refrigerant})` : ""}\n` +
+    `${p.models.length} models — net cooling at T3 (46°C), supply airflow, EER:\n`;
+  const lines = p.models.map((m) =>
+    system === "si"
+      ? `• ${m.fullModel} — ${kw1(m.cap_kw)} kW — ${cfmToLps(m.cfm)} L/s — EER ${m.eer.toFixed(2)}`
+      : `• ${m.fullModel} — ${tr1(m.cap_tr)} TR — ${m.cfm} CFM — EER ${m.eer.toFixed(2)}`);
+  const foot = "\n_Catalogue rates T3 only (29°C DB / 19°C WB entering air)._";
+  return head + lines.join("\n") + foot;
+}
+
 function freshSection(key, system = "imp") {
   const p = PRODUCTS[key];
   const head =
@@ -219,6 +249,7 @@ function buildUnitList(keys, system = "imp") {
   const sections = (keys || [])
     .map((k) => {
       if (k === "apmr" || k === "apmr-a") return packagedSection(k, system);
+      if (k === "apmr-g1") return g1Section(k, system);
       if (k === "pac4a") return freshSection(k, system);
       if (k === "fcu-dmp" || k === "fcu-dcmp") return fcuSection(k, system);
       if (k.startsWith("chiller:")) return chillerSection(k.split(":")[1], system);
