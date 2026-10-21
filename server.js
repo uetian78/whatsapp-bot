@@ -223,7 +223,7 @@ const BOT_CAPABILITIES =
   "• Catalogue — e.g. *APMR catalogue*, *Hisense catalogue*\n" +
   "• IOM manual — e.g. *APMR IOM*\n" +
   "• Model datasheet — e.g. *APMRa 51004*, *APMR 52340 T1*\n" +
-  "• List a full range — e.g. *list APMR units*, *list of split units*\n\n" +
+  "• List a full range — e.g. *list APMR units*, *APMRG1 list*, *list of split units*\n\n" +
   "*🛠️ Quick Selection* (give a capacity → get a model)\n" +
   "• Packaged unit — *package unit 20 tr t3*\n" +
   "• Fresh air / DOAS — *fresh air 15 tr*\n" +

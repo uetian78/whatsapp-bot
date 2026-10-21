@@ -15,7 +15,8 @@ test("APMRG1 has 19 models, T3-only capacity, G1 model names", () => {
 });
 
 test("list request routes APMR G1 spellings, without stealing APMR / APMR-A", () => {
-  for (const q of ["list APMR G1 units", "apmrg1 models", "APMR-G1 range"])
+  for (const q of ["list APMR G1 units", "apmrg1 models", "APMR-G1 range",
+                   "APMRG1 list", "apmrg1 list", "APMR G1 list", "APMRG1", "APMR G1", "apmrg1 units"])
     assert.deepEqual(parseListRequest(q), ["apmr-g1"], q);
   assert.deepEqual(parseListRequest("list APMR units"), ["apmr"]);
   assert.deepEqual(parseListRequest("list APMR-A units"), ["apmr-a"]);

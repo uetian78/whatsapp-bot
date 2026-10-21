@@ -125,6 +125,11 @@ function parseListRequest(text) {
   if (/\b\d{5}\b/.test(t)) return null;
   if (/\d+(?:\.\d+)?\s*(?:tr|ton|tons|cfm)\b/.test(t)) return null;
 
+  // A bare "APMRG1" / "APMR G1" (optionally + units/models/series) also means
+  // the list: the series has no catalogue/IOM entry in the map, so without
+  // this it would fall to the old APMR catalogue menu.
+  if (/^\s*apmr[\s-]?g1(\s+(units?|models?|series))?\s*$/.test(t)) return ["apmr-g1"];
+
   if (!wantsListIntent(t)) return null;
 
   if (/\bapmr-?a\b/.test(t)) return ["apmr-a"];
