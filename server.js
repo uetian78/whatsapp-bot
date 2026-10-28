@@ -55,6 +55,7 @@ const wa = require("./lib/wa.js");
 const { createSenderRouter } = require("./lib/sender-api.js");
 const { createStatusStore } = require("./lib/sender-status.js");
 const { polishDraft } = require("./lib/sender-polish.js");
+const { createNumberHealth, metaEventLines, CHECK_EVERY_MS } = require("./lib/number-health.js");
 const {
   send, sendText, sendLongText, sendButtons, sendList, sendDocument, sendDriveFile,
   sendPdfBuffer, uploadMedia, uploadMediaBuffer, downloadWhatsAppMedia, markReadWithTyping,
@@ -63,6 +64,20 @@ const {
 
 const app = express();
 app.use(express.json());
+
+// Meta has dropped the bot's number back to PENDING before ("This person is
+// no longer available"). Every request — webhook, Bot Sender, or just opening
+// the bot URL in a browser, which also wakes a sleeping Railway deploy —
+// gives the hourly check a chance to run and re-register the number.
+const numberHealth = createNumberHealth({
+  getStatus: wa.getNumberStatus,
+  register: wa.registerNumber,
+  pin: process.env.WHATSAPP_REGISTER_PIN,
+});
+app.use((req, res, next) => {
+  numberHealth.maybeCheck();
+  next();
+});
 
 const {
   VERIFY_TOKEN,
@@ -76,7 +91,7 @@ const {
 // Fail fast on required env; warn on optional. A missing required var
 // otherwise surfaces as a confusing mid-request auth error.
 const REQUIRED_ENV = ["VERIFY_TOKEN", "WHATSAPP_TOKEN", "PHONE_NUMBER_ID", "GOOGLE_SHEET_ID", "GOOGLE_SERVICE_ACCOUNT_JSON"];
-const OPTIONAL_ENV = ["ANTHROPIC_API_KEY", "DRIVE_FOLDER_ID", "ADMIN_NUMBERS", "CRM_SHEET_ID"];
+const OPTIONAL_ENV = ["ANTHROPIC_API_KEY", "DRIVE_FOLDER_ID", "ADMIN_NUMBERS", "CRM_SHEET_ID", "WHATSAPP_REGISTER_PIN"];
 {
   const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
   if (missing.length) {
@@ -2427,6 +2442,7 @@ app.use("/api/sender", createSenderRouter({
 
 app.post("/webhook", (req, res) => {
   res.sendStatus(200);
+  for (const line of metaEventLines(req.body)) console.log(line);
   const value = req.body.entry?.[0]?.changes?.[0]?.value;
   for (const s of value?.statuses || []) senderStatus.record(s);
   const message = value?.messages?.[0];
@@ -2507,4 +2523,8 @@ app.get("/vrf-health", async (_, res) => {
 initVrf({ sendText, sendDocument });
 crm.init({ getSheets });
 crm.warmUp(); // preload contacts so "Welcome back" works from the first message
-app.listen(PORT, () => console.log(`🚀 Listening on ${PORT}`));
+app.listen(PORT, () => {
+  console.log(`🚀 Listening on ${PORT}`);
+  numberHealth.maybeCheck();
+  setInterval(() => numberHealth.maybeCheck(), CHECK_EVERY_MS).unref();
+});
