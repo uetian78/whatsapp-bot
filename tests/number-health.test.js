@@ -52,14 +52,22 @@ test("without a PIN it only logs what to do", async () => {
   const r = await health.check();
   assert.equal(r.registered, undefined);
   assert.deepEqual(calls.registered, []);
-  assert.ok(calls.logs.some((l) => l.includes("WHATSAPP_REGISTER_PIN")));
+  assert.ok(calls.logs.some((l) => l.includes("WHATSAPP_REGISTER_PIN is not set")));
 });
 
-test("a PIN that isn't 6 digits counts as no PIN", async () => {
-  const { health, calls } = setup({ status: "PENDING", pin: "12345" });
+test("a PIN that isn't 6 digits is not used, and the log gives its length but not its value", async () => {
+  const { health, calls } = setup({ status: "PENDING", pin: "98765" });
   await health.check();
   assert.deepEqual(calls.registered, []);
-  assert.ok(calls.logs.some((l) => l.includes("WHATSAPP_REGISTER_PIN")));
+  const line = calls.logs.find((l) => l.includes("WHATSAPP_REGISTER_PIN"));
+  assert.ok(line.includes("5 characters"), line);
+  assert.ok(!line.includes("98765"), line);
+});
+
+test("spaces around the PIN are ignored", async () => {
+  const { health, calls } = setup({ status: "PENDING", pin: " 654321\n" });
+  await health.check();
+  assert.deepEqual(calls.registered, ["654321"]);
 });
 
 test("BANNED / FLAGGED numbers are not re-registered", async () => {
