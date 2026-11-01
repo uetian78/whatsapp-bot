@@ -305,17 +305,22 @@ function createServerDeliver() {
   return async function deliver(value, message) {
     const { handleIncomingMessage } = require("../../server.js");
     const { parseAccounts, findAccount, runWithAccount } = require("../../lib/accounts.js");
-    const { sendText } = require("../../lib/wa.js");
+    const { runWithChannel, sendText } = require("../../lib/channel.js");
+    const { whatsappAdapter } = require("../../lib/channel-whatsapp.js");
     const account = findAccount(message.from, parseAccounts(sheet.allowed));
     if (!account) return; // not on the Allowed tab: no reply at all
-    try {
-      await runWithAccount(account, () => handleIncomingMessage(value, message));
-    } catch (err) {
-      console.error("Handler error:", err.stack || err.message);
+    // As in the webhook: WhatsApp is the channel, so the replay goes through the
+    // WhatsApp adapter (which reaches the stubbed lib/wa.js senders).
+    await runWithChannel(whatsappAdapter, async () => {
       try {
-        await sendText(message.from, "⚠️ Something went wrong on my side. Please try that again — or type *menu* to see what I can do.");
-      } catch (_) { /* nothing more to do */ }
-    }
+        await runWithAccount(account, () => handleIncomingMessage(value, message));
+      } catch (err) {
+        console.error("Handler error:", err.stack || err.message);
+        try {
+          await sendText(message.from, "⚠️ Something went wrong on my side. Please try that again — or type *menu* to see what I can do.");
+        } catch (_) { /* nothing more to do */ }
+      }
+    });
   };
 }
 

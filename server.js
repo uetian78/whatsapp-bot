@@ -10,8 +10,7 @@ require("dns").setDefaultResultOrder("ipv4first");
 
 // ============================================================
 //  WhatsApp Auto-Responder + Claude Haiku AI Fallback
-//  - Google Sheet = control panel (rules + AI knowledge)
-//  - Keyword rules answer common questions for FREE
+//  - Google Sheet = control panel (AI knowledge + Allowed numbers)
 //  - Claude Haiku answers everything else using YOUR knowledge only
 // ============================================================
 
@@ -48,7 +47,7 @@ const { isVrfTrigger } = require("./vrf/trigger.js");
 const {
   initVrf, onVrfKeyword, onVrfMessage, sessions: vrfSessions,
 } = require("./vrf/vrfHandler.js");
-const { getSheets, getDrive, withRetry, driveFileId, downloadBytes, normalizeDriveLink } = require("./lib/google.js");
+const { getSheets, getDrive, withRetry, driveFileId } = require("./lib/google.js");
 const {
   listFolderFiles, docTypeFromFilename, folderMatchesDocType, fileMatchesDocType,
   findFilesInFolder, findExactFileInDoc, findDatasheetFiles, findChillerDatasheetFiles, displayName, shortPath,
@@ -58,11 +57,15 @@ const { createSenderRouter } = require("./lib/sender-api.js");
 const { createStatusStore } = require("./lib/sender-status.js");
 const { polishDraft } = require("./lib/sender-polish.js");
 const { createNumberHealth, metaEventLines, CHECK_EVERY_MS } = require("./lib/number-health.js");
+// Every reply goes through the channel facade, so it reaches whichever channel
+// is handling the message. `wa` stays for the WhatsApp-only parts: the Bot
+// Sender router and the number-health check.
 const {
-  send, sendText, sendLongText, sendButtons, sendList, sendDocument, sendDriveFile,
-  sendPdfBuffer, uploadMedia, uploadMediaBuffer, downloadWhatsAppMedia, markReadWithTyping,
-  NOT_FOUND_MSG, fileTooLargeMessage, WHATSAPP_MAX_FILE_BYTES, validatePdfBuffer,
-} = wa;
+  runWithChannel, showTyping, downloadMedia,
+  sendText, sendLongText, sendButtons, sendList, sendDocument, sendDriveFile, sendPdfBuffer,
+} = require("./lib/channel.js");
+const { whatsappAdapter } = require("./lib/channel-whatsapp.js");
+const { NOT_FOUND_MSG } = wa;
 
 const app = express();
 app.use(express.json());
@@ -116,10 +119,10 @@ const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 
 // ============================================================
 //  GOOGLE SHEET ACCESS
-//  Sheet has 3 tabs:
-//   1) "Rules"     -> Keywords | Match | Type | Caption | FileLink | Filename
-//   2) "Knowledge" -> Topic | Info   (the AI's knowledge base)
-//   3) "Allowed"   -> Number        (optional whitelist; empty = reply to all)
+//  The bot reads two tabs (the old "Rules" keyword tab is no longer read; it
+//  can stay in the Sheet):
+//   1) "Knowledge" -> Topic | Info   (the AI's knowledge base)
+//   2) "Allowed"   -> Number        (optional whitelist; empty = reply to all)
 // ============================================================
 // Static Drive-ID map for chiller datasheets (built by build-chiller-ids.js).
 // Key: "code|series" e.g. "5230|APCY-E" -> { id, name }.
@@ -159,35 +162,24 @@ function isDuplicate(msgId) {
 
 
 // Simple cache so we don't hit the Sheet on every single message
-let cache = { rules: [], knowledge: [], allowed: [], accounts: new Map(), ts: 0 };
+let cache = { knowledge: [], allowed: [], accounts: new Map(), ts: 0 };
 const CACHE_MS = 60 * 1000; // refresh at most once per minute
 
 async function loadSheet() {
-  if (Date.now() - cache.ts < CACHE_MS && cache.rules.length) return cache;
+  if (Date.now() - cache.ts < CACHE_MS) return cache;
 
   const sheets = await getSheets();
   // Allowed is A2:C — A = number, B = name, C = plan (paid/free). Extra
   // columns are additive: rows that only fill A keep working as before.
-  const ranges = ["Rules!A2:F", "Knowledge!A2:B", "Allowed!A2:C"];
+  const ranges = ["Knowledge!A2:B", "Allowed!A2:C"];
   const res = await sheets.spreadsheets.values.batchGet({
     spreadsheetId: GOOGLE_SHEET_ID,
     ranges,
   });
 
-  const [rulesRows, knowRows, allowRows] = res.data.valueRanges.map(
+  const [knowRows, allowRows] = res.data.valueRanges.map(
     (r) => r.values || []
   );
-
-  const rules = rulesRows
-    .filter((r) => r[0]) // must have keywords
-    .map((r) => ({
-      keywords: (r[0] || "").split(",").map((k) => k.trim().toLowerCase()).filter(Boolean),
-      matchType: (r[1] || "contains").trim().toLowerCase(),
-      type: (r[2] || "text").trim().toLowerCase(),
-      caption: r[3] || "",
-      fileLink: normalizeDriveLink(r[4] || ""),
-      filename: r[5] || "file.pdf",
-    }));
 
   const knowledge = knowRows
     .filter((r) => r[0] || r[1])
@@ -198,10 +190,10 @@ async function loadSheet() {
   const accounts = parseAccounts(allowRows);
   const allowed = [...accounts.keys()];
 
-  cache = { rules, knowledge, allowed, accounts, ts: Date.now() };
+  cache = { knowledge, allowed, accounts, ts: Date.now() };
   const paidCount = [...accounts.values()].filter((a) => a.paid).length;
   console.log(
-    `🔄 Sheet loaded: ${rules.length} rules, ${knowledge.length} knowledge rows, ` +
+    `🔄 Sheet loaded: ${knowledge.length} knowledge rows, ` +
     `${accounts.size} account(s) (${paidCount} paid)`
   );
   return cache;
@@ -210,18 +202,6 @@ async function loadSheet() {
 // ============================================================
 //  MATCHING
 // ============================================================
-function matchRule(text, rules) {
-  const t = text.trim().toLowerCase();
-  for (const rule of rules) {
-    if (rule.matchType === "exact") {
-      if (rule.keywords.some((k) => t === k)) return rule;
-    } else {
-      if (rule.keywords.some((k) => t.includes(k))) return rule;
-    }
-  }
-  return null;
-}
-
 // Levenshtein distance between two strings (for fuzzy "did you mean")
 function levenshtein(a, b) {
   const m = a.length, n = b.length;
@@ -585,8 +565,8 @@ async function fallbackResolve(seriesNameOrText, docType, files) {
 // ============================================================
 //  SENDING
 // ============================================================
-// send/sendText/sendLongText/sendButtons/sendDocument/sendDriveFile/sendPdfBuffer
-// now live in lib/wa.js (imported above).
+// sendText/sendLongText/sendButtons/sendList/sendDocument/sendDriveFile/sendPdfBuffer
+// come from lib/channel.js (imported above); the WhatsApp side is lib/wa.js.
 
 // Send a unit list (split or product) in the chosen unit system, then a small
 // button message offering to switch Imperial <-> International. The list itself
@@ -607,54 +587,6 @@ async function sendListWithToggle(from, kind, keys, system) {
     [{ id: `units|${other}`, title: otherTitle }]
   );
 }
-
-// uploadMedia/uploadMediaBuffer/downloadWhatsAppMedia/mimeFromName/validatePdfBuffer
-// and sendDocument/sendDriveFile/sendPdfBuffer now live in lib/wa.js (imported above).
-
-async function sendRule(to, rule) {
-  if (rule.type === "document") {
-    let buffer;
-    try {
-      buffer = await downloadBytes({ link: rule.fileLink });
-      validatePdfBuffer(buffer, rule.filename);
-    } catch (err) {
-      console.error("❌ Document download error:", err.message);
-      return sendText(to, NOT_FOUND_MSG);
-    }
-    try {
-      const mediaId = await uploadMediaBuffer(buffer, rule.filename);
-      return send(to, {
-        messaging_product: "whatsapp",
-        to,
-        type: "document",
-        document: { id: mediaId, filename: rule.filename, caption: rule.caption },
-      });
-    } catch (err) {
-      console.error("❌ Document upload error:", err.response?.data || err.message);
-      if (err.response?.status === 413 || buffer.length > WHATSAPP_MAX_FILE_BYTES) {
-        return sendText(to, fileTooLargeMessage(rule.filename));
-      }
-      return sendText(to, NOT_FOUND_MSG);
-    }
-  }
-  if (rule.type === "image") {
-    try {
-      const mediaId = await uploadMedia({ link: rule.fileLink, filename: rule.filename || "image.jpg" });
-      return send(to, {
-        messaging_product: "whatsapp",
-        to,
-        type: "image",
-        image: { id: mediaId, caption: rule.caption },
-      });
-    } catch (err) {
-      console.error("❌ Image upload error:", err.response?.data || err.message);
-      return sendText(to, `Sorry, I couldn't fetch that image right now.`);
-    }
-  }
-  return sendText(to, rule.caption);
-}
-
-// send() now lives in lib/wa.js (imported above).
 
 // ============================================================
 //  WEBHOOK VERIFY
@@ -1190,7 +1122,7 @@ async function handleScheduleStep(from, s, message, vText) {
 
     s.step = "processing"; // guard against a second image launching a duplicate extraction
     let dl;
-    try { dl = await downloadWhatsAppMedia(media); }
+    try { dl = await downloadMedia(media); }
     catch (err) {
       console.error("❌ Schedule media download error:", err.response?.data || err.message);
       s.step = "awaitImage";
@@ -1618,7 +1550,7 @@ async function handleIncomingMessage(value, message) {
     const from = message.from;
 
     // Blue-tick + "typing…" right away; clears when our reply sends.
-    markReadWithTyping(message.id); // fire-and-forget by design
+    showTyping(message.id); // fire-and-forget by design
 
     // CRM: log who asked what, when. The profile name rides along in the
     // webhook payload; the reply is attached later via the send() hook.
@@ -1824,10 +1756,10 @@ async function handleIncomingMessage(value, message) {
       let attachment = null;
       try {
         if (message.type === "image" && message.image?.id) {
-          const dl = await downloadWhatsAppMedia(message.image.id);
+          const dl = await downloadMedia(message.image.id);
           attachment = { base64: dl.buffer.toString("base64"), mediaType: dl.mediaType, filename: "schedule.jpg" };
         } else if (message.type === "document" && message.document?.id) {
-          const dl = await downloadWhatsAppMedia(message.document.id);
+          const dl = await downloadMedia(message.document.id);
           attachment = {
             base64: dl.buffer.toString("base64"),
             mediaType: message.document.mime_type || dl.mediaType,
@@ -1978,7 +1910,7 @@ async function handleIncomingMessage(value, message) {
     }
     // ────────────────────────────────────────────────────────────
 
-    const { rules, knowledge } = await loadSheet();
+    const { knowledge } = await loadSheet();
 
     console.log(`📩 ${from}: "${text}"`);
 
@@ -2148,7 +2080,7 @@ async function handleIncomingMessage(value, message) {
 
     // 1-chiller) APCY-E / APCY-H chiller intents: model lookup, tonnage select,
     //   datasheet, and series/model comparison. Runs in the equipment-SELECTION
-    //   band (before Sheet keyword rules) so "chiller"/"ton"/"TR" never get
+    //   band (before the free-form lookup) so "chiller"/"ton"/"TR" never get
     //   intercepted by a generic keyword. Guarded to chiller keywords/codes only
     //   so it won't collide with APMR/APMR-A/PAC4A routing. Returns null for a
     //   bare series name (e.g. "APCY-H") so the catalogue/IOM flow still handles it.
@@ -2255,10 +2187,6 @@ async function handleIncomingMessage(value, message) {
       if (file) return await sendDriveFile(from, file);
       return await sendNotFoundWithSuggestions(from, text);
     }
-
-    // 2) Sheet keyword rules (custom overrides / captions)
-    const rule = matchRule(text, rules);
-    if (rule) return await sendRule(from, rule);
 
     // From here it's a free-form document lookup (bare code, filename, brand,
     // or a general question). Announce a search unless it's clearly a
@@ -2457,7 +2385,8 @@ if (WA_ON) app.post("/webhook", (req, res) => {
     return;
   }
 
-  enqueue(message.from, async () => {
+  // WhatsApp is the channel for everything under the webhook, the apology too.
+  enqueue(message.from, () => runWithChannel(whatsappAdapter, async () => {
     let account = null;
     try {
       // Resolve who's asking and pin it to this request's async context, so
@@ -2479,7 +2408,7 @@ if (WA_ON) app.post("/webhook", (req, res) => {
         await sendText(message.from, "⚠️ Something went wrong on my side. Please try that again — or type *menu* to see what I can do.");
       } catch (_) { /* the apology itself failed; nothing more to do */ }
     }
-  });
+  }));
 });
 
 app.get("/", (_, res) => res.send("WhatsApp AI bot running ✅"));
@@ -2546,7 +2475,7 @@ app.get("/vrf-health", requireAdmin(), async (_, res) => {
   res.json(await require("./vrf/vrfClient.js").sidecarProbe());
 });
 
-initVrf({ sendText, sendDocument });
+initVrf({ sendText, sendDocument }); // the facade, so VRF replies follow the channel
 crm.init({ getSheets });
 
 // The replay test (tests/replay) imports this file: it gets the app and the
