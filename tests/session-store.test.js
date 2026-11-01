@@ -40,3 +40,170 @@ test("clearAll wipes flow and ctx", () => {
   assert.equal(store.getFlow("u5"), null);
   assert.equal(store.getCtx("u5", "menu"), null);
 });
+
+// ── persistence: the Maps stay the working copy, SQLite survives restarts ──
+const { openDb } = require("../lib/db.js");
+const { createSessionStore } = store;
+
+const rows = (db, user) => db.prepare("SELECT key, expires_at FROM user_state WHERE user = ? ORDER BY key").all(user);
+
+test("a flow and its later edits survive a restart", () => {
+  const db = openDb(":memory:");
+  const a = createSessionStore({ db });
+  const s = a.startFlow("u", "split", { step: "brand" });
+  s.step = "condition"; // handlers mutate in place; persist writes the current state
+  a.persist("u");
+  const b = createSessionStore({ db });
+  b.restore();
+  assert.equal(b.getFlow("u").type, "split");
+  assert.equal(b.getFlow("u").data.step, "condition");
+});
+
+test("expired entries are not restored, and their rows are deleted", () => {
+  const db = openDb(":memory:");
+  let t = 1_000;
+  const a = createSessionStore({ db, now: () => t });
+  a.startFlow("u", "split", { step: "x" }, 100);
+  a.setCtx("u", "menu", { o: 1 }, 100);
+  a.setCtx("u", "list", ["a"], 10_000);
+  a.persist("u");
+  assert.equal(rows(db, "u").length, 3);
+  t = 5_000; // flow and menu are past their ttl, list is not
+  const b = createSessionStore({ db, now: () => t });
+  b.restore();
+  assert.equal(b.getFlow("u"), null);
+  assert.equal(b.getCtx("u", "menu"), null);
+  assert.deepEqual(b.getCtx("u", "list"), ["a"]);
+  assert.deepEqual(rows(db, "u").map((r) => r.key), ["ctx:list"]);
+});
+
+test("expires_at comes from each entry's own ts + ttl", () => {
+  const db = openDb(":memory:");
+  const a = createSessionStore({ db, now: () => 2_000 });
+  a.startFlow("u", "mtz", {}, 500);
+  a.setCtx("u", "menu", {}, 1_500);
+  a.persist("u");
+  const got = Object.fromEntries(rows(db, "u").map((r) => [r.key, r.expires_at]));
+  assert.deepEqual(got, { flow: 2_500, "ctx:menu": 3_500 });
+});
+
+test("a schedule flow stuck on processing restarts at awaitImage", () => {
+  const db = openDb(":memory:");
+  const a = createSessionStore({ db });
+  a.startFlow("u", "schedule", { step: "processing" });
+  a.persist("u");
+  const b = createSessionStore({ db });
+  b.restore();
+  assert.equal(b.getFlow("u").data.step, "awaitImage");
+});
+
+test("a non-schedule flow on a step called processing is left alone", () => {
+  const db = openDb(":memory:");
+  const a = createSessionStore({ db });
+  a.startFlow("u", "split", { step: "processing" });
+  a.persist("u");
+  const b = createSessionStore({ db });
+  b.restore();
+  assert.equal(b.getFlow("u").data.step, "processing");
+});
+
+test("ctx values round-trip as JSON", () => {
+  const db = openDb(":memory:");
+  const a = createSessionStore({ db });
+  const val = { options: [1, "two", { three: null }], n: 4.5, ok: true, nested: { a: [[]] } };
+  a.setCtx("u", "menu", val);
+  a.setCtx("u", "list", ["a.pdf", "b.pdf"]);
+  a.persist("u");
+  const b = createSessionStore({ db });
+  b.restore();
+  assert.deepEqual(b.getCtx("u", "menu"), val);
+  assert.deepEqual(b.getCtx("u", "list"), ["a.pdf", "b.pdf"]);
+});
+
+test("persist replaces the user's rows: ended flows and cleared ctx do not come back", () => {
+  const db = openDb(":memory:");
+  const a = createSessionStore({ db });
+  a.startFlow("u", "split", {});
+  a.setCtx("u", "menu", {});
+  a.persist("u");
+  a.endFlow("u");
+  a.clearCtx("u", "menu");
+  a.persist("u");
+  assert.deepEqual(rows(db, "u"), []);
+  const b = createSessionStore({ db });
+  b.restore();
+  assert.equal(b.getFlow("u"), null);
+});
+
+test("persist only touches the named user", () => {
+  const db = openDb(":memory:");
+  const a = createSessionStore({ db });
+  a.startFlow("u1", "split", {});
+  a.startFlow("u2", "mtz", {});
+  a.persist("u1");
+  a.persist("u2");
+  a.endFlow("u1");
+  a.persist("u1");
+  assert.deepEqual(rows(db, "u1"), []);
+  assert.deepEqual(rows(db, "u2").map((r) => r.key), ["flow"]);
+});
+
+test("a value that cannot be serialized is skipped with a warning, the rest is kept", () => {
+  const db = openDb(":memory:");
+  const a = createSessionStore({ db });
+  a.startFlow("u", "split", { step: "x" });
+  a.setCtx("u", "bad-buffer", { pdf: Buffer.from("SECRET-DOC-TEXT") });
+  a.setCtx("u", "bad-fn", { cb: () => 1 });
+  const cyc = {}; cyc.self = cyc;
+  a.setCtx("u", "bad-cycle", cyc);
+  a.setCtx("u", "good", { fine: 1 });
+  const warnings = [];
+  const realWarn = console.warn;
+  console.warn = (...args) => warnings.push(args.join(" "));
+  try { a.persist("u"); } finally { console.warn = realWarn; }
+  assert.deepEqual(rows(db, "u").map((r) => r.key), ["ctx:good", "flow"]);
+  assert.equal(warnings.length, 3);
+  assert.ok(warnings.some((w) => w.includes("bad-buffer") && w.includes("Buffer")));
+  assert.ok(warnings.some((w) => w.includes("bad-fn") && w.includes("function")));
+  assert.ok(!warnings.join(" ").includes("SECRET-DOC-TEXT")); // keys and types only
+  const b = createSessionStore({ db });
+  b.restore();
+  assert.equal(b.getFlow("u").data.step, "x");
+  assert.deepEqual(b.getCtx("u", "good"), { fine: 1 });
+  assert.equal(b.getCtx("u", "bad-buffer"), null);
+});
+
+test("a corrupt row is dropped on restore without stopping the others", () => {
+  const db = openDb(":memory:");
+  const a = createSessionStore({ db });
+  a.startFlow("u", "split", { step: "x" });
+  a.persist("u");
+  db.prepare("INSERT INTO user_state (user, key, value, expires_at) VALUES ('u', 'ctx:junk', '{not json', ?)").run(Date.now() + 60_000);
+  const b = createSessionStore({ db });
+  b.restore();
+  assert.equal(b.getFlow("u").data.step, "x");
+  assert.deepEqual(rows(db, "u").map((r) => r.key), ["flow"]);
+});
+
+test("the store's clock is injected, and the default follows Date.now at call time", () => {
+  const db = openDb(":memory:");
+  let t = 10_000;
+  const a = createSessionStore({ db, now: () => t });
+  a.startFlow("u", "split", {}, 1_000);
+  t = 10_999;
+  assert.ok(a.getFlow("u").type);
+  t = 11_001;
+  assert.deepEqual(a.getFlow("u"), { expired: true, type: "split" });
+
+  const realNow = Date.now;
+  let frozen = 50_000;
+  Date.now = () => frozen; // the replay harness freezes the clock like this
+  try {
+    const d = createSessionStore({ db });
+    d.startFlow("v", "split", {}, 1_000);
+    frozen = 50_500;
+    assert.ok(d.getFlow("v").type);
+    frozen = 51_001;
+    assert.equal(d.getFlow("v").expired, true);
+  } finally { Date.now = realNow; }
+});

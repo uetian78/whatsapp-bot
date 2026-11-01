@@ -2371,22 +2371,12 @@ if (WA_ON) app.use("/api/sender", createSenderRouter({
   sendDocument: wa.sendDocumentDetailed,
 }));
 
-if (WA_ON) app.post("/webhook", (req, res) => {
-  res.sendStatus(200);
-  for (const line of metaEventLines(req.body)) console.log(line);
-  const value = req.body.entry?.[0]?.changes?.[0]?.value;
-  for (const s of value?.statuses || []) senderStatus.record(s);
-  const message = value?.messages?.[0];
-  if (!message) return;
-
-  // Drop WhatsApp retries (same message.id re-delivered during cold start).
-  if (message.id && isDuplicate(message.id)) {
-    console.log(`⚡ Duplicate message ${message.id} — skipped`);
-    return;
-  }
-
-  // WhatsApp is the channel for everything under the webhook, the apology too.
-  enqueue(message.from, () => runWithChannel(whatsappAdapter, async () => {
+// One inbound message, start to finish: queued per user, Allowed check, the
+// channel it arrived on, the handler, and the apology on a crash. Conversation
+// state is saved afterwards, in a finally, so a crash doesn't lose it. The
+// webhook calls this with the WhatsApp adapter; the web chat will inject its own.
+function deliverMessage(value, message, adapter) {
+  return enqueue(message.from, () => runWithChannel(adapter, async () => {
     let account = null;
     try {
       // Resolve who's asking and pin it to this request's async context, so
@@ -2407,8 +2397,33 @@ if (WA_ON) app.post("/webhook", (req, res) => {
       try {
         await sendText(message.from, "⚠️ Something went wrong on my side. Please try that again — or type *menu* to see what I can do.");
       } catch (_) { /* the apology itself failed; nothing more to do */ }
+    } finally {
+      // Save the user's conversation so it survives a restart. A failure here
+      // is logged and never breaks the reply that was already sent.
+      if (account) {
+        try { store.persist(message.from); }
+        catch (err) { console.error("State save failed:", err.message); }
+      }
     }
   }));
+}
+
+if (WA_ON) app.post("/webhook", (req, res) => {
+  res.sendStatus(200);
+  for (const line of metaEventLines(req.body)) console.log(line);
+  const value = req.body.entry?.[0]?.changes?.[0]?.value;
+  for (const s of value?.statuses || []) senderStatus.record(s);
+  const message = value?.messages?.[0];
+  if (!message) return;
+
+  // Drop WhatsApp retries (same message.id re-delivered during cold start).
+  if (message.id && isDuplicate(message.id)) {
+    console.log(`⚡ Duplicate message ${message.id} — skipped`);
+    return;
+  }
+
+  // WhatsApp is the channel for everything under the webhook, the apology too.
+  deliverMessage(value, message, whatsappAdapter);
 });
 
 app.get("/", (_, res) => res.send("WhatsApp AI bot running ✅"));
@@ -2480,9 +2495,11 @@ crm.init({ getSheets });
 
 // The replay test (tests/replay) imports this file: it gets the app and the
 // message handler, and nothing listens, ticks or calls out until it's run.
-module.exports = { app, handleIncomingMessage };
+module.exports = { app, handleIncomingMessage, deliverMessage };
 
 if (require.main === module) {
+  try { store.restore(); } // bring back conversations saved before the last restart
+  catch (err) { console.error("State restore failed:", err.message); }
   crm.warmUp(); // preload contacts so "Welcome back" works from the first message
   app.listen(PORT, () => {
     console.log(`🚀 Listening on ${PORT}`);
