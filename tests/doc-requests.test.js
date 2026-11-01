@@ -59,3 +59,18 @@ test("admin alert and user confirmation carry the query", () => {
   assert.match(dr.confirmText("APMR IOM"), /APMR IOM/);
   assert.match(dr.duplicateText("APMR IOM"), /already/i);
 });
+
+test("isAdmin uses ADMIN_NUMBERS, else the default admin; others are refused", () => {
+  assert.equal(dr.isAdmin("97411111111", { ADMIN_NUMBERS: "97411111111" }), true);
+  assert.equal(dr.isAdmin("97466279059", {}), true);
+  assert.equal(dr.isAdmin("97422222222", {}), false);
+});
+
+test("isAdmin: digits-only match and a set ADMIN_NUMBERS replaces the default", () => {
+  const env = { ADMIN_NUMBERS: "+974 1111 1111, 97433333333" };
+  assert.equal(dr.isAdmin("+97411111111", env), true);
+  assert.equal(dr.isAdmin("97433333333", env), true);
+  assert.equal(dr.isAdmin("97466279059", env), false);
+  assert.equal(dr.isAdmin("", {}), false);
+  assert.equal(dr.isAdmin(undefined, {}), false);
+});

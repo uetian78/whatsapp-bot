@@ -30,7 +30,9 @@ const { parseSelection } = require("./lib/multi-select.js");
 // One reply must not trigger dozens of Drive downloads and media uploads.
 const MAX_BATCH_FILES = 10;
 const { isCreditError, isAiUnavailableError, markExhausted, isExhausted, creditsExhaustedMessage, aiFeatureUnavailableMessage } = require("./lib/ai-credits.js");
-const { parseAccounts, runWithAccount, currentAccount, aiAllowed, freePlanMessage } = require("./lib/accounts.js");
+const { parseAccounts, findAccount, runWithAccount, currentAccount, aiAllowed, freePlanMessage } = require("./lib/accounts.js");
+const { requireAdmin } = require("./lib/http-auth.js");
+const { whatsappEnabled, requiredEnv } = require("./lib/app-config.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
 const { isMenuTrigger, smallTalkReply, welcomeMenu, welcomeMenuList, tipFor, MENU_HINT } = require("./menu.js");
 const { PRODUCT_KB, parseListRequest, parseUnsupportedSeriesListRequest, buildUnitList } = require("./product-facts.js");
@@ -65,19 +67,25 @@ const {
 const app = express();
 app.use(express.json());
 
+// WhatsApp is off unless WHATSAPP_ENABLED=true. Off means: no webhook, no
+// /api/sender, and no number-health timer or checks (those make network calls).
+const WA_ON = whatsappEnabled();
+
 // Meta has dropped the bot's number back to PENDING before ("This person is
 // no longer available"). Every request — webhook, Bot Sender, or just opening
 // the bot URL in a browser, which also wakes a sleeping Railway deploy —
 // gives the hourly check a chance to run and re-register the number.
-const numberHealth = createNumberHealth({
+const numberHealth = WA_ON ? createNumberHealth({
   getStatus: wa.getNumberStatus,
   register: wa.registerNumber,
   pin: process.env.WHATSAPP_REGISTER_PIN,
-});
-app.use((req, res, next) => {
-  numberHealth.maybeCheck();
-  next();
-});
+}) : null;
+if (numberHealth) {
+  app.use((req, res, next) => {
+    numberHealth.maybeCheck();
+    next();
+  });
+}
 
 const {
   VERIFY_TOKEN,
@@ -90,8 +98,8 @@ const {
 
 // Fail fast on required env; warn on optional. A missing required var
 // otherwise surfaces as a confusing mid-request auth error.
-const REQUIRED_ENV = ["VERIFY_TOKEN", "WHATSAPP_TOKEN", "PHONE_NUMBER_ID", "GOOGLE_SHEET_ID", "GOOGLE_SERVICE_ACCOUNT_JSON"];
-const OPTIONAL_ENV = ["ANTHROPIC_API_KEY", "DRIVE_FOLDER_ID", "ADMIN_NUMBERS", "CRM_SHEET_ID", "WHATSAPP_REGISTER_PIN"];
+const REQUIRED_ENV = requiredEnv();
+const OPTIONAL_ENV = ["ANTHROPIC_API_KEY", "DRIVE_FOLDER_ID", "ADMIN_PASSWORD", "ADMIN_NUMBERS", "CRM_SHEET_ID", ...(WA_ON ? ["WHATSAPP_REGISTER_PIN"] : [])];
 {
   const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
   if (missing.length) {
@@ -650,7 +658,7 @@ async function sendRule(to, rule) {
 // ============================================================
 //  WEBHOOK VERIFY
 // ============================================================
-app.get("/webhook", (req, res) => {
+if (WA_ON) app.get("/webhook", (req, res) => {
   if (req.query["hub.mode"] === "subscribe" && req.query["hub.verify_token"] === VERIFY_TOKEN) {
     console.log("✅ Webhook verified");
     return res.status(200).send(req.query["hub.challenge"]);
@@ -1969,12 +1977,7 @@ async function handleIncomingMessage(value, message) {
     }
     // ────────────────────────────────────────────────────────────
 
-    const { rules, knowledge, allowed } = await loadSheet();
-
-    if (allowed.length && !allowed.includes(from)) {
-      console.log(`Ignored non-allowed: ${from}`);
-      return;
-    }
+    const { rules, knowledge } = await loadSheet();
 
     console.log(`📩 ${from}: "${text}"`);
 
@@ -2000,11 +2003,10 @@ async function handleIncomingMessage(value, message) {
     }
 
     // Admin: "stats" -> usage summary from the CRM log. Restricted to
-    // ADMIN_NUMBERS (comma-separated env var) when set; otherwise open
-    // (internal tool). Falls through to normal routing for non-admins.
+    // ADMIN_NUMBERS (comma-separated env var), else the default admin.
+    // Falls through to normal routing for non-admins.
     if (/^stats$/i.test(text)) {
-      const admins = (process.env.ADMIN_NUMBERS || "").split(",").map((s) => s.trim()).filter(Boolean);
-      if (!admins.length || admins.includes(from)) {
+      if (docReq.isAdmin(from)) {
         console.log(`📊 stats -> ${from}`);
         return await sendText(from, await crm.statsMessage());
       }
@@ -2413,7 +2415,7 @@ async function handleIncomingMessage(value, message) {
 // Lets the owner's Android app send messages as the bot. Off unless
 // SENDER_PIN is set. Delivery results arrive via the webhook's `statuses`.
 const senderStatus = createStatusStore();
-app.use("/api/sender", createSenderRouter({
+if (WA_ON) app.use("/api/sender", createSenderRouter({
   pin: process.env.SENDER_PIN,
   loadAccounts: async () => (await loadSheet()).accounts,
   polish: async (opts) => {
@@ -2440,7 +2442,7 @@ app.use("/api/sender", createSenderRouter({
   sendDocument: wa.sendDocumentDetailed,
 }));
 
-app.post("/webhook", (req, res) => {
+if (WA_ON) app.post("/webhook", (req, res) => {
   res.sendStatus(200);
   for (const line of metaEventLines(req.body)) console.log(line);
   const value = req.body.entry?.[0]?.changes?.[0]?.value;
@@ -2455,16 +2457,23 @@ app.post("/webhook", (req, res) => {
   }
 
   enqueue(message.from, async () => {
+    let account = null;
     try {
       // Resolve who's asking and pin it to this request's async context, so
       // every nested Claude call knows their plan without a threaded flag.
       // loadSheet() is cached for CACHE_MS, so this lookup is effectively free.
+      // Not on the Allowed tab (or the tab is empty) -> no reply at all.
       const { accounts } = await loadSheet();
-      const account = accounts.get(String(message.from).replace(/\D/g, "")) || null;
+      account = findAccount(message.from, accounts);
+      if (!account) {
+        console.log(`Ignored non-allowed: ${message.from}`);
+        return;
+      }
       await runWithAccount(account, () => handleIncomingMessage(value, message));
     } catch (err) {
       console.error("Handler error:", err.stack || err.message);
-      // Never leave the user with silence on a crash.
+      // Never leave an allowed user with silence on a crash. Strangers get nothing.
+      if (!account) return;
       try {
         await sendText(message.from, "⚠️ Something went wrong on my side. Please try that again — or type *menu* to see what I can do.");
       } catch (_) { /* the apology itself failed; nothing more to do */ }
@@ -2478,7 +2487,7 @@ app.get("/", (_, res) => res.send("WhatsApp AI bot running ✅"));
 // /drive-index            -> everything the bot can see
 // /drive-index?q=coil     -> only files/folders matching "coil" (diagnosing
 //                            "why can't the bot find X?" without scrolling)
-app.get("/drive-index", async (req, res) => {
+app.get("/drive-index", requireAdmin(), async (req, res) => {
   try {
     const all = await listFolderFiles();
     const q = String(req.query.q || "").toLowerCase().trim();
@@ -2516,7 +2525,7 @@ app.get("/drive-index", async (req, res) => {
 // this container (check deploy logs / Docker runtime). ok:false + a remote
 // onrender.com URL => stale VRF_SIDECAR_URL env var overriding the localhost
 // default.
-app.get("/vrf-health", async (_, res) => {
+app.get("/vrf-health", requireAdmin(), async (_, res) => {
   res.json(await require("./vrf/vrfClient.js").sidecarProbe());
 });
 
@@ -2525,6 +2534,8 @@ crm.init({ getSheets });
 crm.warmUp(); // preload contacts so "Welcome back" works from the first message
 app.listen(PORT, () => {
   console.log(`🚀 Listening on ${PORT}`);
-  numberHealth.maybeCheck();
-  setInterval(() => numberHealth.maybeCheck(), CHECK_EVERY_MS).unref();
+  if (numberHealth) {
+    numberHealth.maybeCheck();
+    setInterval(() => numberHealth.maybeCheck(), CHECK_EVERY_MS).unref();
+  }
 });

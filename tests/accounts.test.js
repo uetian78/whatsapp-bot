@@ -105,3 +105,24 @@ test("free-plan message still reads correctly with no name on file", () => {
   assert.doesNotMatch(msg, /Hi \*\*/, "no empty bold greeting");
   assert.match(msg, /PAID/);
 });
+
+// ---- findAccount: the single gate for who may use the bot ----
+const { findAccount } = require("../lib/accounts.js");
+
+test("findAccount matches digits only", () => {
+  const accounts = parseAccounts([["97455555555", "Sara", "paid"]]);
+  assert.equal(findAccount("+974 5555 5555", accounts).number, "97455555555");
+  assert.equal(findAccount("97455555555", accounts).name, "Sara");
+});
+
+test("findAccount returns null for a number that is not listed", () => {
+  const accounts = parseAccounts([["97455555555", "Sara"]]);
+  assert.equal(findAccount("97466666666", accounts), null);
+  assert.equal(findAccount("", accounts), null);
+  assert.equal(findAccount(undefined, accounts), null);
+});
+
+test("an empty Allowed list lets nobody in", () => {
+  assert.equal(findAccount("97455555555", new Map()), null);
+  assert.equal(findAccount("97455555555", undefined), null);
+});
