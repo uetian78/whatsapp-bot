@@ -109,6 +109,8 @@ Total for phases 0 to 2: about 4 to 6 working days.
 
 **Check first:** whether sharing a PDF into WhatsApp from the browser works on your testers' actual phones. Browser docs list PDF as usually shareable, but none confirm WhatsApp as a target, so this needs a quick test on iPhone and Android before phase 2.
 
+**Result, 1 Nov 2026:** you tested the live page on your phone and reported that sharing works. Phone type and the other 2 phones aren't recorded yet, so any phone where WhatsApp doesn't appear uses the link fallback.
+
 ## 7. Better features
 
 | Feature | Why, from your history | Effort |
