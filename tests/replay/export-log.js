@@ -30,11 +30,12 @@ const instant = (t) => Date.parse(String(t).trim().replace(" ", "T") + "+03:00")
 async function main() {
   // Required after dotenv: these modules read process.env at load time.
   const { getSheets } = require("../../lib/google.js");
-  const { listFolderFiles } = require("../../lib/drive-index.js");
+  const { crawlDrive } = require("../../lib/drive-index.js");
+  const { getDrive } = require("../../lib/google.js");
   const { alertNumbers } = require("../../lib/doc-requests.js");
 
   const log = console.log;
-  console.log = () => {}; // the Drive index prints every file it finds
+  console.log = () => {}; // keep the output to the result lines
   const sheets = await getSheets();
 
   const logRes = await sheets.spreadsheets.values.get({ spreadsheetId: CRM_SHEET_ID, range: "Log!A2:F" });
@@ -42,7 +43,10 @@ async function main() {
     spreadsheetId: process.env.GOOGLE_SHEET_ID,
     ranges: ["Rules!A2:F", "Knowledge!A2:B", "Allowed!A2:C"],
   });
-  const driveFiles = await listFolderFiles();
+  // Crawl Drive directly so the capture saves nothing to the library database,
+  // and keep the fixture's original file shape.
+  const { files: crawled } = await crawlDrive({ getDrive, folderId: process.env.DRIVE_FOLDER_ID });
+  const driveFiles = crawled.map(({ id, name, folder, exportMime }) => (exportMime ? { id, name, folder, exportMime } : { id, name, folder }));
   console.log = log;
 
   const [rules, knowledge, allowedRaw] = control.data.valueRanges.map((r) => r.values || []);

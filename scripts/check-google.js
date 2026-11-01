@@ -9,9 +9,12 @@ require("dotenv").config({ path: require("path").join(__dirname, "..", ".env") }
 async function main() {
   // Required after dotenv: these modules read process.env at load time.
   const { getSheets } = require("../lib/google.js");
-  const { listFolderFiles } = require("../lib/drive-index.js");
+  const { crawlDrive } = require("../lib/drive-index.js");
+  const { getDrive } = require("../lib/google.js");
 
-  const files = await listFolderFiles();
+  // Crawl Drive directly: listFolderFiles() would save the list to the
+  // database in DATA_DIR (default ~/.hvac-assistant), and a check should not.
+  const { files } = await crawlDrive({ getDrive, folderId: process.env.DRIVE_FOLDER_ID });
   const sheets = await getSheets();
   await sheets.spreadsheets.get({
     spreadsheetId: process.env.GOOGLE_SHEET_ID,
@@ -20,7 +23,7 @@ async function main() {
   return files.length;
 }
 
-// Silence the index's chatty progress logs so only the result line shows.
+// Silence any progress logs so only the result line shows.
 const realLog = console.log;
 console.log = () => {};
 main().then(

@@ -571,7 +571,7 @@ async function sendFileOptions(to, matchedFiles, prompt, autoSendSingle = true, 
 // Falls back to the plain NOT_FOUND_MSG when nothing clears the relevance
 // bar. `files` is optional — pass the already-fetched Drive index when the
 // caller has one in scope; otherwise it's fetched here (cheap:
-// listFolderFiles() caches for FILE_CACHE_MS).
+// listFolderFiles() answers from the saved library list).
 // Dead end: send `body` with the "📥 Request it" button (after any `extra`
 // buttons — WhatsApp allows 3). The query is remembered so the tap knows
 // what to request.
