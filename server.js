@@ -23,7 +23,7 @@ const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSerie
 const { routeChillerText, handleChillerButton } = require("./chillers.js");
 const { findBrandDocs } = require("./brand-docs.js");
 const { findFilesByName } = require("./lib/find-files-by-name.js");
-const { hasSearchableExtras, rankFiles, isSearchAllTrigger, SEARCH_ALL_HINT, isAiSearchTrigger, AI_SEARCH_HINT } = require("./lib/broad-search.js");
+const { hasSearchableExtras, rankFiles, meaningfulTokens, isSearchAllTrigger, SEARCH_ALL_HINT, isAiSearchTrigger, AI_SEARCH_HINT } = require("./lib/broad-search.js");
 const { parseSelection } = require("./lib/multi-select.js");
 
 // One reply must not trigger dozens of Drive downloads and media uploads.
@@ -65,8 +65,9 @@ const { createNumberHealth, metaEventLines, CHECK_EVERY_MS } = require("./lib/nu
 // Sender router and the number-health check.
 const {
   runWithChannel, showTyping, downloadMedia,
-  sendText, sendLongText, sendButtons, sendList, sendDocument, sendDriveFile, sendPdfBuffer,
+  sendText, sendLongText, sendButtons, sendList, sendDocument, sendDriveFile, sendPdfBuffer, sendPageHits,
 } = require("./lib/channel.js");
+const { answerFromLibrary, formatAnswer, libraryQuery, searchStatusLine } = require("./lib/answers.js");
 const { whatsappAdapter } = require("./lib/channel-whatsapp.js");
 const { NOT_FOUND_MSG } = wa;
 
@@ -614,6 +615,64 @@ async function handleDocRequest(from, name) {
 }
 
 async function sendNotFoundWithSuggestions(to, text, files) {
+  return runLibrarySearch(to, text, files);
+}
+
+// ── Search inside the PDFs ─────────────────────────────────────────────
+// The page index (lib/page-index.js) finds the PDF pages that mention the
+// words; with AI available the best few pages are read and the person gets an
+// answer with the pages it came from. At most ONE AI call is made here, and
+// only when pages were found; a message that finds no pages goes on to the old
+// AI search below instead, so the two never add up. With no index file the
+// stage finds nothing and this is exactly the not-found path it always was.
+// Returns true when it replied.
+async function libraryPageStage(to, text, files, { anyWord = false } = {}) {
+  const hits = getPageIndex().search(text, { limit: 8, anyWord });
+  if (!hits.length) return false;
+  console.log(`📖 Page search "${text}": ${hits.length} page(s)`);
+
+  let knowledge = [];
+  try { knowledge = (await loadSheet()).knowledge; } catch (_) { /* answer from the specs and pages alone */ }
+  const answer = await answerFromLibrary(text, {
+    ai, knowledge, anyWord,
+    search: (q, o) => getPageIndex().search(q, o),
+  });
+  if (answer) {
+    console.log(`📖 Answered "${text}" from the pages: ${answer.sources.length} source(s)`);
+    await sendLongText(to, formatAnswer(answer));
+    return true;
+  }
+
+  await sendPageHits(to, `Pages in the PDFs that mention "${text}":`, hits);
+  const ranked = rankFiles(text, files || (await listFolderFiles()), 5);
+  if (ranked.length) {
+    await sendFileOptions(to, ranked, `Closest file names for "${text}":`, false, text);
+  }
+  return true;
+}
+
+// Page results first, then today's not-found path (close file names, then AI
+// search, then the request button). `anyWord`: a "find ..." command may match
+// pages on any one of its words when no page has them all; a lookup that already
+// missed may not, or "apmr52090 t1" would list every page that mentions T1.
+async function runLibrarySearch(to, text, files, { anyWord = false } = {}) {
+  if (await libraryPageStage(to, text, files, { anyWord })) return;
+  return sendNotFoundByName(to, text, files);
+}
+
+// "find ..." / "search ...": a file name that matches is sent as it always was;
+// otherwise the PDF pages are searched.
+async function runFindCommand(to, query, announce) {
+  await announce();
+  const files = await listFolderFiles();
+  const docType = detectDocType(query); // "IOM", "Catalogue" or null
+  const named = findFilesByName(query, docType ? files.filter((f) => fileMatchesDocType(f, docType)) : files);
+  console.log(`🔎 Find "${query}" [${docType || "all"}]: ${named.length} file name hit(s)`);
+  if (named.length) return sendFileOptions(to, named, "I found a few matches:");
+  return runLibrarySearch(to, query, files, { anyWord: true });
+}
+
+async function sendNotFoundByName(to, text, files) {
   const fileList = files || (await listFolderFiles());
 
   // ── FREE FIRST ────────────────────────────────────────────────
@@ -1763,7 +1822,9 @@ async function handleIncomingMessage(value, message) {
     if (/^stats$/i.test(text)) {
       if (docReq.isAdmin(from)) {
         console.log(`📊 stats -> ${from}`);
-        return await sendText(from, await crm.statsMessage());
+        const searchLine = searchStatusLine(getPageIndex().status());
+        const stats = await crm.statsMessage();
+        return await sendText(from, searchLine ? `${stats}\n\n${searchLine}` : stats);
       }
     }
 
@@ -1834,6 +1895,19 @@ async function handleIncomingMessage(value, message) {
         return await sendText(from, "Tell me what to look for first, then reply *ai search*.");
       }
       return await runAiSearch(from, lastQuery, announceSearch);
+    }
+
+    // ── "find ..." / "search ...": look inside the PDFs ──────────────
+    // "search all" and "ai search" were caught above and keep their meaning.
+    // Ahead of the product-question gate below, so "find sound level" is a
+    // page search and not a spec question.
+    const findQuery = libraryQuery(text);
+    if (findQuery) {
+      store.setCtx(from, "lastquery", findQuery, 30 * 60 * 1000);
+      if (!meaningfulTokens(findQuery).length) {
+        return await sendText(from, "Tell me what to look for, e.g. *find sound level* or *search Trane country of origin*.");
+      }
+      return await runFindCommand(from, findQuery, announceSearch);
     }
 
     // Remember what they actually asked for, so a later "search all" knows
@@ -1983,6 +2057,8 @@ async function handleIncomingMessage(value, message) {
             return await sendFileOptions(from, ranked,
               `Closest matches for "${text}":`, false);
           }
+          // No file name fits either: the words may be inside a PDF.
+          if (await libraryPageStage(from, text, allFiles)) return;
         }
 
         const menu = seriesMenu(seriesReq.series);
@@ -2288,7 +2364,7 @@ crm.init({ getSheets });
 
 // The replay test (tests/replay) imports this file: it gets the app and the
 // message handler, and nothing listens, ticks or calls out until it's run.
-module.exports = { app, handleIncomingMessage, deliverMessage, resolveSeriesFile };
+module.exports = { app, handleIncomingMessage, deliverMessage, resolveSeriesFile, runLibrarySearch };
 
 // Keep the page search up to date: when the Drive list refreshes, read any new
 // or changed PDFs (small ones; the PC build handles the rest), one at a time.

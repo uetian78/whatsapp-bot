@@ -13,6 +13,7 @@
 const fs = require("fs");
 const path = require("path");
 const Module = require("module");
+const os = require("os");
 
 const ROOT = path.join(__dirname, "..", "..");
 const fixturePath = (name) => path.join(__dirname, name);
@@ -84,6 +85,13 @@ function createHarness(deliver) {
     ANTHROPIC_API_KEY: "", // no key: every AI branch takes its "unavailable" path
     ADMIN_NUMBERS: adminNumbers.join(","),
   });
+  // The replay must not read the machine's own data folder (its search index in
+  // particular): unless the caller chose a DATA_DIR, it gets an empty one.
+  let ownDataDir = null;
+  if (!process.env.DATA_DIR) {
+    ownDataDir = fs.mkdtempSync(path.join(os.tmpdir(), "replay-data-"));
+    process.env.DATA_DIR = ownDataDir;
+  }
   const dotenvId = stubModule("dotenv", { config: () => ({ parsed: {} }) });
 
   // ── virtual clock ──────────────────────────────────────────────────────────
@@ -289,10 +297,17 @@ function createHarness(deliver) {
       Object.assign(console, realConsole);
       axios.post = realAxios.post; axios.get = realAxios.get; axios.request = realAxios.request;
       globalThis.fetch = realFetch;
+      if (ownDataDir) { // release the files before the folder goes (Windows locks open files)
+        try { require("../../lib/db.js").closeDb(); } catch (_) { /* never opened */ }
+        try { require("../../lib/page-index.js").getPageIndex().close(); } catch (_) { /* never opened */ }
+      }
       delete require.cache[dotenvId];
       for (const k of Object.keys(process.env)) if (!(k in savedEnv)) delete process.env[k];
       Object.assign(process.env, savedEnv);
       purgeProjectModules();
+      if (ownDataDir) {
+        try { fs.rmSync(ownDataDir, { recursive: true, force: true }); } catch (_) { /* a locked file in a temp folder */ }
+      }
     },
   };
 }

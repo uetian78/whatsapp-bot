@@ -366,6 +366,47 @@ test("a match in the file name ranks above the same word in the body", async () 
   assert.equal(index.search("scroll")[0].fileId, "named");
 });
 
+test("a file named with the query word cannot fill the results with its own pages", async () => {
+  const named = Array.from({ length: 20 }, (_, i) => `${LONG} chapter ${i} of the manual`);
+  const index = createPageIndex({
+    db: openSearchDb(":memory:"), maxBytes: 10 * MB,
+    readFile: fakeRead({ named, body: [`${LONG} the scroll compressor`] }),
+  });
+  index.sync([file("named", { name: "Scroll.pdf" }), file("body", { name: "Other.pdf" })]);
+  await drain(index);
+  const hits = index.search("scroll");
+  const ids = hits.map((h) => h.fileId);
+  assert.ok(ids.includes("named") && ids.includes("body"), `both files appear: ${ids.join(",")}`);
+  assert.equal(ids.filter((id) => id === "named").length, 2, "default is 2 hits per file");
+  assert.equal(index.search("scroll", { perFile: 3 }).filter((h) => h.fileId === "named").length, 3);
+  assert.equal(index.search("scroll", { perFile: 1 }).length, 2);
+  // the named file's pages rank first
+  assert.equal(hits[0].fileId, "named");
+});
+
+test("textChars adds the page text, cut to that length", async () => {
+  const body = `${"alpha ".repeat(50)}beta`;
+  const index = createPageIndex({ db: openSearchDb(":memory:"), maxBytes: 10 * MB, readFile: fakeRead({ a: [body] }) });
+  index.sync([file("a")]);
+  await drain(index);
+  assert.equal(index.search("alpha")[0].text, undefined);
+  const hit = index.search("alpha", { textChars: 40 })[0];
+  assert.equal(hit.text.length, 40);
+  assert.equal(hit.text, body.slice(0, 40));
+  assert.equal(hit.page, 1);
+});
+
+test("anyWord: false keeps the every-word search and does not fall back to any word", async () => {
+  const index = createPageIndex({
+    db: openSearchDb(":memory:"), maxBytes: 10 * MB,
+    readFile: fakeRead({ a: [`${LONG} evaporator`] }),
+  });
+  index.sync([file("a")]);
+  await drain(index);
+  assert.equal(index.search("evaporator zzzunknown").length, 1);
+  assert.deepEqual(index.search("evaporator zzzunknown", { anyWord: false }), []);
+});
+
 test("limit caps the number of hits", async () => {
   const many = {};
   const files = [];
