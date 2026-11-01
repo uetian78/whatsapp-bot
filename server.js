@@ -31,6 +31,7 @@ const MAX_BATCH_FILES = 10;
 const { isCreditError, isAiUnavailableError, markExhausted, isExhausted, aiPausedMessage, aiFeatureUnavailableMessage } = require("./lib/ai-credits.js");
 const { createAi, textOf } = require("./lib/ai.js");
 const { getDb } = require("./lib/db.js");
+const { getPageIndex, createUploadHandler, uploadLimitBytes } = require("./lib/page-index.js");
 const { parseAccounts, findAccount, runWithAccount, currentAccount } = require("./lib/accounts.js");
 const { requireAdmin } = require("./lib/http-auth.js");
 const { whatsappEnabled, requiredEnv } = require("./lib/app-config.js");
@@ -2268,6 +2269,11 @@ app.get("/drive-index", requireAdmin(), async (req, res) => {
     res.status(500).send("Error: " + e.message);
   }
 });
+// The PC builds the page-search file (scripts/build-index.js) and uploads it
+// here as the raw request body. The handler streams it to a temp file, checks
+// it, and only then swaps it in. Limit: SEARCH_INDEX_MAX_MB (default 400).
+app.post("/admin/search-index", requireAdmin(), createUploadHandler({ index: getPageIndex(), maxBytes: uploadLimitBytes() }));
+
 // Diagnostic: is the co-hosted VRF engine reachable, and at which URL?
 // ok:true => engine healthy. ok:false + 127.0.0.1 => uvicorn not running in
 // this container (check deploy logs / Docker runtime). ok:false + a remote
@@ -2284,10 +2290,26 @@ crm.init({ getSheets });
 // message handler, and nothing listens, ticks or calls out until it's run.
 module.exports = { app, handleIncomingMessage, deliverMessage, resolveSeriesFile };
 
+// Keep the page search up to date: when the Drive list refreshes, read any new
+// or changed PDFs (small ones; the PC build handles the rest), one at a time.
+// It only starts from the library refresh, or once at start to finish a queue
+// the last run left, and stops when the queue is empty: no timer. With no
+// index file yet (the PC hasn't uploaded one) the server doesn't build it.
+function startPageIndexing() {
+  const pageIndex = getPageIndex();
+  require("./lib/drive-index.js").getLibraryIndex().onRefresh((files) => {
+    if (!pageIndex.exists()) return;
+    pageIndex.sync(files);
+    return pageIndex.drain();
+  });
+  pageIndex.drain();
+}
+
 if (require.main === module) {
   try { store.restore(); } // bring back conversations saved before the last restart
   catch (err) { console.error("State restore failed:", err.message); }
   crm.warmUp(); // preload contacts so "Welcome back" works from the first message
+  startPageIndexing();
   app.listen(PORT, () => {
     console.log(`🚀 Listening on ${PORT}`);
     if (numberHealth) {
