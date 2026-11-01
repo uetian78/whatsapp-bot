@@ -14,7 +14,7 @@ FROM node:24-slim
 
 # Python runtime for the VRF sidecar.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-pip \
+    && apt-get install -y --no-install-recommends python3 python3-pip qpdf poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

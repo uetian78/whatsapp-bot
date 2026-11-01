@@ -69,6 +69,7 @@ const {
 } = require("./lib/channel.js");
 const { answerFromLibrary, formatAnswer, libraryQuery, searchStatusLine } = require("./lib/answers.js");
 const { whatsappAdapter } = require("./lib/channel-whatsapp.js");
+const { getPageExtractor, parsePageTap, PageError, MSG_BAD_PAGE, MSG_FAILED } = require("./lib/page-extract.js");
 const { NOT_FOUND_MSG } = wa;
 
 const app = express();
@@ -1448,6 +1449,22 @@ async function handleMtzStep(from, s, text) {
   }
 }
 
+// A page button (page|<fileId>|<n>|pdf or |image): say it is working, then send
+// just that page. The extractor checks the file against the library and the page
+// against the file; its PageError messages are written to be shown as they are.
+async function sendPageTap(to, tapId) {
+  const tap = parsePageTap(tapId);
+  if (!tap) return sendText(to, MSG_BAD_PAGE);
+  await sendText(to, "Getting that page…");
+  try {
+    const { buffer, filename } = await getPageExtractor().getPage(tap);
+    return await sendDocument(to, buffer, filename, filename.replace(/\.(pdf|jpg)$/i, ""));
+  } catch (err) {
+    if (!(err instanceof PageError)) console.error("❌ Page send error:", err && err.message);
+    return sendText(to, err instanceof PageError ? err.userMessage : MSG_FAILED);
+  }
+}
+
 // ============================================================
 //  WEBHOOK RECEIVER
 // ============================================================
@@ -1489,6 +1506,9 @@ async function handleIncomingMessage(value, message) {
         if (tip) return await sendText(from, tip);
         return; // stale/unknown row
       }
+
+      // Page button on a search result -> just that page, as a one-page PDF or a JPEG.
+      if (btnId.startsWith("page|")) return await sendPageTap(from, btnId);
 
       // Chiller buttons (chmodel|, chsel|, chds|) -> series pick / spec / datasheet.
       const chillerBtn = handleChillerButton(btnId);
