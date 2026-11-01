@@ -30,7 +30,11 @@ const { parseSelection } = require("./lib/multi-select.js");
 const MAX_BATCH_FILES = 10;
 const { isCreditError, isAiUnavailableError, markExhausted, isExhausted, aiPausedMessage, aiFeatureUnavailableMessage } = require("./lib/ai-credits.js");
 const { createAi, textOf } = require("./lib/ai.js");
-const { getDb } = require("./lib/db.js");
+const { getDb, dataDir } = require("./lib/db.js");
+const { createConversations } = require("./lib/conversations.js");
+const { createWebChannel } = require("./lib/channel-web.js");
+const { createWebRoutes, webErrorHandler } = require("./web/routes.js");
+const { createUploadStore } = require("./web/uploads.js");
 const { getPageIndex, createUploadHandler, uploadLimitBytes } = require("./lib/page-index.js");
 const { findAccount, runWithAccount, currentAccount } = require("./lib/accounts.js");
 const { loadSheet } = require("./lib/control-sheet.js");
@@ -38,7 +42,7 @@ const { mountWeb, cleanSecret, MIN_SECRET_LENGTH } = require("./web/auth.js");
 const { requireAdmin } = require("./lib/http-auth.js");
 const { whatsappEnabled, requiredEnv } = require("./lib/app-config.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
-const { isMenuTrigger, smallTalkReply, welcomeMenu, welcomeMenuList, tipFor, MENU_HINT } = require("./menu.js");
+const { isMenuTrigger, smallTalkReply, welcomeMenu, welcomeMenuList, tipFor, MENU_HINT, MENU_OPTIONS, SCHEDULE_PROMPT } = require("./menu.js");
 const { PRODUCT_KB, parseListRequest, parseUnsupportedSeriesListRequest, buildUnitList } = require("./product-facts.js");
 const crm = require("./crm.js");
 const docReq = require("./lib/doc-requests.js");
@@ -66,7 +70,7 @@ const { createNumberHealth, metaEventLines, CHECK_EVERY_MS } = require("./lib/nu
 // is handling the message. `wa` stays for the WhatsApp-only parts: the Bot
 // Sender router and the number-health check.
 const {
-  runWithChannel, showTyping, downloadMedia,
+  runWithChannel, currentChannel, showTyping, downloadMedia,
   sendText, sendLongText, sendButtons, sendList, sendDocument, sendDriveFile, sendPdfBuffer, sendPageHits,
 } = require("./lib/channel.js");
 const { answerFromLibrary, formatAnswer, libraryQuery, searchStatusLine } = require("./lib/answers.js");
@@ -1428,6 +1432,59 @@ async function sendPageTap(to, tapId) {
   }
 }
 
+// ── Welcome menu, schedule flow, saved work ─────────────────────────────
+// The menu as a list (a numbered reply still works for 15 minutes).
+async function showWelcomeMenu(from, profileName) {
+  const m = welcomeMenuList(profileName, crm.isKnownContact(from));
+  store.setCtx(from, "menu", { options: m.options }, 15 * 60 * 1000);
+  return await sendList(from, m.body, m.buttonLabel, m.rows);
+}
+
+async function startScheduleFlow(from) {
+  store.startFlow(from, "schedule", { step: "awaitImage" });
+  return await sendText(from, SCHEDULE_PROMPT);
+}
+
+// A menu row or its number: the row's own action (the schedule row starts the
+// schedule flow), else its tip card. A number with no row sends nothing.
+async function sendMenuPick(from, n, options = MENU_OPTIONS) {
+  const opt = options.find((o) => o.n === n);
+  if (opt && opt.action === "schedule") return await startScheduleFlow(from);
+  const tip = tipFor(n, options);
+  if (tip) return await sendText(from, tip);
+}
+
+// The web chat's own parts: conversations, the channel that writes to them, and
+// the uploads waiting to be read. Made on first use, so requiring this file
+// opens no database. Both share the app's one database.
+const webUploads = createUploadStore();
+let webMade = null;
+function webParts() {
+  if (!webMade) {
+    const conversations = createConversations({ db: getDb() });
+    webMade = { conversations, channel: createWebChannel({ conversations, dataDir, uploads: webUploads }) };
+  }
+  return webMade;
+}
+const lazyWebPart = (name) => new Proxy({}, {
+  get(_, key) {
+    const part = webParts()[name];
+    const v = part[key];
+    return typeof v === "function" ? v.bind(part) : v;
+  },
+});
+const webConversations = lazyWebPart("conversations");
+const webChannel = lazyWebPart("channel");
+
+// "Saved work": the person's last 10 files (Drive and made-for-you) shown again
+// at the bottom of the chat, newest last, as the file messages they were.
+async function sendSavedWork(to) {
+  const saved = webParts().conversations.savedWork(to, 10);
+  if (!saved.length) return await sendText(to, "Nothing saved yet. Files I send you are kept here.");
+  await sendText(to, `Your last ${saved.length} file${saved.length === 1 ? "" : "s"}, newest at the bottom:`);
+  for (const m of saved.reverse()) webParts().conversations.append(to, "bot", "file", m.body);
+}
+
 // ============================================================
 //  WEBHOOK RECEIVER
 // ============================================================
@@ -1464,11 +1521,12 @@ async function handleIncomingMessage(value, message) {
 
       // Menu row tap -> that section's tip card.
       if (btnId.startsWith("menu|")) {
-        const n = parseInt(btnId.split("|")[1], 10);
-        const tip = tipFor(n);
-        if (tip) return await sendText(from, tip);
-        return; // stale/unknown row
+        return await sendMenuPick(from, parseInt(btnId.split("|")[1], 10)); // a stale row sends nothing
       }
+
+      // "Saved work" on the web chat: the person's recent files again, at the bottom.
+      // WhatsApp never offers this tap, so there it is an unknown tap like any other.
+      if (btnId === "saved|open" && currentChannel()?.name === "web") return await sendSavedWork(from);
 
       // Page button on a search result -> just that page, as a one-page PDF or a JPEG.
       if (btnId.startsWith("page|")) return await sendPageTap(from, btnId);
@@ -1596,9 +1654,7 @@ async function handleIncomingMessage(value, message) {
       vrfSessions.delete(from);
       store.clearAll(from);
       console.log(`📋 welcome menu (global escape) -> ${from}`);
-      const m = welcomeMenuList(profileName, crm.isKnownContact(from));
-      store.setCtx(from, "menu", { options: m.options }, 15 * 60 * 1000); // numbered replies still work
-      return await sendList(from, m.body, m.buttonLabel, m.rows);
+      return await showWelcomeMenu(from, profileName);
     }
 
     // ── Global cancel: ends ANY active flow from anywhere. Each flow used to
@@ -1655,9 +1711,7 @@ async function handleIncomingMessage(value, message) {
     // Trigger: exact "Image Selection" / "BOQ Selection" / "Schedule Selection".
     if (message.type === "text" &&
         /^(image|boq|schedule)\s+selection$/i.test(message.text.body.trim())) {
-      store.startFlow(from, "schedule", { step: "awaitImage" });
-      return await sendText(from,
-        "📋 *Schedule / BOQ Selection*\n\nSend the equipment schedule as an *image* or *PDF*.\n_(Type *cancel* anytime to exit)_");
+      return await startScheduleFlow(from);
     }
 
     // ── Active guided flow (split / mtz / schedule) ─────────────
@@ -1792,10 +1846,9 @@ async function handleIncomingMessage(value, message) {
     if (/^\d+$/.test(text) && openMenu) {
       const { options } = openMenu;
       const n = parseInt(text, 10);
-      const tip = tipFor(n, options);
-      if (tip) {
+      if (tipFor(n, options)) {
         console.log(`📋 ${from} menu pick ${n}`);
-        return await sendText(from, tip);
+        return await sendMenuPick(from, n, options);
       }
       return await sendText(from, `Please reply with a number between 1 and ${options.length}, or type *menu*.`);
     }
@@ -1822,9 +1875,7 @@ async function handleIncomingMessage(value, message) {
     if (isMenuTrigger(text)) {
       console.log(`📋 welcome menu -> ${from}`);
       store.clearCtx(from, "list");
-      const m = welcomeMenuList(profileName, crm.isKnownContact(from));
-      store.setCtx(from, "menu", { options: m.options }, 15 * 60 * 1000); // numbered replies still work
-      return await sendList(from, m.body, m.buttonLabel, m.rows);
+      return await showWelcomeMenu(from, profileName);
     }
     // Conversational closing / thanks / ack ("bye", "exit", "thanks", "ok") ->
     // reply politely and stop. Must run BEFORE the "searching" notice and the
@@ -2302,7 +2353,34 @@ app.get("/", (_, res) => res.send("WhatsApp AI bot running ✅"));
 // closed by default; with no usable WEB_SECRET every /app request is a 503.
 // Anything public (share links) must be mounted outside /app.
 mountWeb(app, { secret: process.env.WEB_SECRET, getAccounts: async () => (await loadSheet()).accounts });
-// Placeholder until the chat API and screens are mounted here.
+
+// The first time someone opens an empty chat the bot says what typing "menu"
+// says: same code, through the web channel, queued like any other message.
+function deliverWelcome(account) {
+  return enqueue(account.number, () => runWithChannel(webChannel, () => runWithAccount(account, async () => {
+    try { await showWelcomeMenu(account.number, account.name); }
+    finally {
+      try { store.persist(account.number); }
+      catch (err) { console.error("State save failed:", err.message); }
+    }
+  })));
+}
+// The chat API, files, uploads and share links (web/routes.js). The router goes
+// after mountWeb, so everything under /app is already behind the sign-in check;
+// /s/<token> is outside /app and public by design.
+app.use(createWebRoutes({
+  deliverMessage, conversations: webConversations, webChannel, uploads: webUploads,
+  sendWelcome: deliverWelcome,
+  getFile: async (id) => {
+    if (!process.env.DRIVE_FOLDER_ID) return null;
+    const lib = require("./lib/drive-index.js").getLibraryIndex();
+    return lib.findById(id) || (await lib.list(), lib.findById(id));
+  },
+  secret: process.env.WEB_SECRET,
+  publicUrl: process.env.PUBLIC_URL,
+}));
+app.use("/app", webErrorHandler); // a body that isn't JSON fails before the router, as JSON
+// Placeholder until the screens are mounted here (Task 15).
 app.get("/app/", (req, res) => {
   res.set("Cache-Control", "no-store").type("html").send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>HVAC Assistant</title><p>Signed in as ${String(req.account.name || req.account.number).replace(/[&<>"']/g, "")}.</p>`);
 });
@@ -2400,6 +2478,8 @@ if (require.main === module) {
   try { store.restore(); } // bring back conversations saved before the last restart
   catch (err) { console.error("State restore failed:", err.message); }
   crm.warmUp(); // preload contacts so "Welcome back" works from the first message
+  try { webChannel.cleanupGenerated(); } // old generated files, once at start: no timer, so the app can sleep
+  catch (err) { console.error("Generated-file cleanup failed:", err.message); }
   startPageIndexing();
   app.listen(PORT, () => {
     console.log(`🚀 Listening on ${PORT}`);

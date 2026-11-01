@@ -7,8 +7,8 @@
 //  request is checked against it, so a cookie alone is never enough.
 //
 //  Tokens are base64url(payload).hmac, HMAC-SHA256 with WEB_SECRET. The payload
-//  carries a purpose ("invite" or "session"), so one kind can't stand in for
-//  the other. With no WEB_SECRET the app is shut (503); there is no default.
+//  carries a purpose ("invite", "session" or "share"), so one kind can't stand
+//  in for another. With no WEB_SECRET the app is shut (503); there is no default.
 // ============================================================
 const crypto = require("node:crypto");
 const express = require("express");
@@ -16,6 +16,7 @@ const { findAccount } = require("../lib/accounts.js");
 
 const DAY = 24 * 60 * 60 * 1000;
 const SESSION_DAYS = 180;
+const SHARE_DAYS = 7;
 const COOKIE = "hv_session";
 const MSG_SIGN_IN = "Ask for your personal link to sign in.";
 const MSG_EXPIRED = "This link has expired. Ask for a new one.";
@@ -87,6 +88,25 @@ function makeSession(number, { secret, now }) {
   const digits = String(number ?? "").replace(/\D/g, "");
   if (!digits) throw new Error("A number is needed");
   return sign({ p: "session", n: digits, exp: nowOf(now) + SESSION_DAYS * DAY }, secret);
+}
+
+// A public link to one file. It holds the ref ("drive:<id>" or "gen:<uuid>")
+// and, for a generated file, whose it is: those are kept per person. Anyone with
+// the link can open the file until it expires; nothing else about the person.
+function makeShareToken(ref, owner, { secret, now, days = SHARE_DAYS }) {
+  if (typeof ref !== "string" || !ref) throw new Error("A file is needed");
+  const payload = { p: "share", r: ref, exp: nowOf(now) + days * DAY };
+  if (owner) payload.n = String(owner);
+  return sign(payload, secret);
+}
+
+// { ref, owner } for a good, unexpired share token, else null. Never throws.
+function verifyShareToken(token, { secret, now }) {
+  const p = open(token, secret);
+  if (!p || p.p !== "share") return null;
+  if (typeof p.r !== "string" || !p.r) return null;
+  if (typeof p.exp !== "number" || !(nowOf(now) < p.exp)) return null;
+  return { ref: p.r, owner: typeof p.n === "string" && p.n ? p.n : null };
 }
 
 // Every hv_session value in a Cookie header, in order. Junk is skipped; a bad
@@ -251,6 +271,6 @@ function mountWeb(app, opts) {
 }
 
 module.exports = {
-  cleanSecret, MIN_SECRET_LENGTH, mountWeb,
-  makeInviteToken, verifyInviteToken, makeSession, readSession, requireUser, joinRoutes,
+  cleanSecret, MIN_SECRET_LENGTH, mountWeb, sameSiteRequest,
+  makeShareToken, verifyShareToken, makeInviteToken, verifyInviteToken, makeSession, readSession, requireUser, joinRoutes,
 };

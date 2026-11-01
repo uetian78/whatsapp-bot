@@ -1,0 +1,186 @@
+// The web-related taps in the real server.js (menu rows, Read a schedule, Saved work),
+// through the replay harness (private fixtures, skipped when they are not on this
+// machine). Replies go to a fake web channel; the database is a temp DATA_DIR.
+const test = require("node:test");
+const assert = require("node:assert");
+const { createHarness, fixturesExist } = require("./replay/harness.js");
+
+const skip = !fixturesExist() && "replay fixtures not found (run tests/replay/export-log.js)";
+const USER = "100000001";
+
+const textMsg = (body) => ({ type: "text", text: { body } });
+const tapMsg = (id, title = "Tap") => ({ type: "interactive", interactive: { type: "button_reply", button_reply: { id, title } } });
+
+// Runs each scripted message through deliverMessage with a fake channel named `name`.
+function setup(name = "web") {
+  const sent = [];
+  const script = [];
+  const adapter = {
+    name, supports: { rowCheck: true },
+    typing: async () => {},
+    downloadMedia: async () => { throw new Error("no media"); },
+    text: async (to, body) => { sent.push({ kind: "text", body }); return true; },
+    longText: async (to, body) => { sent.push({ kind: "text", body }); return true; },
+    buttons: async (to, text) => { sent.push({ kind: "buttons", body: text }); return true; },
+    list: async (to, text, label, rows) => { sent.push({ kind: "list", body: text, rows }); return true; },
+    driveFile: async () => true, generatedFile: async () => true, pageHits: async () => true,
+  };
+  const h = createHarness(async (value, message) => {
+    const { deliverMessage } = require("../server.js");
+    const next = script.shift();
+    await deliverMessage(value, { from: message.from, id: message.id, timestamp: message.timestamp, ...next }, adapter);
+  });
+  return {
+    sent,
+    async say(message) { script.push(message); await h.send(USER, "x"); },
+    db: () => require("../lib/db.js"),
+    conversations: () => require("../lib/conversations.js").createConversations({ db: require("../lib/db.js").getDb() }),
+    done() {
+      try { require("../lib/db.js").closeDb(); } catch (_) { /* never opened */ }
+      h.close();
+    },
+    h, script,
+  };
+}
+
+test("the Read a schedule row starts the schedule flow", { skip }, async () => {
+  const t = setup();
+  try {
+    const { SCHEDULE_PROMPT } = require("../menu.js");
+    await t.say(tapMsg("menu|3", "Read a schedule"));
+    assert.deepEqual(t.sent.map((s) => s.body), [SCHEDULE_PROMPT]);
+    await t.say(textMsg("cancel")); // only an open flow answers "Cancelled"
+    assert.match(t.sent[1].body, /Cancelled/);
+  } finally { t.done(); }
+});
+
+test("the menu number for Read a schedule starts it too, and the other rows still send their tips", { skip }, async () => {
+  const t = setup();
+  try {
+    const { SCHEDULE_PROMPT, tipFor } = require("../menu.js");
+    await t.say(textMsg("menu"));
+    assert.equal(t.sent[0].kind, "list");
+    assert.equal(t.sent[0].rows.length, 6);
+    await t.say(textMsg("3"));
+    assert.equal(t.sent[1].body, SCHEDULE_PROMPT);
+    await t.say(textMsg("menu"));
+    await t.say(textMsg("5"));
+    assert.equal(t.sent[3].body, tipFor(5));
+    await t.say(tapMsg("menu|1"));
+    assert.equal(t.sent[4].body, tipFor(1));
+    const before = t.sent.length;
+    await t.say(tapMsg("menu|9")); // a row that no longer exists: nothing sent
+    assert.equal(t.sent.length, before);
+  } finally { t.done(); }
+});
+
+test("Saved work lists the newest 10 files again, oldest first, on the web", { skip }, async () => {
+  const t = setup();
+  try {
+    await t.say(textMsg("hello")); // opens the database
+    const c = t.conversations();
+    for (let i = 1; i <= 12; i++) c.append(USER, "bot", "file", { ref: `drive:f${i}`, name: `File ${i}.pdf`, folder: "x", size: i });
+    c.append(USER, "bot", "text", "between");
+    const before = c.since(USER, 0, 1000).length;
+    t.sent.length = 0;
+    await t.say(tapMsg("saved|open", "Saved work"));
+    assert.deepEqual(t.sent.map((s) => s.body), ["Your last 10 files, newest at the bottom:"]);
+    const added = c.since(USER, 0, 1000).slice(before);
+    assert.deepEqual(added.map((m) => m.body.name), Array.from({ length: 10 }, (_, i) => `File ${i + 3}.pdf`));
+    assert.ok(added.every((m) => m.role === "bot" && m.kind === "file"));
+  } finally { t.done(); }
+});
+
+test("Saved work with nothing saved says so", { skip }, async () => {
+  const t = setup();
+  try {
+    await t.say(tapMsg("saved|open", "Saved work"));
+    assert.deepEqual(t.sent.map((s) => s.body), ["Nothing saved yet. Files I send you are kept here."]);
+  } finally { t.done(); }
+});
+
+test("a Saved work tap on WhatsApp is just an unknown tap", { skip }, async () => {
+  const t = setup("whatsapp");
+  try {
+    await t.say(tapMsg("saved|open", "Saved work"));
+    assert.match(t.sent[0].body, /no longer available/);
+    assert.equal(t.sent.length, 1);
+  } finally { t.done(); }
+});
+
+test("requiring server.js opens no database and starts nothing", () => {
+  const { execFileSync } = require("node:child_process");
+  const os = require("node:os");
+  const fs = require("node:fs");
+  const path = require("node:path");
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hvac-require-"));
+  try {
+    execFileSync(process.execPath, ["-e", "require('./server.js'); process.exit(0)"], {
+      cwd: path.join(__dirname, ".."), env: { ...process.env, DATA_DIR: dir, WEB_SECRET: "", ANTHROPIC_API_KEY: "" }, stdio: "pipe", timeout: 20000,
+    });
+    assert.deepEqual(fs.readdirSync(dir), [], "nothing was created in DATA_DIR");
+  } finally { fs.rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---- the whole thing, over HTTP, through the real server.js ----
+const http = require("node:http");
+
+test("a new person's chat opens with the same welcome as typing menu, and typing reaches the real handler", { skip }, async () => {
+  const secret = "test-secret-not-real-0000000000001";
+  const prev = process.env.WEB_SECRET;
+  process.env.WEB_SECRET = secret;
+  const h = createHarness(async () => {});
+  let server;
+  try {
+    const { app } = require("../server.js");
+    const { makeSession } = require("../web/auth.js");
+    server = await new Promise((resolve) => { const s = app.listen(0, "127.0.0.1", () => resolve(s)); });
+    const cookie = `hv_session=${makeSession(USER, { secret, now: Date.now })}`;
+    const call = (method, path, body) => new Promise((resolve, reject) => {
+      const data = body === undefined ? null : JSON.stringify(body);
+      const r = http.request({ host: "127.0.0.1", port: server.address().port, method, path,
+        headers: { cookie, ...(data ? { "content-type": "application/json", "content-length": Buffer.byteLength(data) } : {}) } }, (res) => {
+        const chunks = [];
+        res.on("data", (c) => chunks.push(c));
+        res.on("end", () => resolve({ status: res.statusCode, json: () => JSON.parse(Buffer.concat(chunks).toString()), headers: res.headers }));
+      });
+      r.on("error", reject);
+      if (data) r.write(data);
+      r.end();
+    });
+    const wait = async (fn) => { for (let i = 0; i < 200; i++) { if (await fn()) return true; await new Promise((r) => setTimeout(r, 10)); } return false; };
+
+    const [a, b] = await Promise.all([call("GET", "/app/api/messages"), call("GET", "/app/api/messages")]);
+    assert.equal(a.status, 200);
+    const first = a.json().messages;
+    assert.equal(first.length, 1, "welcomed once");
+    assert.equal(b.json().messages.length, 1);
+    assert.equal(first[0].role, "bot");
+    assert.equal(first[0].kind, "choices");
+    assert.deepEqual(first[0].body.choices.map((c) => c.id), ["menu|1", "menu|2", "menu|3", "menu|4", "menu|5", "menu|6"]);
+    assert.match(first[0].body.text, /HVAC Assistant/);
+
+    const sent = await call("POST", "/app/api/messages", { text: "menu" });
+    assert.equal(sent.status, 202);
+    assert.ok(await wait(async () => {
+      const r = (await call("GET", `/app/api/messages?after=${first[0].seq}`)).json();
+      return r.messages.length >= 2 && !r.busy;
+    }));
+    const all = (await call("GET", "/app/api/messages")).json().messages;
+    assert.deepEqual(all.map((m) => m.role), ["bot", "user", "bot"]);
+    assert.equal(all[1].body, "menu");
+    assert.deepEqual(all[2].body, first[0].body, "typing menu gives exactly the welcome");
+
+    // a tap the screen would send, with its data
+    await call("POST", "/app/api/messages", { tapId: "menu|3", tapTitle: "Read a schedule", data: { x: 1 } });
+    assert.ok(await wait(async () => (await call("GET", "/app/api/messages")).json().messages.length >= 5));
+    const last = (await call("GET", "/app/api/messages")).json().messages.slice(-2);
+    assert.equal(last[0].body, "Read a schedule");
+    assert.match(last[1].body, /Schedule \/ BOQ Selection/);
+  } finally {
+    if (server) await new Promise((r) => { server.closeAllConnections?.(); server.close(r); });
+    try { require("../lib/db.js").closeDb(); } catch (_) { /* never opened */ }
+    h.close();
+    if (prev === undefined) delete process.env.WEB_SECRET; else process.env.WEB_SECRET = prev;
+  }
+});

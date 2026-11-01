@@ -38,7 +38,13 @@ function smallTalkReply(text) {
   return null;
 }
 
+// What the bot says when the schedule flow starts (typed "Schedule Selection" or
+// the "Read a schedule" menu row). One text, so both ways read the same.
+const SCHEDULE_PROMPT =
+  "📋 *Schedule / BOQ Selection*\n\nSend the equipment schedule as an *image* or *PDF*.\n_(Type *cancel* anytime to exit)_";
+
 // Each option: n (number), title (menu line), tip (sent when picked).
+// `action`, when set, is done instead of sending the tip.
 const MENU_OPTIONS = [
   {
     n: 1,
@@ -54,7 +60,8 @@ const MENU_OPTIONS = [
       "• Air handling unit: *MAH catalogue*\n" +
       "• Chiller: *APCY-H catalogue*\n" +
       "• Datasheet (model code): *APMRa 51004*  or  *APMR 52340 T1*\n" +
-      "• Other brands: *Hisense catalogue*",
+      "• Other brands: *Hisense catalogue*\n" +
+      "• Search inside the PDFs: *find sound level*",
   },
   {
     n: 2,
@@ -72,6 +79,14 @@ const MENU_OPTIONS = [
   },
   {
     n: 3,
+    title: "Read a Schedule (photo or PDF)",
+    short: "Read a schedule",
+    desc: "Send a schedule or BOQ; I pick the units",
+    action: "schedule", // tapping it starts the schedule flow (server.js) instead of showing a tip
+    tip: SCHEDULE_PROMPT,
+  },
+  {
+    n: 4,
     title: "Guided Selectors (Schedule / VRF / MTZ / Split)",
     short: "Guided Selectors",
     desc: "Schedule · VRF · MTZ · Split — step-by-step + PDF",
@@ -107,7 +122,20 @@ const MENU_OPTIONS = [
       "• Browse the range: *list of split units* (T1/T3 capacities)",
   },
   {
-    n: 4,
+    n: 5,
+    title: "Ask a Question (specs & manuals)",
+    short: "Ask a question",
+    desc: "Specs and answers from our catalogues & manuals",
+    tip:
+      "*❓ Ask a question*\n" +
+      "Ask about a model's specs, or what the manuals say. I answer from our product data and PDF pages, and name the page it came from.\n\n" +
+      "👉 Examples (copy & send):\n" +
+      "• Specs: *What is the cooling capacity of APMR 52340 at T3?*\n" +
+      "• Inside the PDFs: *find sound level*\n\n" +
+      "If I can't answer from our documents I'll say so — I don't guess.",
+  },
+  {
+    n: 6,
     title: "Help (how to use this bot)",
     short: "Help",
     desc: "How to ask, with copy-paste examples",
@@ -125,8 +153,8 @@ const MENU_OPTIONS = [
   },
 ];
 
-const NUM  = ["", "1️⃣", "2️⃣", "3️⃣", "4️⃣"];
-const ICON = ["", "📄", "🛠️", "🧭", "🙋"];
+const NUM  = ["", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"];
+const ICON = ["", "📄", "🛠️", "📋", "🧭", "❓", "🙋"];
 
 // Build the welcome message (numbered list) + the options array to remember.
 // `name` = WhatsApp profile name (optional); `returning` = seen before (CRM).
@@ -138,7 +166,7 @@ function welcomeMenu(name, returning) {
   const line = (o) => `${NUM[o.n] || o.n + "."} ${ICON[o.n] || ""} *${o.title}*`;
   const text =
     `${hello}\n` +
-    "_Mannai HVAC Assistant_ — catalogues, datasheets & equipment selections.\n" +
+    "_HVAC Assistant_ — catalogues, datasheets & equipment selections.\n" +
     "━━━━━━━━━━━━━━\n" +
     "Reply with a *number*:\n\n" +
     MENU_OPTIONS.map(line).join("\n") + "\n" +
@@ -161,7 +189,7 @@ function welcomeMenuList(name, returning) {
     ? (returning ? `👋 *Welcome back, ${first}!*` : `👋 *Welcome, ${first}!*`)
     : "👋 *Welcome!*";
   const body =
-    `${hello}\n_Mannai HVAC Assistant_ — catalogues, datasheets & equipment selections.\n\n` +
+    `${hello}\n_HVAC Assistant_ — catalogues, datasheets & equipment selections.\n\n` +
     "Tap below to see what I can do — or just type what you need, e.g. *APMR catalogue* · *Split Selection*.";
   return {
     body,
@@ -175,4 +203,4 @@ function welcomeMenuList(name, returning) {
   };
 }
 
-module.exports = { isMenuTrigger, smallTalkReply, welcomeMenu, welcomeMenuList, tipFor, MENU_HINT, MENU_OPTIONS };
+module.exports = { isMenuTrigger, smallTalkReply, welcomeMenu, welcomeMenuList, tipFor, MENU_HINT, MENU_OPTIONS, SCHEDULE_PROMPT };

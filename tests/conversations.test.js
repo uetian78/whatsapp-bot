@@ -84,3 +84,13 @@ test("isEmpty is true until the user has a message", () => {
   c.append("u1", "user", "text", "hi");
   assert.equal(c.isEmpty("u1"), false);
 });
+
+test("latest gives the user's newest messages, oldest first", () => {
+  const { conversations: c } = make();
+  for (let i = 1; i <= 7; i++) c.append("u1", "user", "text", `m${i}`);
+  c.append("u2", "user", "text", "other");
+  assert.deepEqual(c.latest("u1", 3).map((m) => m.body), ["m5", "m6", "m7"]);
+  assert.equal(c.latest("u1", 200).length, 7);
+  assert.deepEqual(c.latest("nobody", 5), []);
+  assert.deepEqual(c.latest("u1", 2).map((m) => Object.keys(m).sort().join()), Array(2).fill("body,kind,role,seq,ts"));
+});
