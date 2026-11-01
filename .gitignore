@@ -17,3 +17,7 @@ vrf-sidecar/vrf_test.xlsx
 # python bytecode
 __pycache__/
 *.pyc
+
+# local app data and private replay fixtures
+data/
+tests/replay/*.local.json

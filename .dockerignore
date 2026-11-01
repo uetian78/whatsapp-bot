@@ -19,6 +19,12 @@ FCU DMP Datasheets
 *.pem
 *service-account*.json
 *credentials*.json
+whatsapp-bot-*.json
+_temp_sa.json
+_sa.json
+
+# Local databases and generated files (DATA_DIR) never go in the image
+data/
 
 # VCS / docs / scratch
 .git
