@@ -2476,22 +2476,6 @@ app.use(createWebRoutes({
 }));
 app.use("/app", webErrorHandler); // a body that isn't JSON fails before the router, as JSON
 
-// Temporary phone check: can a PDF be shared from the browser into WhatsApp?
-// Public on purpose (no login). Task 17 removes both routes.
-app.get("/share-test", (_, res) => {
-  res.sendFile(require("path").join(__dirname, "web", "public", "share-test.html"));
-});
-app.get("/share-test.pdf", (_, res) => {
-  const PDFDocument = require("pdfkit");
-  const doc = new PDFDocument({ size: "A4", margin: 50 });
-  res.type("application/pdf");
-  doc.pipe(res);
-  doc.fontSize(22).text("HVAC Assistant sharing test", { align: "center" });
-  doc.moveDown();
-  doc.fontSize(14).text("This is a one-page test PDF. It only checks whether a PDF can be shared from the browser into WhatsApp. If you can read this in WhatsApp, sharing works on your phone.");
-  doc.end();
-});
-
 // Temporary: list all indexed Drive files so we can update brand-docs.js
 // /drive-index            -> everything the bot can see
 // /drive-index?q=coil     -> only files/folders matching "coil" (diagnosing

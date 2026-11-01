@@ -900,10 +900,7 @@ test("the files behind the sign-in: nobody gets styles, scripts or the manifest 
   }
 }));
 
-test("the temporary sharing test page is not served under /app, and there is no directory listing", () => withServer({}, async (s) => {
-  for (const p of ["/app/share-test.html", "/app/SHARE-TEST.HTML", "/app/share-test.html/", "/app/%73hare-test.html"]) {
-    assert.equal((await s.get(p)).status, 404, p);
-  }
+test("a bare /app goes to /app/, files outside web/public are not reachable, and there is no directory listing", () => withServer({}, async (s) => {
   const bare = await s.get("/app");
   assert.ok([301, 302, 308].includes(bare.status), "a bare /app goes to /app/");
   assert.equal(bare.headers.get("location"), "/app/");

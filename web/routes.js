@@ -345,17 +345,7 @@ function createWebRoutes({
   // ---- the screen ----
   // web/public holds the chat page with its script, styles, manifest and icons.
   // Closed like the rest of /app (mountWeb's sign-in check runs first), no
-  // directory listing, and the policy header above covers these files too. The
-  // temporary sharing test page sits in the same folder until Task 17; it is not
-  // part of the app and has its own public route in server.js, so it is never
-  // served from here.
-  const NOT_PUBLIC = new Set(["/share-test.html"]);
-  router.use("/app", (req, res, next) => {
-    let p;
-    try { p = decodeURIComponent(req.path); } catch { return next(); }
-    if (NOT_PUBLIC.has(p.toLowerCase().replace(/\/+$/, ""))) return res.status(404).json({ error: "Not found." });
-    next();
-  });
+  // directory listing, and the policy header above covers these files too.
   router.use("/app", express.static(PUBLIC_DIR, {
     index: "index.html",
     dotfiles: "ignore",
