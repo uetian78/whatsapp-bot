@@ -241,6 +241,52 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 }
 .prompt { margin-bottom: 8px; }
 
+/* ---- the schedule table: stacked rows, so a phone never scrolls sideways ---- */
+.rc { display: flex; flex-direction: column; gap: 10px; margin-top: 4px; }
+.rc-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: var(--surface);
+}
+.rc-row.skipped { border-color: #d97706; background: #fff7e6; }
+.rc-row.bad { border-color: var(--danger); }
+.rc-head { grid-column: 1 / -1; display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; }
+.rc-num { font-weight: 650; font-size: 0.85rem; color: var(--muted); }
+.rc-row.skipped .rc-num { color: #b45309; }
+.rc-raw { font-size: 0.85rem; overflow-wrap: anywhere; color: var(--text); }
+.rc-field { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.rc-field.tag { grid-column: 1 / -1; }
+.rc-label { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.02em; text-transform: uppercase; color: var(--muted); }
+.rc-field input, .rc-field select {
+  width: 100%;
+  min-width: 0;
+  min-height: 40px;
+  padding: 6px 10px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--bg);
+  color: var(--text);
+  font-size: 16px; /* 16px stops iPhones zooming into the box */
+}
+.rc-field input:focus, .rc-field select:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
+.rc-field .invalid { border-color: var(--danger); outline: 1px solid var(--danger); }
+.rc-field input:disabled, .rc-field select:disabled { opacity: 0.65; }
+.rc-errors { margin: 0 0 8px; padding-left: 20px; color: var(--danger); font-size: 0.9rem; }
+.rc-actions { display: flex; margin-top: 10px; }
+.msg.locked .rc-row { opacity: 0.8; }
+@media (min-width: 560px) {
+  .rc-row { grid-template-columns: 2fr 1.2fr 1fr 1fr 0.7fr; }
+  .rc-field.tag { grid-column: auto; }
+}
+@media (prefers-color-scheme: dark) {
+  .rc-row.skipped { background: #3a2a0c; border-color: #d97706; }
+  .rc-row.skipped .rc-num { color: #fbbf24; }
+}
+
 /* ---- jump, banner, toast ---- */
 .jump {
   position: absolute;

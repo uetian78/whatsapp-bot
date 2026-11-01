@@ -71,8 +71,9 @@ const { createNumberHealth, metaEventLines, CHECK_EVERY_MS } = require("./lib/nu
 // Sender router and the number-health check.
 const {
   runWithChannel, currentChannel, showTyping, downloadMedia,
-  sendText, sendLongText, sendButtons, sendList, sendDocument, sendDriveFile, sendPdfBuffer, sendPageHits,
+  supports, sendText, sendLongText, sendButtons, sendList, sendDocument, sendDriveFile, sendPdfBuffer, sendPageHits, sendRowCheck,
 } = require("./lib/channel.js");
+const { applyRowEdits } = require("./lib/schedule-check.js");
 const { answerFromLibrary, formatAnswer, pageHitsForSources, libraryQuery, searchStatusLine } = require("./lib/answers.js");
 const { whatsappAdapter } = require("./lib/channel-whatsapp.js");
 const { getPageExtractor, parsePageTap, PageError, MSG_BAD_PAGE, MSG_FAILED } = require("./lib/page-extract.js");
@@ -973,9 +974,12 @@ async function handleSplitStep(from, s, text) {
 
     store.endFlow(from);
 
-    // Store results for PDF print (30 min TTL)
+    // Store results for PDF print. The PDF does not use each line's model ranking,
+    // so it is not kept: the state stays small and plain JSON.
     const goodUnits = unitResults.filter(u => !u.error);
-    store.setCtx(from, "splitResult", { brand: s.brand, units: unitResults }, 30 * 60 * 1000);
+    store.setCtx(from, "splitResult", {
+      brand: s.brand, units: unitResults.map(({ ranked, ...unit }) => unit), at: resultStamp(),
+    }, RESULT_TTL_MS);
 
     // Build WhatsApp text output
     const textBlocks = unitResults.map((u) =>
@@ -993,6 +997,7 @@ async function handleSplitStep(from, s, text) {
       "_Verify against manufacturer selection software before submittal._\n\n" +
       "Reply *Print* for a PDF report · *Split Selection* to run again."
     );
+    if (goodUnits.length) await sendButtons(from, PRINT_PROMPT, [PRINT_BUTTON]); // nothing to print when no line was read
   }
 }
 
@@ -1037,16 +1042,21 @@ async function handleScheduleStep(from, s, message, vText) {
     }
     s.rows = extracted.rows;
     s.skipped = extracted.skipped;
-    if (extracted.scheduleCondition) {
-      s.cond = extracted.scheduleCondition;
-      const label = s.cond === "T1" ? "T1 (35°C)" : "T3 (46°C)";
-      await sendText(from,
-        `I read *${extracted.rows.length}* rows. Detected rating *${label}* from the schedule.`);
-      return await advanceScheduleQuestions(from, s);
+    // Where the screen can show a table, the person checks the rows against their
+    // schedule first; the questions come after "Looks right".
+    if (supports("rowCheck")) {
+      s.step = "awaitRowCheck";
+      const flow = store.getFlow(from);
+      if (flow && !flow.expired) flow.ttl = ROWCHECK_TTL_MS; // time to look through a long table
+      return await sendRowCheck(from, s.rows, s.skipped);
     }
-    s.step = "awaitCondition";
-    return await sendText(from,
-      `I read *${extracted.rows.length}* rows.\n\n*Rate capacities at?*\n1. T1 (35°C)\n2. T3 (46°C)`);
+    return await askScheduleCondition(from, s, extracted.scheduleCondition, `I read *${extracted.rows.length}* rows.`);
+  }
+
+  // The table is on screen: typing does nothing but remind (cancel and menu are
+  // handled before any flow). The table itself arrives as the rows-ok tap.
+  if (s.step === "awaitRowCheck") {
+    return await sendText(from, "Please use the table above: fix anything that does not match your schedule, then tap *Looks right*. Type *cancel* to stop.");
   }
 
   // While an extraction is in flight, a second file just gets a wait notice.
@@ -1088,6 +1098,39 @@ async function handleScheduleStep(from, s, message, vText) {
   }
 }
 
+// After the rows are known: carry on with the rating the schedule printed, or ask for one.
+async function askScheduleCondition(from, s, scheduleCondition, lead) {
+  if (scheduleCondition) {
+    s.cond = scheduleCondition;
+    const label = s.cond === "T1" ? "T1 (35°C)" : "T3 (46°C)";
+    await sendText(from, `${lead} Detected rating *${label}* from the schedule.`);
+    return await advanceScheduleQuestions(from, s);
+  }
+  s.step = "awaitCondition";
+  return await sendText(from, `${lead}\n\n*Rate capacities at?*\n1. T1 (35°C)\n2. T3 (46°C)`);
+}
+
+const MSG_TABLE_CLOSED = "That table is no longer open. Send *Schedule Selection* to read a schedule again.";
+
+// "Looks right" on the schedule table: the rows as the person left them. The
+// numbers are untrusted, so applyRowEdits checks every field and works the kW out
+// again itself. A rejected table changes nothing and comes back with the typing kept.
+async function handleRowsOk(from, data) {
+  const flow = store.getFlow(from);
+  const s = flow && !flow.expired && flow.type === "schedule" ? flow.data : null;
+  if (!s || s.step !== "awaitRowCheck") return await sendText(from, MSG_TABLE_CLOSED);
+  store.touchFlow(from);
+  const sent = data && typeof data === "object" ? data.rows : undefined;
+  const out = applyRowEdits(s.rows, s.skipped, sent);
+  if (out.errors.length) {
+    await sendText(from, "I haven't changed anything yet. Please fix:\n" + out.errors.map((e) => `• ${e}`).join("\n"));
+    return await sendRowCheck(from, s.rows, s.skipped, { errors: out.errors, errorIds: out.errorIds, draft: sent });
+  }
+  s.rows = out.rows;
+  s.skipped = out.skipped;
+  return await askScheduleCondition(from, s, schedule.summarize(s.rows).scheduleCondition, `Thanks, *${s.rows.length}* ${s.rows.length === 1 ? "row" : "rows"} confirmed.`);
+}
+
 // Ask the next needed question, or produce the result when all answered.
 async function advanceScheduleQuestions(from, s) {
   const sum = schedule.summarize(s.rows);
@@ -1103,14 +1146,37 @@ async function advanceScheduleQuestions(from, s) {
     cond: s.cond, splitBrand: s.splitBrand, pkgVendor: s.pkgVendor, pkgSeries: s.pkgSeries,
   });
 
-  // Store results for PDF print (30 min TTL)
+  // Store results for PDF print: plain JSON, kept 30 days. The PDFs are made when
+  // asked for and never kept.
   store.setCtx(from, "scheduleResult", {
     cond: s.cond, splitBrand: s.splitBrand, pkgVendor: s.pkgVendor, pkgSeries: s.pkgSeries,
-    rows: s.rows, skipped: s.skipped,
-  }, 30 * 60 * 1000);
+    rows: s.rows, skipped: s.skipped, at: resultStamp(),
+  }, RESULT_TTL_MS);
 
   store.endFlow(from);
-  return await sendLongText(from, reply + "\n\nReply *Print* or *Datasheet* for a PDF report + package datasheets · *Schedule Selection* to run again.");
+  await sendLongText(from, reply + "\n\nReply *Print* or *Datasheet* for a PDF report + package datasheets · *Schedule Selection* to run again.");
+  return await sendButtons(from, PRINT_PROMPT, [PRINT_BUTTON]);
+}
+
+// Results stay available for 30 days; the button under them is "PDF report".
+const RESULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const ROWCHECK_TTL_MS = 30 * 60 * 1000;
+const PRINT_BUTTON = { id: "print", title: "PDF report" };
+const PRINT_PROMPT = "Want these results as a PDF report?";
+// When a result was saved, so "Print" can tell the newer of two. Never equal, even in one millisecond.
+let lastResultAt = 0;
+const resultStamp = () => (lastResultAt = Math.max(Date.now(), lastResultAt + 1));
+
+// Which saved result a Print / Datasheet request is for, as the function that
+// sends it, or null when there is nothing to send. Both a split and a schedule
+// result can be saved at once; "Print" means the newest.
+function printTarget(from, word) {
+  const split = /^print$/i.test(word) ? store.getCtx(from, "splitResult") : null;
+  const sched = /^(print|datasheet)$/i.test(word) ? store.getCtx(from, "scheduleResult") : null;
+  if (split && sched) return (sched.at || 0) > (split.at || 0) ? handleSchedulePrint : handleSplitPrint;
+  if (split) return handleSplitPrint;
+  if (sched) return handleSchedulePrint;
+  return null;
 }
 
 // Send split PDF report when user replies "Print"
@@ -1251,6 +1317,7 @@ async function handleSchedulePrint(from) {
 // ============================================================
 const TR_TO_MBH = 12; // 1 TR = 12 MBtu/h
 const { rankModels: mtzRank } = require("./mtz-engine.js");
+const { parseMtzExpress } = require("./lib/mtz-express.js");
 
 // Parse a cooling load like "8.5 TR", "100", "100 MBH"
 function parseMbh(text) {
@@ -1539,6 +1606,16 @@ async function handleIncomingMessage(value, message) {
       // WhatsApp never offers this tap, so there it is an unknown tap like any other.
       if (btnId === "saved|open" && currentChannel()?.name === "web") return await sendSavedWork(from);
 
+      // The schedule table's "Looks right" (web only): the table rides along as the tap's data.
+      if (btnId === "rows-ok") return await handleRowsOk(from, message.interactive?.button_reply?.data);
+
+      // "PDF report" under results: the same as typing Print.
+      if (btnId === PRINT_BUTTON.id) {
+        const print = printTarget(from, "print");
+        if (!print) return await sendText(from, "No recent results to print. Run *Schedule Selection* or *Split Selection* first.");
+        return await print(from);
+      }
+
       // Page button on a search result -> just that page, as a one-page PDF or a JPEG.
       if (btnId.startsWith("page|")) return await sendPageTap(from, btnId);
 
@@ -1779,12 +1856,8 @@ async function handleIncomingMessage(value, message) {
     }
 
     // ── Split / Schedule PDF print request ───────────────────────
-    if (/^print$/i.test(text.trim()) && store.getCtx(from, "splitResult")) {
-      return await handleSplitPrint(from);
-    }
-    if (/^(print|datasheet)$/i.test(text.trim()) && store.getCtx(from, "scheduleResult")) {
-      return await handleSchedulePrint(from);
-    }
+    const printNow = printTarget(from, text.trim());
+    if (printNow) return await printNow(from);
 
     // ── Split unit multi-step session ──────────────────────────
     if (flow?.type === "split") {
@@ -1805,34 +1878,22 @@ async function handleIncomingMessage(value, message) {
     if (flow?.type === "mtz") {
       return await handleMtzStep(from, flow.data, text);
     }
-    // Trigger: exact phrase "MTZ Selection"
-    if (/^mtz\s+selection$/i.test(text.trim())) {
-      // Express mode: "MTZ Selection 8.5TR 80/67/115" — all params on one line
-      const expressMatch = text.match(/^mtz\s+selection\s+(.+)/i);
-      if (expressMatch) {
-        const rest = expressMatch[1].trim();
-        const loadPart = rest.split(/\s+/)[0];
-        const load = parseLoad(loadPart);
-        const nums = rest.match(/[\d.]+/g) || [];
-        if (load && nums.length >= 4) {
-          // nums[0]=load, nums[1]=DB, nums[2]=WB, nums[3]=Amb
-          const db = parseFloat(nums[1]), wb = parseFloat(nums[2]), amb = parseFloat(nums[3]);
-          if (db >= 60 && db <= 100 && wb >= 50 && wb <= 85 && wb <= db && amb >= 70 && amb <= 135) {
-            store.startFlow(from, "mtz", {
-              step: "extras",
-              reqTC: load.tc, reqSC: load.sc,
-              db, wb, amb,
-            });
-            const scNote = load.sc ? ` / SC ${load.sc.toFixed(1)} MBH` : "";
-            return await sendText(from,
-              `✅ *${load.tc.toFixed(1)} MBH${scNote} · DB${db}/WB${wb}°F · Amb ${amb}°F*\n\n` +
-              "*Step 3/3:* Enter supply airflow CFM, or *rated*.\n" +
-              "Optionally add project name & tag:\n" +
-              "• `rated`  or  `2800`\n" +
-              "• `2800 | Project Name | TAG-01`"
-            );
-          }
-        }
+    // Trigger: "MTZ Selection", alone or with a one-line request (the menu's
+    // "MTZ Selection 8.5TR 80/67/115"). A line that does not read cleanly gets
+    // the guided steps, as the bare phrase does.
+    if (/^mtz\s+selection\b/i.test(text.trim())) {
+      const express = parseMtzExpress(text);
+      if (express) {
+        const { reqTC, reqSC, db, wb, amb } = express;
+        store.startFlow(from, "mtz", { step: "extras", reqTC, reqSC, db, wb, amb });
+        const scNote = reqSC ? ` / SC ${reqSC.toFixed(1)} MBH` : "";
+        return await sendText(from,
+          `✅ *${reqTC.toFixed(1)} MBH${scNote} · DB${db}/WB${wb}°F · Amb ${amb}°F*\n\n` +
+          "*Step 3/3:* Enter supply airflow CFM, or *rated*.\n" +
+          "Optionally add project name & tag:\n" +
+          "• `rated`  or  `2800`\n" +
+          "• `2800 | Project Name | TAG-01`"
+        );
       }
       store.startFlow(from, "mtz", { step: "load" });
       return await sendText(from,

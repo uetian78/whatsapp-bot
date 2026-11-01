@@ -913,3 +913,17 @@ test("the temporary sharing test page is not served under /app, and there is no 
   assert.equal(missing.status, 404);
   assert.doesNotMatch(await missing.text(), /Index of|<ul>/);
 }));
+
+test("the schedule table's tap may carry a long table; other taps still carry little", () => withServer({}, async (s) => {
+  const rows = Array.from({ length: 200 }, (_, i) => ({ id: `r${i}`, tag: `Room ${i} `.padEnd(60, "x"), type: "split", value: 24000, unit: "BTU/h", qty: 2 }));
+  const size = JSON.stringify({ rows }).length;
+  assert.ok(size > 20000 && size < 60000, String(size));
+  const ok = await s.json("/app/api/messages", { tapId: "rows-ok", tapTitle: "Looks right", data: { rows } });
+  assert.equal(ok.status, 202);
+  await until(() => s.delivered.length === 1);
+  assert.equal(s.delivered[0].message.interactive.button_reply.data.rows.length, 200);
+  const other = await s.json("/app/api/messages", { tapId: "menu|3", tapTitle: "x", data: { rows } });
+  assert.equal(other.status, 400, "another tap keeps the small limit");
+  const huge = await s.json("/app/api/messages", { tapId: "rows-ok", tapTitle: "Looks right", data: { rows: [...rows, ...rows, ...rows, ...rows] } });
+  assert.ok(huge.status === 400 || huge.status === 413, `got ${huge.status}`);
+}));
