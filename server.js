@@ -2380,10 +2380,6 @@ app.use(createWebRoutes({
   publicUrl: process.env.PUBLIC_URL,
 }));
 app.use("/app", webErrorHandler); // a body that isn't JSON fails before the router, as JSON
-// Placeholder until the screens are mounted here (Task 15).
-app.get("/app/", (req, res) => {
-  res.set("Cache-Control", "no-store").type("html").send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>HVAC Assistant</title><p>Signed in as ${String(req.account.name || req.account.number).replace(/[&<>"']/g, "")}.</p>`);
-});
 
 // Temporary phone check: can a PDF be shared from the browser into WhatsApp?
 // Public on purpose (no login). Task 17 removes both routes.

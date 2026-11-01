@@ -855,3 +855,61 @@ test("a Drive file bigger than its saved library size is sent in full, by /files
   assert.equal(await shared.text(), "DRIVE-BYTES");
   assert.equal(shared.headers.get("content-length"), null);
 }));
+
+// ---- the screen (web/public) ----
+test("/app/ serves the chat page, with the strict policy and nosniff, to a signed-in person only", () => withServer({}, async (s) => {
+  const anon = await s.call("/app/", { headers: { accept: "text/html" } });
+  assert.equal(anon.status, 401);
+  const r = await s.get("/app/");
+  assert.equal(r.status, 200);
+  assert.match(r.headers.get("content-type"), /text\/html/);
+  assert.equal(r.headers.get("content-security-policy"), CSP);
+  assert.equal(r.headers.get("x-content-type-options"), "nosniff");
+  const html = await r.text();
+  assert.match(html, /<title>HVAC Assistant<\/title>/);
+  assert.doesNotMatch(html, /Mannai/i);
+  assert.match(html, /<link rel="manifest"[^>]*crossorigin="use-credentials"/);
+}));
+
+test("the page's files are served with the policy; the page has no inline script or style", () => withServer({}, async (s) => {
+  const html = await (await s.get("/app/")).text();
+  assert.doesNotMatch(html, /<script(?![^>]*\bsrc=)/i);
+  assert.doesNotMatch(html, /\sstyle\s*=/i);
+  assert.doesNotMatch(html, /<style/i);
+  assert.doesNotMatch(html, /\son[a-z]+\s*=/i);
+  for (const [p, type] of [
+    ["/app/app.js", /javascript/], ["/app/render.js", /javascript/], ["/app/styles.css", /text\/css/],
+    ["/app/manifest.webmanifest", /manifest\+json|json/], ["/app/icon-192.png", /image\/png/], ["/app/icon-512.png", /image\/png/],
+  ]) {
+    const r = await s.get(p);
+    assert.equal(r.status, 200, p);
+    assert.match(r.headers.get("content-type"), type, p);
+    assert.equal(r.headers.get("content-security-policy"), CSP, p);
+    assert.equal(r.headers.get("x-content-type-options"), "nosniff", p);
+    if (!/png/.test(p)) assert.doesNotMatch(await r.text(), /Mannai/i, p);
+  }
+  const css = await (await s.get("/app/styles.css")).text();
+  assert.match(css, /100dvh/);
+  assert.match(css, /prefers-color-scheme:\s*dark/);
+  assert.match(css, /font-size:\s*16px/);
+}));
+
+test("the files behind the sign-in: nobody gets styles, scripts or the manifest without it", () => withServer({}, async (s) => {
+  for (const p of ["/app/app.js", "/app/render.js", "/app/styles.css", "/app/manifest.webmanifest", "/app/icon-192.png"]) {
+    assert.equal((await s.call(p)).status, 401, p);
+  }
+}));
+
+test("the temporary sharing test page is not served under /app, and there is no directory listing", () => withServer({}, async (s) => {
+  for (const p of ["/app/share-test.html", "/app/SHARE-TEST.HTML", "/app/share-test.html/", "/app/%73hare-test.html"]) {
+    assert.equal((await s.get(p)).status, 404, p);
+  }
+  const bare = await s.get("/app");
+  assert.ok([301, 302, 308].includes(bare.status), "a bare /app goes to /app/");
+  assert.equal(bare.headers.get("location"), "/app/");
+  assert.equal((await s.get("/app/..%2Fweb%2Froutes.js")).status === 200, false);
+  assert.equal((await s.get("/app/%2e%2e/routes.js")).status === 200, false);
+  const missing = await s.get("/app/nothing-here.js");
+  assert.equal(missing.status, 404);
+  assert.doesNotMatch(await missing.text(), /Index of|<ul>/);
+}));

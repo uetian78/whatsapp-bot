@@ -10,6 +10,7 @@
 //    GET  /app/files/<ref>[?inline=1]     drive:<id> | gen:<uuid>, streamed
 //    POST /app/api/share-link             { ref } -> { url }
 //    GET  /s/<token>                      the shared file, no sign-in
+//    GET  /app/, /app/app.js, ...         the chat screen (web/public), signed-in people only
 //
 //  A message from the person is saved first, then handed to deliverMessage
 //  (server.js) exactly as the WhatsApp webhook would, with the web channel.
@@ -18,11 +19,13 @@
 // ============================================================
 const fs = require("node:fs");
 const crypto = require("node:crypto");
+const path = require("node:path");
 const { pipeline } = require("node:stream");
 const express = require("express");
 const { sameSiteRequest, makeShareToken, verifyShareToken, cleanSecret } = require("./auth.js");
 const { cleanFileName, classifyUpload, readLimited, drain, MAX_BYTES } = require("./uploads.js");
 
+const PUBLIC_DIR = path.join(__dirname, "public");
 const MAX_TEXT = 4000;
 const MAX_TAP_FIELD = 200;
 const MAX_TAP_DATA = 4000;
@@ -335,6 +338,27 @@ function createWebRoutes({
     const found = await resolveRef(t.ref, t.owner);
     if (!found) return res.status(404).type("html").send(notice("That file is no longer available."));
     await sendFile(req, res, found);
+  }));
+
+  // ---- the screen ----
+  // web/public holds the chat page with its script, styles, manifest and icons.
+  // Closed like the rest of /app (mountWeb's sign-in check runs first), no
+  // directory listing, and the policy header above covers these files too. The
+  // temporary sharing test page sits in the same folder until Task 17; it is not
+  // part of the app and has its own public route in server.js, so it is never
+  // served from here.
+  const NOT_PUBLIC = new Set(["/share-test.html"]);
+  router.use("/app", (req, res, next) => {
+    let p;
+    try { p = decodeURIComponent(req.path); } catch { return next(); }
+    if (NOT_PUBLIC.has(p.toLowerCase().replace(/\/+$/, ""))) return res.status(404).json({ error: "Not found." });
+    next();
+  });
+  router.use("/app", express.static(PUBLIC_DIR, {
+    index: "index.html",
+    dotfiles: "ignore",
+    // Revalidate every time, so a new version of the page does not wait for a cache to expire.
+    setHeaders: (res) => res.set("Cache-Control", "no-cache"),
   }));
 
   router.use(webErrorHandler);
