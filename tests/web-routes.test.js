@@ -516,7 +516,7 @@ test("a Drive file is sent with its library name and type", () => withServer({},
   assert.equal(r.status, 200);
   assert.equal(await r.text(), "DRIVE-BYTES");
   assert.equal(r.headers.get("content-type"), "application/pdf");
-  assert.equal(r.headers.get("content-length"), "11");
+  assert.equal(r.headers.get("content-length"), null, "the saved size may be stale, so it is never sent");
   assert.match(r.headers.get("content-disposition"), /^attachment; filename="APMR-A Catalogue\.pdf"; filename\*=UTF-8''APMR-A%20Catalogue\.pdf$/);
   assert.equal(r.headers.get("x-content-type-options"), "nosniff");
   assert.deepEqual(s.calls.drive, ["f1"]);
@@ -842,3 +842,16 @@ test("the web routes make no database or network call when created", () => {
   const clock = () => T0;
   assert.doesNotThrow(() => createWebRoutes({ deliverMessage: async () => {}, conversations: {}, webChannel: {}, getFile: async () => null, secret: SECRET, now: clock, uploads: createUploadStore({ now: clock }) }));
 });
+
+test("a Drive file bigger than its saved library size is sent in full, by /files and by a share link", () => withServer({}, async (s) => {
+  // the file was replaced in place in Drive: same id, more bytes than the saved record says
+  s.library.set("f1", { id: "f1", name: "Replaced.pdf", folder: "x", size: 5 });
+  const direct = await s.get("/app/files/drive%3Af1");
+  assert.equal(direct.status, 200);
+  assert.equal(await direct.text(), "DRIVE-BYTES");
+  const { url } = await (await s.json("/app/api/share-link", { ref: "drive:f1" })).json();
+  const shared = await s.call(new URL(url).pathname);
+  assert.equal(shared.status, 200);
+  assert.equal(await shared.text(), "DRIVE-BYTES");
+  assert.equal(shared.headers.get("content-length"), null);
+}));

@@ -291,7 +291,8 @@ function createWebRoutes({
         console.error("Drive file could not be opened:", err && err.message);
         return res.status(502).json({ error: "That file could not be fetched right now. Try again." });
       }
-      if (!f.exportMime && Number.isFinite(f.size) && f.size > 0) length = f.size;
+      // No Content-Length for Drive files: the library's saved size goes stale when a
+      // file is replaced in place, and a short length would cut the download off silently.
     } else {
       const g = found.gen;
       name = g.name;
