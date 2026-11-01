@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>HVAC Assistant sharing test</title>
+<style>
+  body { font-family: system-ui, sans-serif; margin: 0; padding: 20px; font-size: 20px; line-height: 1.4; }
+  h1 { font-size: 26px; margin: 0 0 12px; }
+  button { display: block; width: 100%; padding: 28px 12px; font-size: 26px; font-weight: bold;
+           border: 0; border-radius: 12px; background: #1a7f37; color: #fff; margin: 16px 0; }
+  button:disabled { background: #888; }
+  #out { font-size: 22px; font-weight: bold; white-space: pre-wrap; }
+  #ua { font-size: 16px; color: #444; word-break: break-all; margin-top: 24px; }
+</style>
+</head>
+<body>
+<h1>HVAC Assistant sharing test</h1>
+<p>Tap the button. Choose WhatsApp from the list that appears, send the PDF to yourself, then take a screenshot of this page.</p>
+<button id="btn" type="button">Share test PDF</button>
+<div id="out">Loading the test PDF...</div>
+<div id="ua"></div>
+<script>
+  var out = document.getElementById("out");
+  var btn = document.getElementById("btn");
+  var file = null;
+  var prefetchError = null;
+
+  document.getElementById("ua").textContent = "Browser: " + navigator.userAgent;
+
+  function show(msg) { out.textContent = msg; }
+
+  // Fetch the PDF as soon as the page loads, so the tap itself can go
+  // straight to navigator.share (phones require a direct user action).
+  fetch("/share-test.pdf")
+    .then(function (res) {
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      return res.blob();
+    })
+    .then(function (blob) {
+      file = new File([blob], "share-test.pdf", { type: "application/pdf" });
+      show("Ready. PDF loaded (" + file.size + " bytes). Tap the button.");
+    })
+    .catch(function (e) {
+      prefetchError = e;
+      show("FAIL: could not load the test PDF (" + (e && e.message ? e.message : e) + ").");
+    });
+
+  btn.addEventListener("click", function () {
+    if (!file) {
+      show("FAIL: the test PDF was not loaded" + (prefetchError ? " (" + prefetchError.message + ")" : " yet") + ". Reload the page and try again.");
+      return;
+    }
+    if (!navigator.share || !navigator.canShare) {
+      show("FAIL: this browser has no share API (navigator.share or navigator.canShare is missing).");
+      return;
+    }
+    var data = { files: [file] };
+    var ok;
+    try { ok = navigator.canShare(data); } catch (e) {
+      show("FAIL: canShare threw " + (e && e.name ? e.name : e) + ".");
+      return;
+    }
+    if (!ok) {
+      show("FAIL: canShare says this browser cannot share a PDF file.");
+      return;
+    }
+    show("Opening the share sheet...");
+    navigator.share(data).then(function () {
+      show("OK: share finished. Check WhatsApp for the PDF.");
+    }).catch(function (e) {
+      if (e && e.name === "AbortError") show("CANCELLED: the share sheet was closed without sending.");
+      else show("FAIL: share error " + (e && e.name ? e.name : "unknown") + (e && e.message ? " - " + e.message : ""));
+    });
+  });
+</script>
+</body>
+</html>
