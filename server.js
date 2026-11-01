@@ -32,7 +32,9 @@ const { isCreditError, isAiUnavailableError, markExhausted, isExhausted, aiPause
 const { createAi, textOf } = require("./lib/ai.js");
 const { getDb } = require("./lib/db.js");
 const { getPageIndex, createUploadHandler, uploadLimitBytes } = require("./lib/page-index.js");
-const { parseAccounts, findAccount, runWithAccount, currentAccount } = require("./lib/accounts.js");
+const { findAccount, runWithAccount, currentAccount } = require("./lib/accounts.js");
+const { loadSheet } = require("./lib/control-sheet.js");
+const { joinRoutes, requireUser } = require("./web/auth.js");
 const { requireAdmin } = require("./lib/http-auth.js");
 const { whatsappEnabled, requiredEnv } = require("./lib/app-config.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
@@ -73,6 +75,7 @@ const { getPageExtractor, parsePageTap, PageError, MSG_BAD_PAGE, MSG_FAILED } = 
 const { NOT_FOUND_MSG } = wa;
 
 const app = express();
+app.set("trust proxy", 1); // Railway's proxy: lets req.secure see https for the Secure cookie
 app.use(express.json());
 
 // WhatsApp is off unless WHATSAPP_ENABLED=true. Off means: no webhook, no
@@ -100,7 +103,6 @@ const {
   WHATSAPP_TOKEN,
   PHONE_NUMBER_ID,
   ANTHROPIC_API_KEY,
-  GOOGLE_SHEET_ID,
   PORT = 3000,
 } = process.env;
 
@@ -108,7 +110,7 @@ const {
 // otherwise surfaces as a confusing mid-request auth error. Only when run as
 // the server: the replay test imports this file and must not be exited.
 const REQUIRED_ENV = requiredEnv();
-const OPTIONAL_ENV = ["ANTHROPIC_API_KEY", "DRIVE_FOLDER_ID", "ADMIN_PASSWORD", "ADMIN_NUMBERS", "CRM_SHEET_ID", ...(WA_ON ? ["WHATSAPP_REGISTER_PIN"] : [])];
+const OPTIONAL_ENV = ["ANTHROPIC_API_KEY", "DRIVE_FOLDER_ID", "ADMIN_PASSWORD", "ADMIN_NUMBERS", "CRM_SHEET_ID", "WEB_SECRET", ...(WA_ON ? ["WHATSAPP_REGISTER_PIN"] : [])];
 if (require.main === module) {
   const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
   if (missing.length) {
@@ -127,13 +129,7 @@ if (require.main === module) {
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 const ai = createAi({ client: ANTHROPIC_API_KEY ? anthropic : null, db: getDb });
 
-// ============================================================
-//  GOOGLE SHEET ACCESS
-//  The bot reads two tabs (the old "Rules" keyword tab is no longer read; it
-//  can stay in the Sheet):
-//   1) "Knowledge" -> Topic | Info   (the AI's knowledge base)
-//   2) "Allowed"   -> Number        (optional whitelist; empty = reply to all)
-// ============================================================
+// The Google Sheet (Knowledge and Allowed tabs) is read by lib/control-sheet.js.
 // Static Drive-ID map for chiller datasheets (built by build-chiller-ids.js).
 // Key: "code|series" e.g. "5230|APCY-E" -> { id, name }.
 // Allows button taps to skip listFolderFiles() entirely.
@@ -170,42 +166,6 @@ function isDuplicate(msgId) {
   return false;
 }
 
-
-// Simple cache so we don't hit the Sheet on every single message
-let cache = { knowledge: [], allowed: [], accounts: new Map(), ts: 0 };
-const CACHE_MS = 60 * 1000; // refresh at most once per minute
-
-async function loadSheet() {
-  if (Date.now() - cache.ts < CACHE_MS) return cache;
-
-  const sheets = await getSheets();
-  // Allowed is A2:C — A = number, B = name, C = plan (read but unused). Extra
-  // columns are additive: rows that only fill A keep working as before.
-  const ranges = ["Knowledge!A2:B", "Allowed!A2:C"];
-  const res = await sheets.spreadsheets.values.batchGet({
-    spreadsheetId: GOOGLE_SHEET_ID,
-    ranges,
-  });
-
-  const [knowRows, allowRows] = res.data.valueRanges.map(
-    (r) => r.values || []
-  );
-
-  const knowledge = knowRows
-    .filter((r) => r[0] || r[1])
-    .map((r) => `${r[0] ? r[0] + ": " : ""}${r[1] || ""}`);
-
-  // accounts carries name + plan per number; `allowed` stays the plain list of
-  // numbers so the existing gate below is untouched.
-  const accounts = parseAccounts(allowRows);
-  const allowed = [...accounts.keys()];
-
-  cache = { knowledge, allowed, accounts, ts: Date.now() };
-  console.log(
-    `🔄 Sheet loaded: ${knowledge.length} knowledge rows, ${accounts.size} account(s)`
-  );
-  return cache;
-}
 
 // ============================================================
 //  MATCHING
@@ -2332,6 +2292,16 @@ if (WA_ON) app.post("/webhook", (req, res) => {
 });
 
 app.get("/", (_, res) => res.send("WhatsApp AI bot running ✅"));
+
+// The web app lives under /app and nothing else is served from there. Signing in
+// uses a personal link (web/auth.js); with no WEB_SECRET every /app request is
+// a 503. The join routes go first so that gate covers /app/join too.
+const webAuth = { secret: process.env.WEB_SECRET, getAccounts: async () => (await loadSheet()).accounts };
+app.use("/app", joinRoutes(webAuth));
+// Placeholder until the chat API and screens are mounted here.
+app.get("/app/", requireUser(webAuth), (req, res) => {
+  res.set("Cache-Control", "no-store").type("html").send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>HVAC Assistant</title><p>Signed in as ${String(req.account.name || req.account.number).replace(/[&<>"']/g, "")}.</p>`);
+});
 
 // Temporary phone check: can a PDF be shared from the browser into WhatsApp?
 // Public on purpose (no login). Task 17 removes both routes.
