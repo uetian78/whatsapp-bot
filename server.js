@@ -626,9 +626,10 @@ async function sendNotFoundWithSuggestions(to, text, files) {
 // AI search below instead, so the two never add up. With no index file the
 // stage finds nothing and this is exactly the not-found path it always was.
 // Returns true when it replied.
-async function libraryPageStage(to, text, files, { anyWord = false } = {}) {
+async function libraryPageStage(to, text, files, { anyWord = false, announce = null } = {}) {
   const hits = getPageIndex().search(text, { limit: 8, anyWord });
   if (!hits.length) return false;
+  if (announce) await announce();
   console.log(`📖 Page search "${text}": ${hits.length} page(s)`);
 
   let knowledge = [];
@@ -660,16 +661,22 @@ async function runLibrarySearch(to, text, files, { anyWord = false } = {}) {
   return sendNotFoundByName(to, text, files);
 }
 
-// "find ..." / "search ...": a file name that matches is sent as it always was;
-// otherwise the PDF pages are searched.
+// "find ..." / "search ...", once the words are known not to be a series,
+// datasheet, chiller or selection request: a file name that matches is sent as
+// it always was; otherwise the PDF pages are searched. Returns false when it
+// found nothing, so the caller carries on exactly as if the verb were not there
+// (a spec question can still reach the product data, a miss the not-found path).
 async function runFindCommand(to, query, announce) {
-  await announce();
   const files = await listFolderFiles();
   const docType = detectDocType(query); // "IOM", "Catalogue" or null
   const named = findFilesByName(query, docType ? files.filter((f) => fileMatchesDocType(f, docType)) : files);
   console.log(`🔎 Find "${query}" [${docType || "all"}]: ${named.length} file name hit(s)`);
-  if (named.length) return sendFileOptions(to, named, "I found a few matches:");
-  return runLibrarySearch(to, query, files, { anyWord: true });
+  if (named.length) {
+    await announce();
+    await sendFileOptions(to, named, "I found a few matches:");
+    return true;
+  }
+  return libraryPageStage(to, query, files, { anyWord: true, announce });
 }
 
 async function sendNotFoundByName(to, text, files) {
@@ -1684,7 +1691,7 @@ async function handleIncomingMessage(value, message) {
     }
 
     if (message.type !== "text") return;
-    const text = message.text.body.trim();
+    let text = message.text.body.trim(); // a "find ..." that is really a document request continues without the verb
 
     // Reply to a pending document list: "2", "1,3,5", "1-4", or "all".
     // parseSelection returns null for anything that isn't a pick, so real
@@ -1862,8 +1869,12 @@ async function handleIncomingMessage(value, message) {
     // Offered whenever a guess might be wrong. Re-runs the user's LAST query
     // as a ranked scan of the entire Drive index (filename + folder path),
     // deterministic and free — no Claude call.
-    if (isSearchAllTrigger(text)) {
-      const lastQuery = store.getCtx(from, "lastquery");
+    // "search all manuals" / "search all trane" carry their own words: the same
+    // scan, over those words instead of the last request.
+    const wideSearchAll = isSearchAllTrigger(text) ? null : /^\s*search\s+(?:all|everything|drive)\s+(.+?)\s*$/i.exec(text);
+    if (isSearchAllTrigger(text) || wideSearchAll) {
+      const lastQuery = wideSearchAll ? wideSearchAll[1] : store.getCtx(from, "lastquery");
+      if (wideSearchAll) store.setCtx(from, "lastquery", lastQuery, 30 * 60 * 1000);
       if (!lastQuery) {
         return await sendText(from,
           "Tell me what to look for first — send the document name or a few words about it, " +
@@ -1899,15 +1910,25 @@ async function handleIncomingMessage(value, message) {
 
     // ── "find ..." / "search ...": look inside the PDFs ──────────────
     // "search all" and "ai search" were caught above and keep their meaning.
-    // Ahead of the product-question gate below, so "find sound level" is a
-    // page search and not a spec question.
+    // The words after the verb go to the series, datasheet, chiller and
+    // selection routers first (they deliver files and engine answers); only
+    // when none of them wants the words are the PDF pages searched, ahead of
+    // the product-question gate below so "find sound level" is a page search.
+    // Nothing found: carry on as if the verb had not been typed.
     const findQuery = libraryQuery(text);
     if (findQuery) {
       store.setCtx(from, "lastquery", findQuery, 30 * 60 * 1000);
       if (!meaningfulTokens(findQuery).length) {
         return await sendText(from, "Tell me what to look for, e.g. *find sound level* or *search Trane country of origin*.");
       }
-      return await runFindCommand(from, findQuery, announceSearch);
+      const isDocumentRequest = (() => {
+        try {
+          return !!(parseSeriesRequest(findQuery) || parseDatasheetRequest(findQuery) ||
+            routeChillerText(findQuery) || buildSelectionInteractive(findQuery));
+        } catch (_) { return false; }
+      })();
+      if (!isDocumentRequest && await runFindCommand(from, findQuery, announceSearch)) return;
+      text = findQuery;
     }
 
     // Remember what they actually asked for, so a later "search all" knows

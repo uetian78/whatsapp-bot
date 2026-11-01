@@ -120,9 +120,9 @@ test("a file-name hit is sent as before, without page results", { skip }, scenar
 }));
 
 test("when file names miss, page results come first, then close file names", { skip }, scenario({
-  files: [{ id: "g", name: "Glorp Notes.pdf", folder: "Misc", pages: ["zzglorp apmr special note about the unit"] }],
+  files: [{ id: "g", name: "Glorp Notes.pdf", folder: "Misc", pages: ["zzglorp quality special note about the unit"] }],
 }, async ({ h }) => {
-  const out = await h.send(USER, "find zzglorp apmr");
+  const out = await h.send(USER, "find zzglorp quality");
   const i = out.findIndex((o) => /Glorp Notes, page 1/.test(o.text || ""));
   const j = out.findIndex((o) => ["file", "buttons", "list"].includes(o.kind));
   assert.ok(i >= 0, "page results are sent");
@@ -221,4 +221,53 @@ test("admin stats has no PDF line while there is no index", { skip }, scenario({
   const out = await h.send(USER, "stats");
   assert.doesNotMatch(allText(out), /PDF search/);
   assert.match(allText(out), /\[stats\]/);
+}));
+
+// ── "find ..." in front of a request the engines or the series router handle ──
+// The verb must change nothing: the same words with it give the same replies as
+// without it (the files delivered, the selection, the menu), even when the page
+// index holds pages that mention those words.
+const ENGINE_WORDS = [
+  "apmr-a catalogue",
+  "apmr-a 51008 datasheet t3",
+  "apcy-e 100 tr",
+  "me the apmr iom",
+  "me an apmr",
+];
+for (const words of ENGINE_WORDS) {
+  for (const verb of ["find", "search"]) {
+    const asked = words.replace(/^me (the|an) /, "");
+    test(`"${verb} ${words}" gives the same replies as "${asked}"`, { skip }, scenario({ files: [SOUND, TRANE] }, async ({ h }) => {
+      const bare = await h.send(USER, asked);
+      const withVerb = await h.send(USER, `${verb} ${words}`);
+      assert.ok(bare.length > 0);
+      assert.deepEqual(withVerb, bare);
+      assert.doesNotMatch(allText(withVerb), /, page \d+|Closest matches for "me /);
+    }));
+  }
+}
+
+test("find apmr-a catalogue delivers the same file as apmr-a catalogue, not a looser name match", { skip }, scenario({}, async ({ h }) => {
+  const bare = (await h.send(USER, "apmr-a catalogue")).filter((o) => o.kind === "file").map((o) => o.file);
+  const found = (await h.send(USER, "find apmr-a catalogue")).filter((o) => o.kind === "file").map((o) => o.file);
+  assert.ok(bare.length > 0, "the baseline delivers a file");
+  assert.deepEqual(found, bare);
+}));
+
+test("find with no pages and no index goes the way the same words go without it", { skip }, scenario({}, async ({ h }) => {
+  for (const words of ["sound level", "what is the capacity of apmr 52340?"]) {
+    const bare = await h.send(USER, words);
+    assert.deepEqual(await h.send(USER, `find ${words}`), bare, words);
+  }
+}));
+
+test("search all <words> is a search over every file name, not a page search", { skip }, scenario({
+  files: [{ id: "t", name: "Notes.pdf", folder: "Misc", pages: ["all trane units listed here carry the same plate on this page"] }],
+}, async ({ h }) => {
+  for (const t of ["search all manuals", "search all trane"]) {
+    const out = await h.send(USER, t);
+    assert.ok(out.length > 0, t);
+    assert.doesNotMatch(allText(out), /, page \d+|Pages in the PDFs/, t);
+    assert.match(allText(out), /Searching every file for "(manuals|trane)"/, t);
+  }
 }));
