@@ -28,8 +28,10 @@ const { parseSelection } = require("./lib/multi-select.js");
 
 // One reply must not trigger dozens of Drive downloads and media uploads.
 const MAX_BATCH_FILES = 10;
-const { isCreditError, isAiUnavailableError, markExhausted, isExhausted, creditsExhaustedMessage, aiFeatureUnavailableMessage } = require("./lib/ai-credits.js");
-const { parseAccounts, findAccount, runWithAccount, currentAccount, aiAllowed, freePlanMessage } = require("./lib/accounts.js");
+const { isCreditError, isAiUnavailableError, markExhausted, isExhausted, aiPausedMessage, aiFeatureUnavailableMessage } = require("./lib/ai-credits.js");
+const { createAi, textOf } = require("./lib/ai.js");
+const { getDb } = require("./lib/db.js");
+const { parseAccounts, findAccount, runWithAccount, currentAccount } = require("./lib/accounts.js");
 const { requireAdmin } = require("./lib/http-auth.js");
 const { whatsappEnabled, requiredEnv } = require("./lib/app-config.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
@@ -115,7 +117,12 @@ if (require.main === module) {
   }
 }
 
+// `anthropic` still serves the Bot Sender polish (lib/sender-polish.js) and is the
+// client behind `ai`. Every text call below goes through `ai`: one model, one
+// monthly spending cap. With no key the client is null, so ai.available() is
+// false and the database is never opened; with a key it opens on first use.
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
+const ai = createAi({ client: ANTHROPIC_API_KEY ? anthropic : null, db: getDb });
 
 // ============================================================
 //  GOOGLE SHEET ACCESS
@@ -169,7 +176,7 @@ async function loadSheet() {
   if (Date.now() - cache.ts < CACHE_MS) return cache;
 
   const sheets = await getSheets();
-  // Allowed is A2:C — A = number, B = name, C = plan (paid/free). Extra
+  // Allowed is A2:C — A = number, B = name, C = plan (read but unused). Extra
   // columns are additive: rows that only fill A keep working as before.
   const ranges = ["Knowledge!A2:B", "Allowed!A2:C"];
   const res = await sheets.spreadsheets.values.batchGet({
@@ -191,10 +198,8 @@ async function loadSheet() {
   const allowed = [...accounts.keys()];
 
   cache = { knowledge, allowed, accounts, ts: Date.now() };
-  const paidCount = [...accounts.values()].filter((a) => a.paid).length;
   console.log(
-    `🔄 Sheet loaded: ${knowledge.length} knowledge rows, ` +
-    `${accounts.size} account(s) (${paidCount} paid)`
+    `🔄 Sheet loaded: ${knowledge.length} knowledge rows, ${accounts.size} account(s)`
   );
   return cache;
 }
@@ -242,7 +247,7 @@ const BOT_CAPABILITIES =
 //  Answers ONLY from the Knowledge tab. Refuses to invent.
 // ============================================================
 async function askClaude(question, knowledge) {
-  if (!ANTHROPIC_API_KEY || isExhausted() || !aiAllowed()) return null;
+  if (!ai.available()) return null;
 
   const knowledgeText = knowledge.join("\n");
 
@@ -262,76 +267,16 @@ Do NOT make up prices, products, capacities, or details — only use the numbers
 ${PRODUCT_KB}
 --- END SPECIFICATIONS ---`;
 
-  try {
-    const msg = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 400,
-      system: [
-        { type: "text", text: staticBlock, cache_control: { type: "ephemeral" } },
-        { type: "text", text: `--- BUSINESS INFORMATION ---\n${knowledgeText}\n--- END INFORMATION ---` },
-      ],
-      messages: [{ role: "user", content: question }],
-    });
-    return msg.content?.[0]?.text?.trim() || null;
-  } catch (err) {
-    console.error("Claude error:", err.message);
-    if (isCreditError(err)) markExhausted();
-    return null;
-  }
-}
-
-// Use Claude to match a user's request to the best file when filename search
-// misses (handles synonyms, e.g. "AHU" / "air handling unit" -> MAH.pdf).
-// Returns the matching file object, or null if none fits.
-async function aiMatchFile(text, files) {
-  if (!ANTHROPIC_API_KEY || isExhausted() || !aiAllowed() || !files.length) return null;
-
-  // Give Claude the list of filenames (without extension) to choose from.
-  const list = files.map((f, i) => `${i + 1}. ${f.name.replace(/\.[^.]+$/, "")}`).join("\n");
-
-  const system = `You match a customer's request to ONE or more HVAC product files from a list.
-The list may include SKM brand files as well as third-party brand catalogues (Hisense, Daikin, Mitsubishi, Trane, Carrier, etc.).
-Use your knowledge of HVAC abbreviations and brand names:
-- MAH = Modular Air Handling Unit (AHU)
-- CAH = Comfort Air Handling Unit (AHU)
-- FCU = Fan Coil Unit
-- APMR-A = Packaged Air Conditioner
-- AUMR-A = Air-Cooled Condensing Unit
-- APCY-P / APCY-H / APCY-E = Air-Cooled Screw Chillers
-- ACMR = Air-Cooled Scroll Chiller
-- PAC4A = 100% Fresh Air Packaged Unit (DOAS)
-- PAC4A 5xxxx = a specific PAC4A unit selection sheet
-- VRF / VRV = Variable Refrigerant Flow/Volume multi-split system
-- Also match third-party brand names directly (e.g. "Hisense VRF" matches any file with "Hisense" and "VRF" in the name)
-
-Reply with ONLY the number of the single best matching file.
-If several are equally valid (e.g. user said "chiller" and there are several), reply with their numbers separated by commas.
-If nothing matches, reply with "0".
-No other text.
-
-FILES:
-${list}`;
-
-  try {
-    const msg = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 30,
-      system,
-      messages: [{ role: "user", content: text }],
-    });
-    const out = (msg.content?.[0]?.text || "").trim();
-    const nums = out.match(/\d+/g);
-    if (!nums) return null;
-    const picked = nums
-      .map((n) => parseInt(n, 10))
-      .filter((n) => n >= 1 && n <= files.length)
-      .map((n) => files[n - 1]);
-    return picked.length ? picked : null; // array of matches
-  } catch (err) {
-    console.error("AI match error:", err.message);
-    if (isCreditError(err)) markExhausted();
-    return null;
-  }
+  const msg = await ai.askMessage({
+    purpose: "askClaude",
+    max_tokens: 1024,
+    system: [
+      { type: "text", text: staticBlock, cache_control: { type: "ephemeral" } },
+      { type: "text", text: `--- BUSINESS INFORMATION ---\n${knowledgeText}\n--- END INFORMATION ---` },
+    ],
+    messages: [{ role: "user", content: question }],
+  });
+  return (msg && textOf(msg).trim()) || null;
 }
 
 // AI fallback for a lookup miss: finds documents that are genuinely relevant
@@ -339,7 +284,7 @@ ${list}`;
 // alternatives instead of a dead end. Returns [] (never null) when nothing
 // clears the relevance bar, so callers can do `if (hits.length)` directly.
 async function aiRelatedFiles(text, files) {
-  if (!ANTHROPIC_API_KEY || isExhausted() || !aiAllowed() || !files.length) return [];
+  if (!ai.available() || !files.length) return [];
 
   const list = files.map((f, i) => `${i + 1}. ${f.name.replace(/\.[^.]+$/, "")}`).join("\n");
 
@@ -367,20 +312,8 @@ No other text.
 FILES:
 ${list}`;
 
-  try {
-    const msg = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 40,
-      system,
-      messages: [{ role: "user", content: text }],
-    });
-    const out = (msg.content?.[0]?.text || "").trim();
-    return parseRelatedFilesResponse(out, files);
-  } catch (err) {
-    console.error("AI related-files error:", err.message);
-    if (isCreditError(err)) markExhausted();
-    return [];
-  }
+  const out = await ai.askText({ purpose: "aiRelatedFiles", system, user: text });
+  return out ? parseRelatedFilesResponse(out, files) : [];
 }
 
 // Last-resort "smart guidance" for a request that matched no file. Given the
@@ -391,7 +324,7 @@ ${list}`;
 // it and returns the sentinel "SHOW_MENU". Returns the guidance string, or
 // null when the caller should fall back to the full capabilities menu.
 async function aiGuidance(text) {
-  if (!ANTHROPIC_API_KEY || isExhausted() || !aiAllowed()) return null;
+  if (!ai.available()) return null;
 
   const system = `You are the Mannai HVAC WhatsApp assistant. A customer's message did NOT match any document or command. Act like a helpful human colleague: figure out what they probably want and point them to a command that actually works.
 
@@ -414,21 +347,9 @@ RULES:
 - NEVER claim a document was sent. NEVER give specs, prices, or capacities. You only guide.
 - No "Hello"/greetings — go straight to the helpful guidance.`;
 
-  try {
-    const msg = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 250,
-      system,
-      messages: [{ role: "user", content: text }],
-    });
-    const out = (msg.content?.[0]?.text || "").trim();
-    if (!out || /^SHOW_MENU$/i.test(out)) return null;
-    return out;
-  } catch (err) {
-    console.error("AI guidance error:", err.message);
-    if (isCreditError(err)) markExhausted();
-    return null;
-  }
+  const out = await ai.askText({ purpose: "aiGuidance", system, user: text });
+  if (!out || /^SHOW_MENU$/i.test(out)) return null;
+  return out;
 }
 
 // AI-pick the single file in a folder that matches a requested SERIES.
@@ -438,7 +359,7 @@ RULES:
 // `folderFiles` are already filtered to the right folder.
 // Returns one file object, or null.
 async function aiMatchSeriesFile(series, docType, folderFiles) {
-  if (!ANTHROPIC_API_KEY || isExhausted() || !aiAllowed() || !folderFiles.length) return null;
+  if (!ai.available() || !folderFiles.length) return null;
 
   const list = folderFiles
     .map((f, i) => `${i + 1}. ${f.name.replace(/\.[^.]+$/, "")}`)
@@ -458,22 +379,10 @@ Reply with ONLY the number of the single best file, or "0". No other text.
 FILES:
 ${list}`;
 
-  try {
-    const msg = await anthropic.messages.create({
-      model: "claude-haiku-4-5-20251001",
-      max_tokens: 10,
-      system,
-      messages: [{ role: "user", content: `${series} ${docType}` }],
-    });
-    const out = (msg.content?.[0]?.text || "").trim();
-    const n = parseInt((out.match(/\d+/) || [])[0], 10);
-    if (!n || n < 1 || n > folderFiles.length) return null;
-    return folderFiles[n - 1];
-  } catch (err) {
-    console.error("AI series-match error:", err.message);
-    if (isCreditError(err)) markExhausted();
-    return null;
-  }
+  const out = await ai.askText({ purpose: "aiMatchSeriesFile", system, user: `${series} ${docType}` });
+  const n = parseInt(((out || "").match(/\d+/) || [])[0], 10);
+  if (!n || n < 1 || n > folderFiles.length) return null;
+  return folderFiles[n - 1];
 }
 
 // Dispatch a chiller response descriptor from chillers.js (text / buttons /
@@ -549,17 +458,11 @@ async function fallbackResolve(seriesNameOrText, docType, files) {
 
   const folderFiles = files.filter((f) => folderMatchesDocType(f.folder, docType));
   if (!folderFiles.length) return null;
-  // Last resort was an AI match on the folder's filenames. That is a search
-  // call, so it now needs consent like every other one. Without it we return
-  // null and the caller drops to sendNotFoundWithSuggestions, which runs the
-  // free scan and then offers AI — one extra tap, but never a silent spend.
-  if (!aiSearchConsented(null, seriesNameOrText)) {
-    console.log(`⏭️  Skipping AI series match for ${seriesNameOrText} ${docType} (no consent)`);
-    return null;
-  }
-  const ai = await aiMatchSeriesFile(seriesNameOrText, docType, folderFiles);
-  if (ai) console.log(`🤖 AI matched ${seriesNameOrText} ${docType} -> ${ai.name}`);
-  return ai;
+  // Last resort: AI picks the file from the folder's filenames. It returns null
+  // when AI is unavailable, and the caller drops to sendNotFoundWithSuggestions.
+  const aiHit = await aiMatchSeriesFile(seriesNameOrText, docType, folderFiles);
+  if (aiHit) console.log(`🤖 AI matched ${seriesNameOrText} ${docType} -> ${aiHit.name}`);
+  return aiHit;
 }
 
 // ============================================================
@@ -636,11 +539,10 @@ async function sendManyFiles(to, files) {
   }
 }
 
-// Both escape hatches, in cost order. The AI one is only advertised to
-// accounts entitled to it — offering a free account a button that returns the
-// upgrade message is a worse experience than not offering it.
+// Both escape hatches, in cost order. The AI one is only advertised while AI is
+// available — offering a command that answers "paused" is worse than not offering it.
 function escapeHatchHint() {
-  return aiAllowed() ? `${SEARCH_ALL_HINT}\n${AI_SEARCH_HINT}` : SEARCH_ALL_HINT;
+  return ai.available() ? `${SEARCH_ALL_HINT}\n${AI_SEARCH_HINT}` : SEARCH_ALL_HINT;
 }
 
 // `requestQuery`: when these are guesses for a search, a "📥 Not here?
@@ -752,56 +654,28 @@ async function sendNotFoundWithSuggestions(to, text, files) {
   // ── FREE FIRST ────────────────────────────────────────────────
   // Ranked keyword scan of the WHOLE index — filenames and folder paths,
   // pure JS, no API call. This runs before anything that costs money, for
-  // every account, whatever their plan and whatever the credit balance.
+  // whatever the credit balance.
   const ranked = rankFiles(text, fileList, 10);
   if (ranked.length) {
     console.log(`🗂️  Free scan matched "${text}": ${ranked.length} hit(s)`);
     return sendFileOptions(to, ranked, `Closest matches for "${text}":`, false, text);
   }
 
-  // ── Nothing free matched. AI could look harder — but ASK first ──
-  // Never spend a call on a guess the user didn't ask for.
-  if (!aiAllowed()) {
-    const account = currentAccount();
-    console.log(`🔒 Free account ${account?.number} -> upgrade message for "${text}"`);
-    return sendWithRequestButton(to, text, freePlanMessage(account?.name));
+  // ── Nothing free matched: AI looks harder, by itself ─────────────
+  // The free scan above already failed. AI is one capped, cheap call; when it is
+  // unavailable (no key, credit latch, monthly cap) say so and offer the request.
+  if (!ai.available()) {
+    console.log(`⏸️  AI unavailable -> paused message for "${text}"`);
+    return sendWithRequestButton(to, text, aiPausedMessage());
   }
-  if (isExhausted()) {
-    console.log(`💳 AI credits exhausted -> credits message for "${text}"`);
-    return sendWithRequestButton(to, text, creditsExhaustedMessage(currentAccount()?.name));
-  }
-
-  store.setCtx(to, "aiask", text, 30 * 60 * 1000);
-  console.log(`❓ Offering AI search for "${text}"`);
-  return sendWithRequestButton(to, text,
-    `I couldn't find anything matching *"${text}"* by name or folder.\n\n` +
-    "🤖 Shall I search with AI? It reads every file name in the Drive folder " +
-    "and suggests the closest ones.",
-    [
-      { id: "aiyes", title: "Yes, search with AI" },
-      { id: "aino", title: "No thanks" },
-    ]
-  );
+  console.log(`🤖 Free scan missed "${text}" -> AI search`);
+  return runAiSearch(to, text, (t) => sendText(to, t));
 }
 
-// Has this user agreed to spend a call on THIS query? Set by the "Yes" button
-// or the "ai search" command, and cleared once used, so consent is per-query
-// rather than a standing permission.
-function aiSearchConsented(from, text) {
-  // `from` is absent deep in the resolver chain (fallbackResolve), where only
-  // the async-local account is in scope. Fall back to its number; if that
-  // doesn't resolve, we return false and simply don't spend a call.
-  const key = from || currentAccount()?.number;
-  if (!key) return false;
-  const consented = store.getCtx(key, "aiok");
-  return !!consented && consented === text;
-}
-
-// The actual AI pass, shared by the "Yes" button and the "ai search" command.
-// Reads the whole index, not a doc-type-filtered slice.
+// The AI search pass, run after the free scan misses and by the "ai search"
+// command. Reads the whole index, not a doc-type-filtered slice.
 async function runAiSearch(to, query, announce) {
-  if (!aiAllowed()) return sendWithRequestButton(to, query, freePlanMessage(currentAccount()?.name));
-  if (isExhausted()) return sendWithRequestButton(to, query, creditsExhaustedMessage(currentAccount()?.name));
+  if (!ai.available()) return sendWithRequestButton(to, query, aiPausedMessage());
 
   if (announce) await announce(`🤖 Searching every file with AI for "${query}"…`);
   const files = await listFolderFiles();
@@ -1143,7 +1017,7 @@ async function handleScheduleStep(from, s, message, vText) {
       if (isAiUnavailableError(err)) {
         if (isCreditError(err)) markExhausted();
         console.error("💳 Schedule reading unavailable — AI refused the request");
-        return await sendText(from, aiFeatureUnavailableMessage(currentAccount()?.name));
+        return await sendText(from, aiFeatureUnavailableMessage());
       }
       return await sendText(from, "Sorry, I couldn't read that schedule. Try a clearer image or a PDF.");
     }
@@ -1670,24 +1544,6 @@ async function handleIncomingMessage(value, message) {
         return await sendNotFoundWithSuggestions(from, model, files);
       }
 
-      // "Search with AI?" answer. Consent is per-query and consumed once.
-      if (btnId === "aiyes" || btnId === "aino") {
-        const pendingQuery = store.getCtx(from, "aiask");
-        store.clearCtx(from, "aiask");
-        if (!pendingQuery) {
-          return await sendText(from, "That search has expired — send me what you're looking for again.");
-        }
-        if (btnId === "aino") {
-          console.log(`🙅 ${from} declined AI search for "${pendingQuery}"`);
-          return await sendWithRequestButton(from, pendingQuery,
-            `No problem — nothing spent.\n\nIf you know the document's name, type it exactly ` +
-            `(for example "APMR-A" or "ACMR IOM").`);
-        }
-        console.log(`✅ ${from} approved AI search for "${pendingQuery}"`);
-        store.setCtx(from, "aiok", pendingQuery, 5 * 60 * 1000);
-        return await runAiSearch(from, pendingQuery, (t) => sendText(from, t));
-      }
-
       // "📥 Request it" — ask for a missing document to be added to the library.
       if (btnId === docReq.REQUEST_BUTTON.id) {
         return await handleDocRequest(from, profileName);
@@ -1713,7 +1569,8 @@ async function handleIncomingMessage(value, message) {
         return await sendText(from, NOT_FOUND_MSG);
       }
 
-      return; // unknown button
+      // A tap on something this version no longer offers (an old message's button).
+      return await sendText(from, "That option is no longer available. Send me what you're looking for, or type *menu* to see what I can do.");
     }
 
     // ── Global escape: a bare greeting / "menu" / "help" ALWAYS shows the menu
@@ -1978,7 +1835,7 @@ async function handleIncomingMessage(value, message) {
     // ── "search all" escape hatch ────────────────────────────────
     // Offered whenever a guess might be wrong. Re-runs the user's LAST query
     // as a ranked scan of the entire Drive index (filename + folder path),
-    // deterministic and free — no Claude call, so it works on the free plan.
+    // deterministic and free — no Claude call.
     if (isSearchAllTrigger(text)) {
       const lastQuery = store.getCtx(from, "lastquery");
       if (!lastQuery) {
@@ -1990,11 +1847,11 @@ async function handleIncomingMessage(value, message) {
       const hits = rankFiles(lastQuery, await listFolderFiles(), 10);
       console.log(`🗂️  search-all "${lastQuery}" -> ${hits.length} hit(s)`);
       if (!hits.length) {
-        // Free scan exhausted. NOW offer the paid option — never before, so a
-        // Claude call only happens once the free path has genuinely failed.
+        // Free scan exhausted. NOW offer AI — never before, so a Claude call
+        // only happens once the free path has genuinely failed.
         return await sendText(from,
           `I searched every file name and folder in the Drive folder and found nothing close to "${lastQuery}".\n\n` +
-          (aiAllowed()
+          (ai.available()
             ? AI_SEARCH_HINT
             : "Try a word from the document's title, or email hassan.saleem@mannai.com.qa."));
       }
@@ -2005,13 +1862,12 @@ async function handleIncomingMessage(value, message) {
     // ── "ai search": last resort, costs a Claude call ────────────
     // Only reachable after the free scan missed. Reads the whole index, not a
     // doc-type-filtered slice, so it can reach Submittal Files and the like.
-    // Typing "ai search" IS the consent — the user asked for it explicitly.
+    // Typing "ai search" asks for it explicitly, even when the automatic pass already ran.
     if (isAiSearchTrigger(text)) {
       const lastQuery = store.getCtx(from, "lastquery");
       if (!lastQuery) {
         return await sendText(from, "Tell me what to look for first, then reply *ai search*.");
       }
-      store.setCtx(from, "aiok", lastQuery, 5 * 60 * 1000);
       return await runAiSearch(from, lastQuery, announceSearch);
     }
 
@@ -2292,51 +2148,18 @@ async function handleIncomingMessage(value, message) {
       return await sendNotFoundWithSuggestions(from, text, files);
     }
 
-    // 3) Product-ish request that filename search missed -> AI matches by meaning
-    //    (e.g. "AHU IOM" / "air handling unit" / "do you have the fresh air unit").
-    //    Pass only the doc-type-filtered file list so AI never suggests wrong type.
-    //
-    //    OPT-IN ONLY. This used to fire automatically on every miss, spending a
-    //    call before the free ranked scan had even been tried. Now it runs only
-    //    when the user has said yes to the "Search with AI?" prompt (or typed
-    //    "ai search"), which sets the consent flag for this query.
-    if (!isKnowledgeQuestion && aiSearchConsented(from, text)) {
-      const aiHits = await aiMatchFile(text, searchFiles);
-      if (aiHits && aiHits.length >= 1) {
-        console.log(`🤖 AI matched "${text}" -> ${aiHits.map(f => f.name).join(", ")}`);
-
-        // If no doc type was specified and results include both types, ask first
-        if (!mentionedDocType) {
-          const hasIOM = aiHits.some((f) => fileMatchesDocType(f, "IOM"));
-          const hasCat = aiHits.some((f) => fileMatchesDocType(f, "Catalogue"));
-          if (hasIOM && hasCat) {
-            return await sendButtons(from,
-              `Which document type would you like for "${text}"?`,
-              [
-                { id: `doctype|Catalogue|${text}`, title: "Catalogue" },
-                { id: `doctype|IOM|${text}`, title: "IOM" },
-              ]
-            );
-          }
-        }
-
-        return await sendFileOptions(from, aiHits, "Did you mean one of these?");
-      }
-    }
-
-    // 4) General question -> answer from the Knowledge tab via Claude Haiku.
-    //    Gated on isKnowledgeQuestion: someone who ASKED something expects an
-    //    answer, not a permission prompt. A document search that merely missed
-    //    ("MCWFA") is not a question and must not silently spend a call here —
-    //    it drops to step 5, which tries the free scan and then asks.
-    if (isKnowledgeQuestion || aiSearchConsented(from, text)) {
+    // 3) General question -> answer from the Knowledge tab via Claude Haiku.
+    //    Gated on isKnowledgeQuestion: a document search that merely missed
+    //    ("MCWFA") is not a question and must not spend a call here — it drops
+    //    to step 5, which tries the free scan and then AI search.
+    if (isKnowledgeQuestion) {
       const aiReply = await askClaude(text, knowledge);
       if (aiReply && !/connect you with a team member/i.test(aiReply)) {
         return await sendText(from, aiReply);
       }
     }
 
-    // 5) Nothing matched -> AI suggests related documents, or the standard apology
+    // 4) Nothing matched -> free scan, then AI suggests related documents, or the standard apology
     await sendNotFoundWithSuggestions(from, text, files);
 }
 

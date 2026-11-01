@@ -83,28 +83,7 @@ test("latch expires after the TTL so a top-up recovers by itself", () => {
   }
 });
 
-test("credits message greets by name, says credits are 0, gives the escape hatch", () => {
-  const msg = creditsExhaustedMessage("Hassan");
-  assert.match(msg, /Hassan/);
-  assert.match(msg, /\*0\*/, "states the balance is zero");
-  assert.match(msg, /exact file name/i);
-});
-
-// This person already pays. Telling them to upgrade would be nonsense, and
-// was the bug this message replaced.
-test("credits message never tells a paying customer to upgrade", () => {
-  const msg = creditsExhaustedMessage("Hassan");
-  assert.doesNotMatch(msg, /upgrade/i);
-  assert.doesNotMatch(msg, /move to the \*?PAID/i);
-});
-
-test("credits message still reads correctly with no name on file", () => {
-  const msg = creditsExhaustedMessage("");
-  assert.doesNotMatch(msg, /Hi \*\*/, "no empty bold greeting");
-  assert.match(msg, /\*0\*/);
-});
-
-const { isAiUnavailableError, aiFeatureUnavailableMessage } = require("../lib/ai-credits.js");
+const { isAiUnavailableError, aiFeatureUnavailableMessage, aiPausedMessage } = require("../lib/ai-credits.js");
 
 // The vision helpers throw plain Errors shaped "... API <status>: <json>", so
 // the status has to be read out of the message text, not just off the object.
@@ -143,10 +122,21 @@ test("a disabled key is unavailable but is not a credit error", () => {
   assert.equal(isCreditError(err), false, "must not be mistaken for an empty balance");
 });
 
-test("the feature message names credits and the paid plan", () => {
+test("the feature message says reading is paused and points to the file name", () => {
   const msg = aiFeatureUnavailableMessage("Hassan");
-  assert.match(msg, /Hassan/);
-  assert.match(msg, /AI credits are required/i);
-  assert.match(msg, /PAID/);
-  assert.doesNotMatch(aiFeatureUnavailableMessage(""), /Hi \*\*/);
+  assert.match(msg, /Reading images and schedules is paused right now/);
+  assert.match(msg, /get any document by its name/);
+  assert.doesNotMatch(msg, /Hassan/, "no greeting, even when a name is passed");
+});
+
+test("the paused message says AI answers are paused and points to the file name", () => {
+  const msg = aiPausedMessage();
+  assert.match(msg, /AI answers are paused right now/);
+  assert.match(msg, /get any document by its name/);
+});
+
+test("neither message mentions a paid plan or credits", () => {
+  for (const msg of [aiFeatureUnavailableMessage("Hassan"), aiFeatureUnavailableMessage(), aiPausedMessage()]) {
+    assert.doesNotMatch(msg, /paid|plan|credit|upgrade/i);
+  }
 });

@@ -10,11 +10,18 @@ test("request button and list row fit WhatsApp's title limits", () => {
   assert.ok(dr.REQUEST_ROW.description.length <= 72);
 });
 
-test("prompt names the HVAC Assistant library and the few-minutes turnaround", () => {
-  assert.match(dr.REQUEST_PROMPT, /HVAC Assistant library/);
-  for (const s of [dr.REQUEST_PROMPT, dr.REQUEST_BUTTON.title, dr.REQUEST_ROW.title, dr.confirmText("x"), dr.duplicateText("x")]) {
-    assert.match(s, /min/);
-  }
+test("request wording makes no time promise", () => {
+  assert.equal(dr.REQUEST_BUTTON.title, "📥 Request it");
+  const all = [dr.REQUEST_PROMPT, dr.REQUEST_BUTTON.title, dr.REQUEST_ROW.title, dr.REQUEST_ROW.description,
+    dr.confirmText("x"), dr.duplicateText("x")];
+  for (const s of all) assert.doesNotMatch(s, /minute|mins?|within|instant/i, s);
+});
+
+test("request copy is the agreed wording", () => {
+  assert.equal(dr.REQUEST_PROMPT, "📥 Can't find it? Tap *Request it* and we'll add it to the library.");
+  assert.equal(dr.confirmText("APMR IOM"),
+    "✅ Request sent for *\"APMR IOM\"*. We'll add it to the library as soon as we can.");
+  assert.equal(dr.REQUEST_ROW.title, "📥 Request it");
 });
 
 test("alertNumbers: defaults to the admin number, digits only", () => {

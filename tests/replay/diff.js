@@ -11,7 +11,7 @@ const path = require("path");
 const { replayAll, fixturePath } = require("./harness.js");
 
 // The replies that mean "I couldn't give you what you asked for".
-const NOT_FOUND = /Cannot find requested file|couldn't find anything matching|You are on the \*FREE\* plan|isn't available yet|couldn't fetch that image/i;
+const NOT_FOUND = /Cannot find requested file|couldn't find anything matching|You are on the \*FREE\* plan|AI answers are paused right now|Even AI couldn't find anything|isn't available yet|couldn't fetch that image/i;
 
 const filesOf = (e) => e.outbound.filter((o) => o.kind === "file").map((o) => o.file);
 const isNotFound = (e) => e.outbound.some((o) => NOT_FOUND.test(o.text || ""));

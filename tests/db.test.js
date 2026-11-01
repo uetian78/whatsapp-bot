@@ -65,3 +65,9 @@ test("requiring the modules and using the store opens no database and prints no 
   assert.equal(r.stderr, "");
   assert.equal(fs.existsSync(dir), false);
 });
+
+test("a fresh database gets the ai_usage table", () => {
+  const d = openDb(":memory:");
+  const cols = d.prepare("PRAGMA table_info(ai_usage)").all().map((c) => c.name);
+  assert.deepEqual(cols, ["ts", "purpose", "model", "input", "output", "cache_read", "cache_write", "cost_usd"]);
+});

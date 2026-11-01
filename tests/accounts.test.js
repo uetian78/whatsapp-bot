@@ -46,64 +46,43 @@ test("parseAccounts tolerates an empty or missing sheet range", () => {
   assert.equal(parseAccounts(undefined).size, 0);
 });
 
-test("paid account may use AI, free account may not", async () => {
-  const paid = { number: "1", name: "Hassan", paid: true };
-  const free = { number: "2", name: "Ali", paid: false };
+// The Allowed tab still carries a name per number. Plans no longer gate
+// anything, but the account still follows the request through awaits.
+test("the account rides the request context", async () => {
+  const hassan = { number: "1", name: "Hassan", paid: true };
+  const ali = { number: "2", name: "Ali", paid: false };
 
-  await runWithAccount(paid, async () => {
-    assert.equal(aiAllowed(), true);
-    assert.equal(currentAccount().name, "Hassan");
-  });
-  await runWithAccount(free, async () => {
-    assert.equal(aiAllowed(), false);
-    assert.equal(currentAccount().name, "Ali");
-  });
-});
-
-// Backwards compatibility: with no Allowed rows the bot is open to everyone
-// and there is no account to consult. Gating AI off there would silently
-// break every existing deployment, so no-context means allowed.
-test("no account context leaves AI allowed (open-bot default)", () => {
-  assert.equal(currentAccount(), null);
-  assert.equal(aiAllowed(), true);
+  await runWithAccount(hassan, async () => assert.equal(currentAccount().name, "Hassan"));
+  await runWithAccount(ali, async () => assert.equal(currentAccount().name, "Ali"));
+  assert.equal(currentAccount(), null, "no context outside a request");
 });
 
 // The reason this uses AsyncLocalStorage and not a module-level variable:
 // enqueue() serializes per user but runs different users concurrently, so a
-// shared variable would let one account's plan leak into another's request.
+// shared variable would let one account leak into another's request.
 test("concurrent accounts do not leak into each other across awaits", async () => {
-  const paid = { number: "1", name: "Hassan", paid: true };
-  const free = { number: "2", name: "Ali", paid: false };
   const seen = [];
 
-  const slowPaid = runWithAccount(paid, async () => {
-    await new Promise((r) => setTimeout(r, 20)); // free request runs during this
-    seen.push(["paid-after-await", currentAccount().name, aiAllowed()]);
+  const slow = runWithAccount({ number: "1", name: "Hassan" }, async () => {
+    await new Promise((r) => setTimeout(r, 20)); // the other request runs during this
+    seen.push(["after-await", currentAccount().name]);
   });
-  const fastFree = runWithAccount(free, async () => {
-    seen.push(["free", currentAccount().name, aiAllowed()]);
+  const fast = runWithAccount({ number: "2", name: "Ali" }, async () => {
+    seen.push(["fast", currentAccount().name]);
   });
 
-  await Promise.all([slowPaid, fastFree]);
+  await Promise.all([slow, fast]);
 
   assert.deepEqual(seen, [
-    ["free", "Ali", false],
-    ["paid-after-await", "Hassan", true],
+    ["fast", "Ali"],
+    ["after-await", "Hassan"],
   ]);
 });
 
-test("free-plan message greets by name and names the escape hatch", () => {
-  const msg = freePlanMessage("Hassan");
-  assert.match(msg, /Hassan/);
-  assert.match(msg, /FREE/);
-  assert.match(msg, /PAID/);
-  assert.match(msg, /exact file name/i);
-});
-
-test("free-plan message still reads correctly with no name on file", () => {
-  const msg = freePlanMessage("");
-  assert.doesNotMatch(msg, /Hi \*\*/, "no empty bold greeting");
-  assert.match(msg, /PAID/);
+test("the plan helpers are gone: nothing is gated by plan any more", () => {
+  const accounts = require("../lib/accounts.js");
+  assert.equal(accounts.aiAllowed, undefined);
+  assert.equal(accounts.freePlanMessage, undefined);
 });
 
 // ---- findAccount: the single gate for who may use the bot ----
