@@ -355,9 +355,12 @@
       const head = h("div", "rc-head");
       head.append(h("span", "rc-num", isSkipped ? "Couldn't read" : "Row " + (index + 1)));
       if (isSkipped && r.raw) head.append(h("span", "rc-raw", String(r.raw)));
+      const removeBtn = h("button", "rc-remove", "Remove row");
+      removeBtn.type = "button";
+      head.append(removeBtn);
       row.append(head);
       const f = {
-        id: r.id, skipped: isSkipped, node: row,
+        id: r.id, skipped: isSkipped, node: row, removeBtn, removed: false,
         tag: rcInput(r.tag, { max: 80 }),
         type: rcSelect(RC_TYPES, r.type, isSkipped),
         value: rcInput(r.value, { mode: "decimal", max: 20 }),
@@ -368,6 +371,8 @@
         rcField("Tag", f.tag, "tag"), rcField("Type", f.type, "type"),
         rcField("Load", f.value, "load"), rcField("Unit", f.unit, "unit"), rcField("Qty", f.qty, "qty")
       );
+      removeBtn.addEventListener("click", () => { setRemoved(f, !f.removed); });
+      if (r.remove === true) f.removed = true;
       fields.push(f);
       table.append(row);
     };
@@ -381,10 +386,21 @@
     actions.append(button);
     el.append(actions);
 
-    const tbl = { entry, button, fields, locked: false };
+    const tbl = { entry, button, fields, locked: false, tableId: typeof b.tableId === "string" ? b.tableId : "" };
     button.addEventListener("click", () => submitRowcheck(tbl));
+    for (const f of fields) if (f.removed) setRemoved(f, true);
     entry.rowcheck = tbl;
     return withTime(el, m.ts);
+  }
+
+  const rcControls = (f) => [f.tag, f.type, f.value, f.unit, f.qty];
+
+  // A removed row is dimmed with its fields off, and goes to the server as remove: true.
+  function setRemoved(f, removed) {
+    f.removed = removed;
+    f.node.classList.toggle("removed", removed);
+    f.removeBtn.textContent = removed ? "Keep row" : "Remove row";
+    for (const c of rcControls(f)) c.disabled = removed;
   }
 
   const rcNumber = (text) => /^\s*[+]?(\d+\.?\d*|\.\d+)\s*$/.test(text) && Number(text) > 0;
@@ -396,7 +412,7 @@
       const filled = !f.skipped || f.type.value || f.value.value.trim() || f.unit.value;
       f.node.classList.remove("bad");
       for (const c of [f.type, f.value, f.unit, f.qty]) c.classList.remove("invalid");
-      if (!filled) continue;
+      if (f.removed || !filled) continue;
       const wrong = [];
       if (!f.type.value) wrong.push(f.type);
       if (!rcNumber(f.value.value)) wrong.push(f.value);
@@ -418,8 +434,10 @@
     if (!rcCheck(tbl)) { toast(COPY.checkTable); return; }
     const rows = tbl.fields.map((f) => ({
       id: f.id, tag: f.tag.value, type: f.type.value, value: f.value.value.trim(), unit: f.unit.value, qty: f.qty.value.trim(),
+      ...(f.removed ? { remove: true } : {}),
     }));
-    sendTap("rows-ok", LOOKS_RIGHT, tbl.button, { rows });
+    // The table's own id goes back with it, so the server can tell this table from a newer one.
+    sendTap("rows-ok", LOOKS_RIGHT, tbl.button, { tableId: tbl.tableId, rows });
   }
 
   // Only the newest table is live, and only until "Looks right" has been sent after it.
@@ -436,7 +454,10 @@
       const lock = tbl !== live || sentAfter;
       tbl.locked = lock;
       e.el.classList.toggle("locked", lock);
-      for (const f of tbl.fields) for (const c of [f.tag, f.type, f.value, f.unit, f.qty]) c.disabled = lock;
+      for (const f of tbl.fields) {
+        for (const c of rcControls(f)) c.disabled = lock || f.removed;
+        f.removeBtn.disabled = lock;
+      }
       tbl.button.disabled = lock;
     }
   }

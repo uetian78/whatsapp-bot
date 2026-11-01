@@ -275,6 +275,21 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .rc-field input:focus, .rc-field select:focus { outline: 2px solid var(--accent); outline-offset: -1px; border-color: transparent; }
 .rc-field .invalid { border-color: var(--danger); outline: 1px solid var(--danger); }
 .rc-field input:disabled, .rc-field select:disabled { opacity: 0.65; }
+.rc-remove {
+  margin-left: auto;
+  min-height: 32px;
+  padding: 4px 12px;
+  border: 1px solid var(--danger);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--danger);
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.rc-remove:disabled { opacity: 0.5; }
+.rc-row.removed { opacity: 0.55; border-style: dashed; }
+.rc-row.removed .rc-remove { opacity: 1; }
+.rc-row.removed .rc-num { text-decoration: line-through; }
 .rc-errors { margin: 0 0 8px; padding-left: 20px; color: var(--danger); font-size: 0.9rem; }
 .rc-actions { display: flex; margin-top: 10px; }
 .msg.locked .rc-row { opacity: 0.8; }

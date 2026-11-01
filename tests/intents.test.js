@@ -34,3 +34,10 @@ test("classify routes representative messages like the router does", () => {
   assert.equal(classify("find"), "other");
   assert.equal(classify("random gibberish xyz"), "other");
 });
+
+test("the CRM class for MTZ mirrors the router: the phrase alone or with a one-line request", () => {
+  assert.equal(classify("MTZ Selection 8.5TR 80/67/115"), "mtz-selection");
+  assert.equal(classify("mtz selection 8.5 tr / 7 tr 80/67/115"), "mtz-selection");
+  assert.equal(classify("MTZ Selection hello"), "mtz-selection", "a line that does not parse still opens the guided steps");
+  assert.notEqual(classify("MTZSelection 8.5TR"), "mtz-selection");
+});

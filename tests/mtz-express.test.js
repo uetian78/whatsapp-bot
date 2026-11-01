@@ -113,3 +113,14 @@ test("a malformed command falls back to the guided steps, as the bare command do
     }
   } finally { h.close(); }
 });
+
+test("a comma between digits is never read as a separator or a decimal point", () => {
+  for (const t of [
+    "MTZ Selection 8,5TR 80/67/115", "MTZ Selection 8,5 TR 80/67/115", "MTZ Selection 1,000 MBH 80/67/115",
+    "MTZ Selection 8.5TR 80,67,115",
+  ]) assert.equal(parseMtzExpress(t), null, t);
+  // a comma beside a space or a unit is still the total/sensible separator
+  assert.equal(parseMtzExpress("MTZ Selection 8.5TR, 7TR 80/67/115").reqSC, 84);
+  assert.equal(parseMtzExpress("MTZ Selection 8.5TR , 7TR 80/67/115").reqSC, 84);
+  assert.equal(parseMtzExpress("MTZ Selection 8.5TR,7TR 80/67/115").reqSC, 84);
+});

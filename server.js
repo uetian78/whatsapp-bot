@@ -73,7 +73,7 @@ const {
   runWithChannel, currentChannel, showTyping, downloadMedia,
   supports, sendText, sendLongText, sendButtons, sendList, sendDocument, sendDriveFile, sendPdfBuffer, sendPageHits, sendRowCheck,
 } = require("./lib/channel.js");
-const { applyRowEdits } = require("./lib/schedule-check.js");
+const { applyRowEdits, tableId } = require("./lib/schedule-check.js");
 const { answerFromLibrary, formatAnswer, pageHitsForSources, libraryQuery, searchStatusLine } = require("./lib/answers.js");
 const { whatsappAdapter } = require("./lib/channel-whatsapp.js");
 const { getPageExtractor, parsePageTap, PageError, MSG_BAD_PAGE, MSG_FAILED } = require("./lib/page-extract.js");
@@ -977,9 +977,8 @@ async function handleSplitStep(from, s, text) {
     // Store results for PDF print. The PDF does not use each line's model ranking,
     // so it is not kept: the state stays small and plain JSON.
     const goodUnits = unitResults.filter(u => !u.error);
-    store.setCtx(from, "splitResult", {
-      brand: s.brand, units: unitResults.map(({ ranked, ...unit }) => unit), at: resultStamp(),
-    }, RESULT_TTL_MS);
+    const saved = { brand: s.brand, units: unitResults.map(({ ranked, ...unit }) => unit), at: resultStamp() };
+    store.setCtx(from, "splitResult", saved, RESULT_TTL_MS);
 
     // Build WhatsApp text output
     const textBlocks = unitResults.map((u) =>
@@ -997,7 +996,7 @@ async function handleSplitStep(from, s, text) {
       "_Verify against manufacturer selection software before submittal._\n\n" +
       "Reply *Print* for a PDF report · *Split Selection* to run again."
     );
-    if (goodUnits.length) await sendButtons(from, PRINT_PROMPT, [PRINT_BUTTON]); // nothing to print when no line was read
+    if (goodUnits.length) await sendButtons(from, PRINT_PROMPT, [printButton(saved.at)]); // nothing to print when no line was read
   }
 }
 
@@ -1111,6 +1110,7 @@ async function askScheduleCondition(from, s, scheduleCondition, lead) {
 }
 
 const MSG_TABLE_CLOSED = "That table is no longer open. Send *Schedule Selection* to read a schedule again.";
+const MSG_TABLE_STALE = "That table is out of date. Please use the newest table in the chat.";
 
 // "Looks right" on the schedule table: the rows as the person left them. The
 // numbers are untrusted, so applyRowEdits checks every field and works the kW out
@@ -1120,7 +1120,10 @@ async function handleRowsOk(from, data) {
   const s = flow && !flow.expired && flow.type === "schedule" ? flow.data : null;
   if (!s || s.step !== "awaitRowCheck") return await sendText(from, MSG_TABLE_CLOSED);
   store.touchFlow(from);
-  const sent = data && typeof data === "object" ? data.rows : undefined;
+  // Rows are matched by position, so a tap from an older table (another tab, another schedule)
+  // must not be applied to this one: the table's id has to be this table's.
+  if (!data || typeof data !== "object" || data.tableId !== tableId(s.rows, s.skipped)) return await sendText(from, MSG_TABLE_STALE);
+  const sent = data.rows;
   const out = applyRowEdits(s.rows, s.skipped, sent);
   if (out.errors.length) {
     await sendText(from, "I haven't changed anything yet. Please fix:\n" + out.errors.map((e) => `• ${e}`).join("\n"));
@@ -1148,20 +1151,33 @@ async function advanceScheduleQuestions(from, s) {
 
   // Store results for PDF print: plain JSON, kept 30 days. The PDFs are made when
   // asked for and never kept.
-  store.setCtx(from, "scheduleResult", {
+  const saved = {
     cond: s.cond, splitBrand: s.splitBrand, pkgVendor: s.pkgVendor, pkgSeries: s.pkgSeries,
     rows: s.rows, skipped: s.skipped, at: resultStamp(),
-  }, RESULT_TTL_MS);
+  };
+  store.setCtx(from, "scheduleResult", saved, RESULT_TTL_MS);
 
   store.endFlow(from);
   await sendLongText(from, reply + "\n\nReply *Print* or *Datasheet* for a PDF report + package datasheets · *Schedule Selection* to run again.");
-  return await sendButtons(from, PRINT_PROMPT, [PRINT_BUTTON]);
+  return await sendButtons(from, PRINT_PROMPT, [printButton(saved.at)]);
 }
 
 // Results stay available for 30 days; the button under them is "PDF report".
 const RESULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const ROWCHECK_TTL_MS = 30 * 60 * 1000;
-const PRINT_BUTTON = { id: "print", title: "PDF report" };
+// The button's id says which saved result it sits under ("print|<when it was saved>"), so an old
+// button never prints a newer result. A bare "print" (the word, or a chip from before) means the newest.
+const PRINT_TAP = "print";
+const printButton = (at) => ({ id: `${PRINT_TAP}|${at}`, title: "PDF report" });
+const RESULT_KEYS = ["splitResult", "scheduleResult"]; // kept when the conversation is cleared
+const MSG_NOTHING_TO_PRINT = "No recent results to print. Run *Schedule Selection* or *Split Selection* first.";
+const MSG_RESULT_REPLACED = "That result was replaced; tap the newest, or type print.";
+// " (results from 14 Mar, 09:12)", in Qatar time; empty when the save time is not known.
+function savedAt(at) {
+  if (!Number.isFinite(at)) return "";
+  const when = new Date(at).toLocaleString("en-GB", { timeZone: "Asia/Qatar", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false });
+  return ` (results from ${when})`;
+}
 const PRINT_PROMPT = "Want these results as a PDF report?";
 // When a result was saved, so "Print" can tell the newer of two. Never equal, even in one millisecond.
 let lastResultAt = 0;
@@ -1170,9 +1186,14 @@ const resultStamp = () => (lastResultAt = Math.max(Date.now(), lastResultAt + 1)
 // Which saved result a Print / Datasheet request is for, as the function that
 // sends it, or null when there is nothing to send. Both a split and a schedule
 // result can be saved at once; "Print" means the newest.
-function printTarget(from, word) {
+function printTarget(from, word, at) {
   const split = /^print$/i.test(word) ? store.getCtx(from, "splitResult") : null;
   const sched = /^(print|datasheet)$/i.test(word) ? store.getCtx(from, "scheduleResult") : null;
+  if (at !== undefined) { // a button: only the result it sits under
+    if (split && split.at === at) return handleSplitPrint;
+    if (sched && sched.at === at) return handleSchedulePrint;
+    return null;
+  }
   if (split && sched) return (sched.at || 0) > (split.at || 0) ? handleSchedulePrint : handleSplitPrint;
   if (split) return handleSplitPrint;
   if (sched) return handleSchedulePrint;
@@ -1186,7 +1207,7 @@ async function handleSplitPrint(from) {
     return sendText(from, "❌ No recent split results found. Run *Split Selection* first.");
   }
 
-  await sendText(from, "⏳ Generating PDF report…");
+  await sendText(from, `⏳ Generating PDF report…${savedAt(stored.at)}`);
 
   let pdfBuffer;
   try {
@@ -1214,7 +1235,7 @@ async function handleSchedulePrint(from) {
     return sendText(from, "❌ No recent schedule results found. Run *Schedule Selection* first.");
   }
 
-  await sendText(from, "⏳ Generating PDF report…");
+  await sendText(from, `⏳ Generating PDF report…${savedAt(stored.at)}`);
 
   let pdfBuffer;
   try {
@@ -1610,10 +1631,12 @@ async function handleIncomingMessage(value, message) {
       if (btnId === "rows-ok") return await handleRowsOk(from, message.interactive?.button_reply?.data);
 
       // "PDF report" under results: the same as typing Print.
-      if (btnId === PRINT_BUTTON.id) {
-        const print = printTarget(from, "print");
-        if (!print) return await sendText(from, "No recent results to print. Run *Schedule Selection* or *Split Selection* first.");
-        return await print(from);
+      if (btnId === PRINT_TAP || btnId.startsWith(`${PRINT_TAP}|`)) {
+        const at = btnId === PRINT_TAP ? undefined : Number(btnId.slice(PRINT_TAP.length + 1));
+        const print = printTarget(from, "print", at);
+        if (print) return await print(from);
+        // a button whose result was replaced, or nothing saved at all
+        return await sendText(from, printTarget(from, "print") ? MSG_RESULT_REPLACED : MSG_NOTHING_TO_PRINT);
       }
 
       // Page button on a search result -> just that page, as a one-page PDF or a JPEG.
@@ -1740,7 +1763,7 @@ async function handleIncomingMessage(value, message) {
     // hijacks a real request like "hi can I get the APMR catalogue".
     if (message.type === "text" && isMenuTrigger(message.text.body)) {
       vrfSessions.delete(from);
-      store.clearAll(from);
+      store.clearAll(from, RESULT_KEYS); // saved results outlive a "menu"; they last 30 days
       console.log(`📋 welcome menu (global escape) -> ${from}`);
       return await showWelcomeMenu(from, profileName);
     }
