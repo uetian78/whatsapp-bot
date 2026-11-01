@@ -97,10 +97,11 @@ const {
 } = process.env;
 
 // Fail fast on required env; warn on optional. A missing required var
-// otherwise surfaces as a confusing mid-request auth error.
+// otherwise surfaces as a confusing mid-request auth error. Only when run as
+// the server: the replay test imports this file and must not be exited.
 const REQUIRED_ENV = requiredEnv();
 const OPTIONAL_ENV = ["ANTHROPIC_API_KEY", "DRIVE_FOLDER_ID", "ADMIN_PASSWORD", "ADMIN_NUMBERS", "CRM_SHEET_ID", ...(WA_ON ? ["WHATSAPP_REGISTER_PIN"] : [])];
-{
+if (require.main === module) {
   const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
   if (missing.length) {
     console.error(`❌ Missing required env vars: ${missing.join(", ")} — refusing to start.`);
@@ -2547,11 +2548,18 @@ app.get("/vrf-health", requireAdmin(), async (_, res) => {
 
 initVrf({ sendText, sendDocument });
 crm.init({ getSheets });
-crm.warmUp(); // preload contacts so "Welcome back" works from the first message
-app.listen(PORT, () => {
-  console.log(`🚀 Listening on ${PORT}`);
-  if (numberHealth) {
-    numberHealth.maybeCheck();
-    setInterval(() => numberHealth.maybeCheck(), CHECK_EVERY_MS).unref();
-  }
-});
+
+// The replay test (tests/replay) imports this file: it gets the app and the
+// message handler, and nothing listens, ticks or calls out until it's run.
+module.exports = { app, handleIncomingMessage };
+
+if (require.main === module) {
+  crm.warmUp(); // preload contacts so "Welcome back" works from the first message
+  app.listen(PORT, () => {
+    console.log(`🚀 Listening on ${PORT}`);
+    if (numberHealth) {
+      numberHealth.maybeCheck();
+      setInterval(() => numberHealth.maybeCheck(), CHECK_EVERY_MS).unref();
+    }
+  });
+}
