@@ -73,7 +73,7 @@ const {
   runWithChannel, currentChannel, showTyping, downloadMedia,
   sendText, sendLongText, sendButtons, sendList, sendDocument, sendDriveFile, sendPdfBuffer, sendPageHits,
 } = require("./lib/channel.js");
-const { answerFromLibrary, formatAnswer, libraryQuery, searchStatusLine } = require("./lib/answers.js");
+const { answerFromLibrary, formatAnswer, pageHitsForSources, libraryQuery, searchStatusLine } = require("./lib/answers.js");
 const { whatsappAdapter } = require("./lib/channel-whatsapp.js");
 const { getPageExtractor, parsePageTap, PageError, MSG_BAD_PAGE, MSG_FAILED } = require("./lib/page-extract.js");
 const { NOT_FOUND_MSG } = wa;
@@ -586,6 +586,9 @@ async function sendNotFoundWithSuggestions(to, text, files) {
   return runLibrarySearch(to, text, files);
 }
 
+// The library's record of a Drive file, or null (no Drive folder set, or not listed).
+const libraryRecordById = (id) => (process.env.DRIVE_FOLDER_ID ? require("./lib/drive-index.js").getLibraryIndex().findById(id) : null);
+
 // ── Search inside the PDFs ─────────────────────────────────────────────
 // The page index (lib/page-index.js) finds the PDF pages that mention the
 // words; with AI available the best few pages are read and the person gets an
@@ -609,6 +612,14 @@ async function libraryPageStage(to, text, files, { anyWord = false, announce = n
   if (answer) {
     console.log(`📖 Answered "${text}" from the pages: ${answer.sources.length} source(s)`);
     await sendLongText(to, formatAnswer(answer));
+    // Then the pages it cited, as page results: on the web each is a card with
+    // "Page as PDF" / "Page as image"; WhatsApp gets them as one text list.
+    try {
+      const cited = pageHitsForSources(answer.sources, hits, libraryRecordById);
+      if (cited.length) await sendPageHits(to, "Pages used for this answer:", cited);
+    } catch (err) {
+      console.error("Cited pages not sent:", err && err.message);
+    }
     return true;
   }
 

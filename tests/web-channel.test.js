@@ -279,3 +279,49 @@ test("the CRM defaults to the real crm.js when none is given", async () => {
   assert.equal(await channel.text("nobody-pending", "hi"), true);
   done();
 });
+
+// ---- a Drive file with no size ----
+test("the library lookup may be async", async () => {
+  const { channel, conversations, done } = make({ findLibraryFile: async () => ({ size: 9 }) });
+  await channel.driveFile("u1", { id: "F1", name: "Spec.pdf" });
+  assert.equal(conversations.since("u1", 0)[0].body.size, 9);
+  done();
+});
+
+test("driveFile with no size looks it up in the library by id", async () => {
+  const asked = [];
+  const { channel, conversations, done } = make({ findLibraryFile: (id) => { asked.push(id); return { id, name: "Spec.pdf", size: 5981665 }; } });
+  await channel.driveFile("u1", { id: "F1", name: "Spec.pdf" });
+  const [m] = conversations.since("u1", 0);
+  assert.deepEqual(m.body, { ref: "drive:F1", name: "Spec.pdf", folder: null, size: 5981665 });
+  assert.deepEqual(asked, ["F1"]);
+  done();
+});
+
+test("driveFile keeps a size it was given and does not look anything up", async () => {
+  const { channel, conversations, done } = make({ findLibraryFile: () => { throw new Error("should not be asked"); } });
+  await channel.driveFile("u1", { id: "F1", name: "Spec.pdf", folder: "T", size: 1234 });
+  assert.equal(conversations.since("u1", 0)[0].body.size, 1234);
+  done();
+});
+
+test("an unknown size stays null: not in the library, a library error, or a library record without one", async () => {
+  for (const find of [() => null, () => { throw new Error("library down"); }, () => ({ id: "F1", name: "x" })]) {
+    const { channel, conversations, done } = make({ findLibraryFile: find });
+    const result = await channel.driveFile("u1", { id: "F1", name: "Spec.pdf" });
+    assert.ok(result);
+    assert.equal(conversations.since("u1", 0)[0].body.size, null);
+    done();
+  }
+});
+
+test("with no library lookup given and no Drive folder set, a missing size is null and nothing is opened", async () => {
+  const saved = process.env.DRIVE_FOLDER_ID;
+  delete process.env.DRIVE_FOLDER_ID;
+  try {
+    const { channel, conversations, done } = make();
+    await channel.driveFile("u1", { id: "F1", name: "Spec.pdf" });
+    assert.equal(conversations.since("u1", 0)[0].body.size, null);
+    done();
+  } finally { if (saved !== undefined) process.env.DRIVE_FOLDER_ID = saved; }
+});

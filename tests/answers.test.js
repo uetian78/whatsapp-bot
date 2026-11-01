@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { answerFromLibrary, formatAnswer, formatPageHits, libraryQuery, MAX_PAGES, MAX_PAGE_CHARS } = require("../lib/answers.js");
+const { answerFromLibrary, formatAnswer, formatPageHits, pageHitsForSources, libraryQuery, MAX_PAGES, MAX_PAGE_CHARS } = require("../lib/answers.js");
 const { PRODUCT_KB } = require("../product-facts.js");
 
 // A reply shaped like the SDK's Message.
@@ -223,4 +223,35 @@ test("libraryQuery drops filler words after the verb and leaves the wider search
   for (const t of ["find the", "find me", "search all manuals", "search all trane", "find all apmr", "search everything about trane"]) {
     assert.equal(libraryQuery(t), null, t);
   }
+});
+
+// ---- the pages an answer cited, as page cards ----
+test("pageHitsForSources gives each cited page a full hit, in cited order, taken from the search hits", () => {
+  const hits = [
+    { fileId: "a", name: "A Manual.pdf", folder: "IOMs", page: 4, snippet: "snippet a4", size: 100, text: "long" },
+    { fileId: "b", name: "B Catalogue.pdf", folder: "Cats", page: 9, snippet: "snippet b9", size: 200 },
+  ];
+  const sources = [{ fileId: "b", name: "B Catalogue", page: 9 }, { fileId: "a", name: "A Manual", page: 4 }];
+  assert.deepEqual(pageHitsForSources(sources, hits, () => { throw new Error("not needed"); }), [
+    { fileId: "b", name: "B Catalogue.pdf", folder: "Cats", page: 9, snippet: "snippet b9", size: 200 },
+    { fileId: "a", name: "A Manual.pdf", folder: "IOMs", page: 4, snippet: "snippet a4", size: 100 },
+  ]);
+});
+
+test("a cited page with no matching hit is built from the library record with an empty snippet, never dropped", () => {
+  const sources = [{ fileId: "a", name: "A Manual", page: 4 }, { fileId: "a", name: "A Manual", page: 7 }, { fileId: "gone", name: "Gone", page: 2 }];
+  const hits = [{ fileId: "a", name: "A Manual.pdf", folder: "IOMs", page: 4, snippet: "s", size: 100 }];
+  const lookup = (id) => (id === "a" ? { id: "a", name: "A Manual.pdf", folder: "IOMs", size: 100 } : null);
+  const out = pageHitsForSources(sources, hits, lookup);
+  assert.equal(out.length, 3);
+  assert.deepEqual(out[1], { fileId: "a", name: "A Manual.pdf", folder: "IOMs", page: 7, snippet: "", size: 100 });
+  assert.deepEqual(out[2], { fileId: "gone", name: "Gone", page: 2, folder: null, snippet: "", size: null });
+});
+
+test("pageHitsForSources copes with no lookup, a throwing lookup, and nothing cited", () => {
+  const sources = [{ fileId: "x", name: "X", page: 1 }];
+  assert.deepEqual(pageHitsForSources(sources, [], undefined), [{ fileId: "x", name: "X", folder: null, page: 1, snippet: "", size: null }]);
+  assert.equal(pageHitsForSources(sources, undefined, () => { throw new Error("db"); }).length, 1);
+  assert.deepEqual(pageHitsForSources([], [{ fileId: "x", page: 1 }]), []);
+  assert.deepEqual(pageHitsForSources(undefined, []), []);
 });

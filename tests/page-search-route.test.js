@@ -42,20 +42,25 @@ const cited = (text, document_index) => ({
 // Runs `body({ h, calls })` with a temp DATA_DIR holding `files` as the search
 // index (none: no index file). `respond(params)` makes AI available, answering
 // with its return value; leave it out and the bot has no AI key.
-function scenario({ files = null, respond = null }, body) {
+function scenario({ files = null, respond = null, spyPageHits = false }, body) {
   return async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hvac-page-route-"));
     const saved = { DATA_DIR: process.env.DATA_DIR, AI_MONTHLY_CAP_USD: process.env.AI_MONTHLY_CAP_USD };
     const sdkId = require.resolve("@anthropic-ai/sdk");
     const realSdk = require.cache[sdkId];
     const calls = [];
+    const pageCalls = []; // what the channel was asked to show as page results
     process.env.DATA_DIR = dir;
     process.env.AI_MONTHLY_CAP_USD = "10";
     if (files) await buildIndex(dir, files);
     const h = createHarness(async (value, message) => {
       const { deliverMessage } = require("../server.js");
       const { whatsappAdapter } = require("../lib/channel-whatsapp.js");
-      await deliverMessage(value, message, whatsappAdapter);
+      const channel = !spyPageHits ? whatsappAdapter : {
+        ...whatsappAdapter,
+        pageHits: async (to, prompt, hits) => { pageCalls.push({ prompt, hits }); return whatsappAdapter.pageHits(to, prompt, hits); },
+      };
+      await deliverMessage(value, message, channel);
     });
     if (respond) {
       function FakeAnthropic() {
@@ -65,7 +70,7 @@ function scenario({ files = null, respond = null }, body) {
       require.cache[sdkId] = Object.assign(new (require("module"))(sdkId), { filename: sdkId, loaded: true, exports: FakeAnthropic });
     }
     try {
-      await body({ h, calls, dir });
+      await body({ h, calls, dir, pageCalls });
     } finally {
       try { require("../lib/db.js").closeDb(); } catch (_) { /* never opened */ }
       try { require("../lib/page-index.js").getPageIndex().close(); } catch (_) { /* never opened */ } // Windows keeps an open file locked
@@ -270,4 +275,41 @@ test("search all <words> is a search over every file name, not a page search", {
     assert.doesNotMatch(allText(out), /, page \d+|Pages in the PDFs/, t);
     assert.match(allText(out), /Searching every file for "(manuals|trane)"/, t);
   }
+}));
+
+test("after an AI answer the cited pages follow as page results, each a full hit, and the text version for WhatsApp copes", { skip }, scenario({
+  files: [TRANE],
+  respond: () => reply([cited("Trane units are made in the United States.", 0)]),
+  spyPageHits: true,
+}, async ({ h, calls, pageCalls }) => {
+  const out = await h.send(USER, "find Trane country of origin");
+  const text = allText(out);
+  const answerAt = out.findIndex((o) => /Trane units are made in the United States\./.test(o.text || ""));
+  const pagesAt = out.findIndex((o, i) => i > answerAt && /Pages used for this answer:/.test(o.text || ""));
+  assert.ok(answerAt >= 0, "the answer is sent");
+  assert.ok(pagesAt > answerAt, "the pages come after the answer");
+  assert.match(out[pagesAt].text, /Trane Product Notes, page 1/);
+  assert.equal(pageCalls.length, 1);
+  assert.equal(pageCalls[0].prompt, "Pages used for this answer:");
+  assert.equal(pageCalls[0].hits.length, 1);
+  const hit = pageCalls[0].hits[0];
+  assert.equal(hit.fileId, "trane");
+  assert.equal(hit.page, 1);
+  assert.equal(hit.name, "Trane Product Notes.pdf");
+  assert.equal(hit.folder, "Misc");
+  assert.match(hit.snippet, /United States/);
+  assert.equal(hit.size, 1000);
+  assert.equal(calls.length, 1, "still one AI call");
+  assert.doesNotMatch(text, /something went wrong/i);
+  assert.equal(h.stats.errors, 0, [...h.stats.errorSamples].join("; "));
+}));
+
+test("an answer that cites nothing sends no page results", { skip }, scenario({
+  files: [TRANE],
+  respond: () => reply([{ type: "text", text: "FROM_KB: Trane is a brand we sell." }]),
+  spyPageHits: true,
+}, async ({ h, pageCalls }) => {
+  const out = await h.send(USER, "find Trane country of origin");
+  assert.match(allText(out), /Trane is a brand we sell/);
+  assert.equal(pageCalls.filter((c) => c.prompt === "Pages used for this answer:").length, 0);
 }));
