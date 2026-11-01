@@ -51,7 +51,7 @@ const {
 } = require("./vrf/vrfHandler.js");
 const { getSheets, getDrive, withRetry, driveFileId } = require("./lib/google.js");
 const {
-  listFolderFiles, docTypeFromFilename, folderMatchesDocType, fileMatchesDocType,
+  listFolderFiles, docTypeFromFilename, fileMatchesDocType,
   findFilesInFolder, findExactFileInDoc, findDatasheetFiles, findChillerDatasheetFiles, displayName, shortPath,
 } = require("./lib/drive-index.js");
 const wa = require("./lib/wa.js");
@@ -352,39 +352,6 @@ RULES:
   return out;
 }
 
-// AI-pick the single file in a folder that matches a requested SERIES.
-// Used as a fallback for the Catalogue/IOM flow when the deterministic
-// prefix matcher misses because files are named inconsistently
-// (e.g. "FCU Catalogue.pdf", "APMR-A. 2025.pdf", "APMRA 2025 IOM.pdf").
-// `folderFiles` are already filtered to the right folder.
-// Returns one file object, or null.
-async function aiMatchSeriesFile(series, docType, folderFiles) {
-  if (!ai.available() || !folderFiles.length) return null;
-
-  const list = folderFiles
-    .map((f, i) => `${i + 1}. ${f.name.replace(/\.[^.]+$/, "")}`)
-    .join("\n");
-
-  const system = `You match a requested SKM HVAC product SERIES to ONE file from a list of ${docType} files.
-The customer wants the ${docType} for series: "${series}".
-
-Rules:
-- Pick the file whose name refers to the SAME product series, ignoring extra tokens like a year (2025), version, brand word ("SKM"), the word "${docType}", spaces, dots and dashes.
-- Be STRICT about the series identity. "APMR", "APMR-A" and "APMR-V" are DIFFERENT series — do not confuse them. "APCY-P", "APCY-H", "APCY-E" are different. "ACUV-D" vs "ACUV-S" are different.
-- If two files fit equally (e.g. "APMR-A.pdf" and "APMR-A. 2025.pdf"), pick the one WITHOUT a year/version (the generic latest).
-- If NO file matches the series, reply "0".
-
-Reply with ONLY the number of the single best file, or "0". No other text.
-
-FILES:
-${list}`;
-
-  const out = await ai.askText({ purpose: "aiMatchSeriesFile", system, user: `${series} ${docType}` });
-  const n = parseInt(((out || "").match(/\d+/) || [])[0], 10);
-  if (!n || n < 1 || n > folderFiles.length) return null;
-  return folderFiles[n - 1];
-}
-
 // Dispatch a chiller response descriptor from chillers.js (text / buttons /
 // datasheet fetch). Keeps logging to the matched model/intent only.
 async function sendChillerResponse(from, r) {
@@ -445,7 +412,7 @@ async function resolveSeriesFile(seriesNameOrText, docType, getFiles) {
     return null;
   }
 
-  // 2) No map entry at all — safety net: old prefix matcher, then AI.
+  // 2) No map entry at all — safety net: old prefix matcher.
   const files = await getFiles();
   return await fallbackResolve(seriesNameOrText, docType, files);
 }
@@ -456,13 +423,10 @@ async function fallbackResolve(seriesNameOrText, docType, files) {
   const hits = findFilesInFolder(seriesNameOrText, files, docType);
   if (hits.length >= 1) return hits[0];
 
-  const folderFiles = files.filter((f) => folderMatchesDocType(f.folder, docType));
-  if (!folderFiles.length) return null;
-  // Last resort: AI picks the file from the folder's filenames. It returns null
-  // when AI is unavailable, and the caller drops to sendNotFoundWithSuggestions.
-  const aiHit = await aiMatchSeriesFile(seriesNameOrText, docType, folderFiles);
-  if (aiHit) console.log(`🤖 AI matched ${seriesNameOrText} ${docType} -> ${aiHit.name}`);
-  return aiHit;
+  // Nothing found: return null. No AI here — the caller drops to
+  // sendNotFoundWithSuggestions, which runs the free ranked scan first and only
+  // then AI search, so no call is spent before the free scan has been tried.
+  return null;
 }
 
 // ============================================================
@@ -2318,7 +2282,7 @@ crm.init({ getSheets });
 
 // The replay test (tests/replay) imports this file: it gets the app and the
 // message handler, and nothing listens, ticks or calls out until it's run.
-module.exports = { app, handleIncomingMessage, deliverMessage };
+module.exports = { app, handleIncomingMessage, deliverMessage, resolveSeriesFile };
 
 if (require.main === module) {
   try { store.restore(); } // bring back conversations saved before the last restart

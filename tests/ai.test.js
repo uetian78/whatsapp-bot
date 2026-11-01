@@ -410,3 +410,16 @@ test("over the monthly cap, a miss says AI is paused and sends nothing to the AP
   assert.equal(calls.length, 0);
   assert.match(allText(out), /AI answers are paused right now\. You can still get any document by its name\./);
 }));
+
+// A series that misses the map and the prefix matcher must not cost an AI call
+// of its own: the free ranked scan runs first (in sendNotFoundWithSuggestions),
+// and AI search only after that.
+test("a series miss makes no AI call before the free scan", { skip: skipHarness }, withFakeAnthropic(10, async ({ h, calls }) => {
+  // Make createHarness's modules load with the key set, then call the resolver directly.
+  await h.send("100000001", "hi");
+  const { resolveSeriesFile } = require("../server.js");
+  const files = [{ id: "f1", name: "Totally Unrelated.pdf", folder: "Catalogues" }];
+  const found = await resolveSeriesFile("ZZQXW", "Catalogue", async () => files);
+  assert.equal(found, null);
+  assert.equal(calls.length, 0, "no AI call from the series resolver");
+}));
