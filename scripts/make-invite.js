@@ -4,7 +4,7 @@
 // yourself. It needs WEB_SECRET and PUBLIC_URL (from .env or the environment)
 // and does not look at the Sheet: the number must be on the Allowed tab when
 // they press Sign in. The link works for 14 days.
-const { makeInviteToken } = require("../web/auth.js");
+const { makeInviteToken, cleanSecret, MIN_SECRET_LENGTH } = require("../web/auth.js");
 
 function run({ argv, env, now = Date.now() }) {
   const fail = (message) => ({ code: 1, out: "", err: message });
@@ -12,7 +12,8 @@ function run({ argv, env, now = Date.now() }) {
   if (!raw) return fail("Usage: node scripts/make-invite.js <number>   (digits, with country code, e.g. 97455551234)");
   const number = String(raw).replace(/\D/g, "");
   if (number.length < 7 || number.length > 15) return fail(`"${raw}" is not a phone number: expected 7 to 15 digits including the country code.`);
-  if (!env.WEB_SECRET) return fail("WEB_SECRET is not set. Add it to .env (any long random string) before making links.");
+  if (!String(env.WEB_SECRET || "").trim()) return fail("WEB_SECRET is not set. Add it to .env before making links (the command to generate one is in .env.example).");
+  if (!cleanSecret(env.WEB_SECRET)) return fail(`WEB_SECRET is too short: it needs at least ${MIN_SECRET_LENGTH} characters. Generate one with the command in .env.example.`);
   if (!env.PUBLIC_URL) return fail("PUBLIC_URL is not set. Add it to .env, e.g. https://your-app.up.railway.app");
   let base;
   try {

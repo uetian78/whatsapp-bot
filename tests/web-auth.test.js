@@ -3,11 +3,11 @@ const assert = require("node:assert");
 const express = require("express");
 const { parseAccounts } = require("../lib/accounts.js");
 const {
-  makeInviteToken, verifyInviteToken, makeSession, readSession, requireUser, joinRoutes,
+  makeInviteToken, verifyInviteToken, makeSession, readSession, mountWeb, cleanSecret,
 } = require("../web/auth.js");
 
-const SECRET = "test-secret-not-real-1";
-const OTHER = "test-secret-not-real-2";
+const SECRET = "test-secret-not-real-0000000000001";
+const OTHER = "test-secret-not-real-0000000000002";
 const DAY = 24 * 60 * 60 * 1000;
 const T0 = 1_700_000_000_000;
 
@@ -18,9 +18,13 @@ const OK = () => accountsOf(["97455551111", "Sara <b>"], ["97455552222", "Omar"]
 async function serve({ secret = SECRET, getAccounts = async () => OK(), now = () => T0 } = {}) {
   const app = express();
   app.set("trust proxy", 1);
-  app.use("/app", joinRoutes({ secret, getAccounts, now }));
-  app.get("/app/", requireUser({ secret, getAccounts, now }), (req, res) => res.json({ who: req.account }));
-  app.get("/app/api/x", requireUser({ secret, getAccounts, now }), (req, res) => res.json({ ok: true }));
+  mountWeb(app, { secret, getAccounts, now });
+  // Routes added after the mount, with no guard of their own: like Task 14's.
+  app.get("/app/", (req, res) => res.json({ who: req.account }));
+  app.get("/app/api/x", (req, res) => res.json({ ok: true }));
+  app.post("/app/api/x", (req, res) => res.json({ ok: true }));
+  // Outside /app, public on purpose (the share links will live here).
+  app.get("/s/ok", (req, res) => res.json({ public: true }));
   const server = await new Promise((resolve) => { const s = app.listen(0, () => resolve(s)); });
   const base = `http://127.0.0.1:${server.address().port}`;
   const call = (path, opts = {}) => fetch(base + path, { redirect: "manual", ...opts });
@@ -102,7 +106,7 @@ test("opening an invite link never signs in", async () => {
   assert.ok(!html.includes("Sara <b>"), "the name is HTML-escaped");
   assert.match(html, /<button[^>]*>Sign in<\/button>/);
   assert.match(html, /<form method="post" action="\/app\/join\//);
-  assert.equal(r.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(r.headers.get("referrer-policy"), "same-origin");
   assert.match(r.headers.get("cache-control"), /no-store/);
   await s.close();
 });
@@ -119,7 +123,7 @@ test("pressing the button signs in with an HttpOnly, SameSite=Lax cookie", async
   assert.match(c, /Path=\/app(;|$)/);
   assert.match(c, new RegExp(`Max-Age=${180 * 24 * 3600}`));
   assert.ok(!/Secure/.test(c), "plain http: no Secure");
-  assert.equal(r.headers.get("referrer-policy"), "no-referrer");
+  assert.equal(r.headers.get("referrer-policy"), "no-referrer", "the 303 must not hand the token to /app/ in Referer");
   assert.match(r.headers.get("cache-control"), /no-store/);
   const me = await s.call("/app/", { headers: { cookie: cookieOf(r) } });
   assert.equal(me.status, 200);
@@ -143,6 +147,7 @@ test("tampered and expired invites show the expired-link page and sign nobody in
       const r = await s.call(`/app/join/${t}`, { method });
       assert.equal(r.status, 410, `${method} ${t.slice(0, 8)}`);
       assert.equal(r.headers.get("set-cookie"), null);
+      assert.equal(r.headers.get("referrer-policy"), "no-referrer", `${method} refusal page`);
       assert.match(await r.text(), /This link has expired\. Ask for a new one\./);
     }
   }
@@ -175,6 +180,7 @@ test("a cross-site POST to the join page is refused, and a same-site one is allo
   const evil = await s.call(url, { method: "POST", headers: { origin: "https://evil.example" } });
   assert.equal(evil.status, 403);
   assert.equal(evil.headers.get("set-cookie"), null);
+  assert.equal(evil.headers.get("referrer-policy"), "no-referrer");
   const same = await s.call(url, { method: "POST", headers: { origin: s.base } });
   assert.equal(same.status, 303);
   const none = await s.call(url, { method: "POST" });
@@ -197,6 +203,7 @@ test("an unreadable Sheet at the join page gives 503, never a cookie", async () 
     const r = await s.call(`/app/join/${invite()}`, { method });
     assert.equal(r.status, 503);
     assert.equal(r.headers.get("set-cookie"), null);
+    assert.equal(r.headers.get("referrer-policy"), "no-referrer", method);
   }
   await s.close();
 });
@@ -251,6 +258,47 @@ test("an unreadable Sheet with no saved list gives 503, never access", async () 
   await s.close();
 });
 
+test("everything under /app is closed without a session, including routes with no guard of their own", async () => {
+  const s = await serve();
+  for (const [path, method] of [["/app/anything", "GET"], ["/app/", "POST"], ["/app/api/x", "GET"], ["/app/api/x", "POST"], ["/app/join", "GET"], ["/app/files/abc", "GET"]]) {
+    const r = await s.call(path, { method });
+    assert.equal(r.status, 401, `${method} ${path}`);
+  }
+  // Mounted outside /app, the share links stay public.
+  assert.equal((await s.call("/s/ok")).status, 200);
+  // Signed in, the same routes open (unknown paths are an ordinary 404).
+  const login = await s.call(`/app/join/${invite()}`, { method: "POST" });
+  const headers = { cookie: cookieOf(login) };
+  assert.equal((await s.call("/app/api/x", { method: "POST", headers })).status, 200);
+  assert.equal((await s.call("/app/anything", { headers })).status, 404);
+  await s.close();
+});
+
+test("a secret that is blank, whitespace or too short counts as unset", async () => {
+  for (const weak of ["", " ", "\n", "a", "x".repeat(31), " ".repeat(40), undefined, null, 12345]) {
+    assert.equal(cleanSecret(weak), null, JSON.stringify(weak));
+    assert.throws(() => makeInviteToken("97455551111", { secret: weak, now: T0 }), /WEB_SECRET/);
+    assert.throws(() => makeSession("97455551111", { secret: weak, now: T0 }));
+    assert.equal(verifyInviteToken(invite(), { secret: weak, now: T0 }), null);
+    assert.equal(readSession(`hv_session=${makeSession("97455551111", { secret: SECRET, now: T0 })}`, { secret: weak, now: T0 }), null);
+  }
+  assert.equal(cleanSecret("y".repeat(32)), "y".repeat(32));
+  assert.equal(cleanSecret(`  ${"y".repeat(32)}\n`), "y".repeat(32), "surrounding whitespace is trimmed");
+  // A token forged with a one-letter secret is no use against a server with that secret either.
+  const crypto = require("node:crypto");
+  const p = Buffer.from(JSON.stringify({ p: "invite", n: "97455551111", exp: T0 + DAY })).toString("base64url");
+  const forged = `${p}.${crypto.createHmac("sha256", "a").update(p).digest("base64url")}`;
+  assert.equal(verifyInviteToken(forged, { secret: "a", now: T0 }), null);
+  // Over HTTP a weak secret shuts /app exactly like an unset one.
+  for (const weak of [" ", "\n", "a"]) {
+    const s = await serve({ secret: weak });
+    for (const [path, method] of [["/app/", "GET"], ["/app/anything", "GET"], ["/app/join/x", "POST"]]) {
+      assert.equal((await s.call(path, { method })).status, 503, JSON.stringify(weak));
+    }
+    await s.close();
+  }
+});
+
 test("WEB_SECRET unset makes every /app request 503", async () => {
   const s = await serve({ secret: "" });
   for (const [path, method] of [["/app/", "GET"], ["/app/api/x", "GET"], [`/app/join/${invite()}`, "GET"], [`/app/join/${invite()}`, "POST"], ["/app/anything", "GET"]]) {
@@ -279,7 +327,9 @@ test("make-invite exits non-zero with a clear message when something is missing 
     [[], env, /Usage/],
     [["abc"], env, /not a phone number/],
     [["123"], env, /7 to 15 digits/],
-    [["97455551111"], { PUBLIC_URL: env.PUBLIC_URL }, /WEB_SECRET/],
+    [["97455551111"], { PUBLIC_URL: env.PUBLIC_URL }, /WEB_SECRET is not set/],
+    [["97455551111"], { WEB_SECRET: "  \n", PUBLIC_URL: env.PUBLIC_URL }, /WEB_SECRET is not set/],
+    [["97455551111"], { WEB_SECRET: "a", PUBLIC_URL: env.PUBLIC_URL }, /too short.*32/],
     [["97455551111"], { WEB_SECRET: SECRET }, /PUBLIC_URL/],
     [["97455551111"], { WEB_SECRET: SECRET, PUBLIC_URL: "not a url" }, /PUBLIC_URL/],
   ];

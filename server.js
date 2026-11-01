@@ -34,7 +34,7 @@ const { getDb } = require("./lib/db.js");
 const { getPageIndex, createUploadHandler, uploadLimitBytes } = require("./lib/page-index.js");
 const { findAccount, runWithAccount, currentAccount } = require("./lib/accounts.js");
 const { loadSheet } = require("./lib/control-sheet.js");
-const { joinRoutes, requireUser } = require("./web/auth.js");
+const { mountWeb, cleanSecret, MIN_SECRET_LENGTH } = require("./web/auth.js");
 const { requireAdmin } = require("./lib/http-auth.js");
 const { whatsappEnabled, requiredEnv } = require("./lib/app-config.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
@@ -110,7 +110,7 @@ const {
 // otherwise surfaces as a confusing mid-request auth error. Only when run as
 // the server: the replay test imports this file and must not be exited.
 const REQUIRED_ENV = requiredEnv();
-const OPTIONAL_ENV = ["ANTHROPIC_API_KEY", "DRIVE_FOLDER_ID", "ADMIN_PASSWORD", "ADMIN_NUMBERS", "CRM_SHEET_ID", "WEB_SECRET", ...(WA_ON ? ["WHATSAPP_REGISTER_PIN"] : [])];
+const OPTIONAL_ENV = ["ANTHROPIC_API_KEY", "DRIVE_FOLDER_ID", "ADMIN_PASSWORD", "ADMIN_NUMBERS", "CRM_SHEET_ID", ...(WA_ON ? ["WHATSAPP_REGISTER_PIN"] : [])];
 if (require.main === module) {
   const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
   if (missing.length) {
@@ -119,6 +119,9 @@ if (require.main === module) {
   }
   for (const k of OPTIONAL_ENV.filter((k) => !process.env[k])) {
     console.warn(`⚠️  Optional env var ${k} is not set — related features are disabled.`);
+  }
+  if (!cleanSecret(process.env.WEB_SECRET)) {
+    console.warn(`⚠️  WEB_SECRET is missing or shorter than ${MIN_SECRET_LENGTH} characters — the web app (/app) is switched off (503). Generate one with the command in .env.example.`);
   }
 }
 
@@ -2294,12 +2297,13 @@ if (WA_ON) app.post("/webhook", (req, res) => {
 app.get("/", (_, res) => res.send("WhatsApp AI bot running ✅"));
 
 // The web app lives under /app and nothing else is served from there. Signing in
-// uses a personal link (web/auth.js); with no WEB_SECRET every /app request is
-// a 503. The join routes go first so that gate covers /app/join too.
-const webAuth = { secret: process.env.WEB_SECRET, getAccounts: async () => (await loadSheet()).accounts };
-app.use("/app", joinRoutes(webAuth));
+// uses a personal link (web/auth.js). mountWeb puts the sign-in pages and then a
+// sign-in check in front of EVERYTHING under /app, so any route added below is
+// closed by default; with no usable WEB_SECRET every /app request is a 503.
+// Anything public (share links) must be mounted outside /app.
+mountWeb(app, { secret: process.env.WEB_SECRET, getAccounts: async () => (await loadSheet()).accounts });
 // Placeholder until the chat API and screens are mounted here.
-app.get("/app/", requireUser(webAuth), (req, res) => {
+app.get("/app/", (req, res) => {
   res.set("Cache-Control", "no-store").type("html").send(`<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>HVAC Assistant</title><p>Signed in as ${String(req.account.name || req.account.number).replace(/[&<>"']/g, "")}.</p>`);
 });
 

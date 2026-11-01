@@ -20,11 +20,23 @@ const COOKIE = "hv_session";
 const MSG_SIGN_IN = "Ask for your personal link to sign in.";
 const MSG_EXPIRED = "This link has expired. Ask for a new one.";
 
+const MIN_SECRET_LENGTH = 32;
+
+// The secret, trimmed, or null if it is missing or too short to resist guessing
+// offline from one link or cookie. Every entry point runs the secret through
+// this, so a weak value behaves exactly like an unset one.
+function cleanSecret(secret) {
+  if (typeof secret !== "string") return null;
+  const s = secret.trim();
+  return s.length >= MIN_SECRET_LENGTH ? s : null;
+}
+
 const nowOf = (now) => (typeof now === "function" ? now() : now ?? Date.now());
 
 // ---- tokens ----
-function sign(payload, secret) {
-  if (!secret) throw new Error("WEB_SECRET is not set");
+function sign(payload, rawSecret) {
+  const secret = cleanSecret(rawSecret);
+  if (!secret) throw new Error(`WEB_SECRET is not set or shorter than ${MIN_SECRET_LENGTH} characters`);
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
   const mac = crypto.createHmac("sha256", secret).update(body).digest("base64url");
   return `${body}.${mac}`;
@@ -39,8 +51,9 @@ function safeEqual(a, b) {
 }
 
 // The payload object if the signature is right, else null. Never throws.
-function open(token, secret) {
+function open(token, rawSecret) {
   try {
+    const secret = cleanSecret(rawSecret);
     if (!secret || typeof token !== "string") return null;
     const parts = token.split(".");
     if (parts.length !== 2) return null;
@@ -140,7 +153,8 @@ function deny(req, res, status, message, htmlPage) {
 // 401 with no valid session, or when the number is no longer on the Allowed
 // tab. 503 when the Allowed list can't be read at all (never access by default)
 // or WEB_SECRET is unset.
-function requireUser({ secret, getAccounts, now }) {
+function requireUser({ secret: rawSecret, getAccounts, now }) {
+  const secret = cleanSecret(rawSecret);
   return async (req, res, next) => {
     if (!secret) return deny(req, res, 503, "The web app is not set up.", notSetUpPage);
     const session = readSession(req.headers?.cookie, { secret, now });
@@ -172,7 +186,8 @@ function sameSiteRequest(req) {
   catch (_) { return false; }
 }
 
-function joinRoutes({ secret, getAccounts, now }) {
+function joinRoutes({ secret: rawSecret, getAccounts, now }) {
+  const secret = cleanSecret(rawSecret);
   const router = express.Router();
 
   // Shut, with no exceptions, when there is no secret. The token is in the URL,
@@ -204,6 +219,10 @@ function joinRoutes({ secret, getAccounts, now }) {
   router.get("/join/:token", async (req, res) => {
     const r = await resolve(req.params.token);
     if (!r.account) return refuse(res, r);
+    // Same-origin, not no-referrer: with no-referrer some browsers (iOS before
+    // 16.4) send `Origin: null` on the form POST, which we must refuse. The page
+    // has no subresources or outward links, so the token can't reach another site.
+    res.set("Referrer-Policy", "same-origin");
     const name = r.account.name || r.account.number;
     const action = escapeHtml(req.originalUrl.split("?")[0]);
     res.type("html").send(page("Sign in", `<h1>Sign in to HVAC Assistant as ${escapeHtml(name)}</h1>
@@ -223,6 +242,15 @@ function joinRoutes({ secret, getAccounts, now }) {
   return router;
 }
 
+// Everything under /app needs a signed-in person, except the join pages. Mounted
+// as a whole (not route by route) so a route added later is closed by default.
+// Anything that must be public (the share links) is mounted outside /app.
+function mountWeb(app, opts) {
+  app.use("/app", joinRoutes(opts));
+  app.use("/app", requireUser(opts));
+}
+
 module.exports = {
+  cleanSecret, MIN_SECRET_LENGTH, mountWeb,
   makeInviteToken, verifyInviteToken, makeSession, readSession, requireUser, joinRoutes,
 };
