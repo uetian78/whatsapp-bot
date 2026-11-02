@@ -50,10 +50,6 @@ const docReqDedupe = docReq.createDedupe();
 const { generateMtzPdf } = require("./mtz-pdf.js");
 const { FAMILY_MENU, rankSplit, parseSplitListRequest, listSplits } = require("./split-engine.js");
 const { generateSplitPdf } = require("./split-pdf.js");
-const { isVrfTrigger } = require("./vrf/trigger.js");
-const {
-  initVrf, onVrfKeyword, onVrfMessage, sessions: vrfSessions,
-} = require("./vrf/vrfHandler.js");
 const { getSheets, getDrive, withRetry, driveFileId } = require("./lib/google.js");
 const {
   listFolderFiles, docTypeFromFilename, fileMatchesDocType,
@@ -154,8 +150,6 @@ try { productDriveIds = require('./product-drive-ids.json'); } catch (_) {}
 const store = require("./lib/session-store.js");
 const { enqueue } = require("./lib/user-queue.js");
 
-const VRF_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes
-
 // ── Message deduplication ────────────────────────────────────────────────────
 // WhatsApp retries the webhook when the server is cold-starting and the 200 OK
 // arrives late. Each retry carries the same message.id. We track seen IDs for
@@ -209,7 +203,7 @@ const BOT_CAPABILITIES =
   "• Chiller — *APCY-H 30 tr*\n" +
   "• Fan coil unit — *DMP 10 tr*\n\n" +
   "*🧭 Guided Selectors* (step-by-step + PDF)\n" +
-  "• *Schedule Selection* · *VRF Selection* · *MTZ Selection* · *Split Selection*\n\n" +
+  "• *MTZ Selection* · *Split Selection*\n\n" +
   "💡 Type *menu* anytime, or email hassan.saleem@mannai.com.qa for help.";
 
 // ============================================================
@@ -1464,60 +1458,20 @@ async function handleIncomingMessage(value, message) {
     // isMenuTrigger only matches whole-message greetings/menu words, so it never
     // hijacks a real request like "hi can I get the APMR catalogue".
     if (message.type === "text" && isMenuTrigger(message.text.body)) {
-      vrfSessions.delete(from);
       store.clearAll(from, RESULT_KEYS); // saved results outlive a "menu"; they last 30 days
       console.log(`📋 welcome menu (global escape) -> ${from}`);
       return await showWelcomeMenu(from, profileName);
     }
 
     // ── Global cancel: ends ANY active flow from anywhere. Each flow used to
-    // implement its own copy; this is now the single authority. (VRF keeps its
-    // internal "exit" handling too — vrf/ is upstream-mirrored, untouched.)
+    // implement its own copy; this is now the single authority.
     if (message.type === "text" && /^(cancel|stop|exit|quit|reset)$/i.test(message.text.body.trim())) {
-      const hadFlow = !!store.getFlow(from) || vrfSessions.has(from);
-      vrfSessions.delete(from);
+      const hadFlow = !!store.getFlow(from);
       store.endFlow(from);
       if (hadFlow) {
         return await sendText(from, "✅ Cancelled. Type *menu* to see everything I can do.");
       }
       // No active flow -> fall through (smallTalkReply gives the friendly bye).
-    }
-
-    // ── VRF Selection session (handles text, image, and document messages) ──
-    if (vrfSessions.has(from)) {
-      const s = vrfSessions.get(from);
-      if (Date.now() - (s.ts || 0) > VRF_TIMEOUT_MS) {
-        vrfSessions.delete(from);
-        return await sendText(from, "⏰ VRF session timed out. Type *VRF Selection* to start again.");
-      }
-      s.ts = Date.now(); // refresh on activity
-
-      const vText = message.type === "text" ? message.text.body.trim() : "";
-      let attachment = null;
-      try {
-        if (message.type === "image" && message.image?.id) {
-          const dl = await downloadMedia(message.image.id);
-          attachment = { base64: dl.buffer.toString("base64"), mediaType: dl.mediaType, filename: "schedule.jpg" };
-        } else if (message.type === "document" && message.document?.id) {
-          const dl = await downloadMedia(message.document.id);
-          attachment = {
-            base64: dl.buffer.toString("base64"),
-            mediaType: message.document.mime_type || dl.mediaType,
-            filename: message.document.filename || "schedule",
-          };
-        }
-      } catch (err) {
-        console.error("❌ VRF media download error:", err.response?.data || err.message);
-        return await sendText(from, "I couldn't download that file. Try again, or type the rows manually.");
-      }
-
-      await onVrfMessage(from, vText, attachment);
-      return;
-    }
-
-    // ── VRF trigger: exact phrase "VRF Selection" only ──
-    if (message.type === "text" && isVrfTrigger(message.text.body)) {
-      return await onVrfKeyword(from);
     }
 
     // ── Active guided flow (split / mtz) ─────────────
@@ -1528,8 +1482,7 @@ async function handleIncomingMessage(value, message) {
     }
     if (flow) store.touchFlow(from);
 
-    // Nothing reads a photo or a file any more, so one that arrives with no VRF
-    // session waiting for it is left alone.
+    // Nothing reads a photo or a file any more, so one that arrives is left alone.
     if (message.type !== "text") return;
     let text = message.text.body.trim(); // a "find ..." that is really a document request continues without the verb
 
@@ -2210,16 +2163,6 @@ app.get("/drive-index", requireAdmin(), async (req, res) => {
 // it, and only then swaps it in. Limit: SEARCH_INDEX_MAX_MB (default 400).
 app.post("/admin/search-index", requireAdmin(), createUploadHandler({ index: getPageIndex(), maxBytes: uploadLimitBytes() }));
 
-// Diagnostic: is the co-hosted VRF engine reachable, and at which URL?
-// ok:true => engine healthy. ok:false + 127.0.0.1 => uvicorn not running in
-// this container (check deploy logs / Docker runtime). ok:false + a remote
-// onrender.com URL => stale VRF_SIDECAR_URL env var overriding the localhost
-// default.
-app.get("/vrf-health", requireAdmin(), async (_, res) => {
-  res.json(await require("./vrf/vrfClient.js").sidecarProbe());
-});
-
-initVrf({ sendText, sendDocument }); // the facade, so VRF replies follow the channel
 crm.init({ getSheets });
 
 // Last in line, for every route: whatever NODE_ENV is, an error answers with a

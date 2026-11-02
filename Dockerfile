@@ -1,16 +1,8 @@
 # ============================================================
-#  Single Railway service: Node HVAC Assistant (web app, and the
-#  WhatsApp webhook when enabled) + Python VRF engine co-hosted
-#  in one container.
-#
-#  - The app (server.js) listens on Railway's public $PORT.
-#  - The VRF engine (vrf-sidecar, FastAPI) listens on 127.0.0.1:8000,
-#    internal only. The app reaches it via VRF_SIDECAR_URL.
-#
-#  This removes the separate free-tier sidecar service that slept and
-#  cold-started (502s). The Python engine is UNCHANGED — only co-hosted.
-#  Data (databases, generated files) lives on the Railway volume:
-#  mount it and set DATA_DIR to its mount path (see .env.example).
+#  Single Railway service: the Node HVAC Assistant (web app, and the
+#  WhatsApp webhook when enabled). It listens on Railway's public $PORT.
+#  Data (databases) lives on the Railway volume: mount it and set
+#  DATA_DIR to its mount path (see .env.example).
 # ============================================================
 FROM node:24-slim
 
@@ -18,9 +10,9 @@ FROM node:24-slim
 # "production". (server.js also never returns one, whatever this is.)
 ENV NODE_ENV=production
 
-# Python runtime for the VRF sidecar.
+# PDF tools for the page search.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends python3 python3-pip qpdf poppler-utils \
+    && apt-get install -y --no-install-recommends qpdf poppler-utils \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
@@ -29,13 +21,7 @@ WORKDIR /app
 COPY package*.json ./
 RUN npm ci --omit=dev
 
-# Python deps for the VRF engine (own layer; cached unless requirements change).
-COPY vrf-sidecar/requirements.txt ./vrf-sidecar/
-RUN pip3 install --no-cache-dir --break-system-packages -r vrf-sidecar/requirements.txt
-
 # App source.
 COPY . .
 
-# Start the VRF engine on localhost (background), then the bot on $PORT.
-# `exec node` makes the bot PID 1 so the container stops if the bot stops.
-CMD ["sh", "-c", "python3 -m uvicorn app:app --host 127.0.0.1 --port 8000 --app-dir vrf-sidecar & exec node server.js"]
+CMD ["node", "server.js"]

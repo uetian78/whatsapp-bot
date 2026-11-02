@@ -301,11 +301,8 @@ test("no plan gating remains: aiAllowed and freePlanMessage are gone", () => {
   }
 });
 
-test("the no-AI messages never mention a PAID plan or credits", () => {
+test("the no-AI message never mentions a PAID plan or credits", () => {
   const msgs = [
-    credits.aiFeatureUnavailableMessage("Hassan"),
-    credits.aiFeatureUnavailableMessage(""),
-    credits.aiFeatureUnavailableMessage(),
     credits.aiPausedMessage(),
   ];
   for (const m of msgs) {
@@ -313,9 +310,7 @@ test("the no-AI messages never mention a PAID plan or credits", () => {
   }
 });
 
-test("the no-AI messages use the agreed wording, with no greeting or name", () => {
-  assert.equal(credits.aiFeatureUnavailableMessage("Hassan"),
-    "Reading images and schedules is paused right now. You can still get any document by its name.");
+test("the no-AI message uses the agreed wording, with no greeting or name", () => {
   assert.equal(credits.aiPausedMessage(),
     "AI answers are paused right now. You can still get any document by its name.");
 });

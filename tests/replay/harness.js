@@ -51,10 +51,6 @@ const FAKE_MEDIA = {
   "media-document": { buffer: Buffer.from("%PDF-1.4 fake document bytes"), mediaType: "application/pdf" },
 };
 
-const FAKE_VRF_ROWS = [
-  { type: "Hi-Wall", required_kw: 2.5, qty: 1, system: "S1", room: "Room 1", tag: null, _srcValue: 2.5, _srcUnit: "kW" },
-];
-
 function createHarness(deliver) {
   if (typeof deliver !== "function") throw new Error("createHarness needs a deliver(value, message) function");
   purgeProjectModules();
@@ -65,8 +61,7 @@ function createHarness(deliver) {
 
   // ── environment: dummy values only, and the real .env is never read ───────
   const savedEnv = { ...process.env };
-  for (const k of ["VERIFY_TOKEN", "WHATSAPP_ENABLED", "ADMIN_PASSWORD", "SENDER_PIN", "WHATSAPP_REGISTER_PIN",
-    "VRF_API_KEY", "VRF_SIDECAR_URL", "VRF_EXTRACT_MODEL", "VRF_EXTRACT_MODEL_IMAGE", "VRF_EXTRACT_MODEL_PDF"]) delete process.env[k];
+  for (const k of ["VERIFY_TOKEN", "WHATSAPP_ENABLED", "ADMIN_PASSWORD", "SENDER_PIN", "WHATSAPP_REGISTER_PIN"]) delete process.env[k];
   Object.assign(process.env, {
     GOOGLE_SHEET_ID: "dummy-sheet",
     GOOGLE_SERVICE_ACCOUNT_JSON: "dummy",
@@ -168,19 +163,6 @@ function createHarness(deliver) {
   crm.isKnownContact = (from) => (seen.get(from) || 0) > 1; // this message is already counted
   crm.statsMessage = async () => "[stats]";
   crm.logDocRequest = async () => true;
-
-  // ── VRF readers (these call Claude / the sidecar) ─────────────────────────
-  const vrfClient = require("../../vrf/vrfClient.js");
-  const vrfBoq = (project) => ({
-    xlsxBuffer: Buffer.from("fake xlsx"), summary: { project: project || "VRF" }, warnings: [], excluded: [],
-  });
-  vrfClient.warmUpSidecar = async () => {};
-  vrfClient.runVrfSelection = async (input) => vrfBoq(input && input.project);
-  vrfClient.runVrfFromText = async (project) => vrfBoq(project);
-  vrfClient.summaryToWhatsApp = (summary) => `[VRF summary: ${summary && summary.project}]`;
-  const vrfIntake = require("../../vrf/vrfIntake.js");
-  vrfIntake.rowsFromWorkbook = () => JSON.parse(JSON.stringify(FAKE_VRF_ROWS));
-  vrfIntake.rowsFromImageOrPdf = async () => ({ rows: JSON.parse(JSON.stringify(FAKE_VRF_ROWS)), model: "stub-model" });
 
   // ── WhatsApp senders: record instead of sending ───────────────────────────
   const wa = require("../../lib/wa.js");

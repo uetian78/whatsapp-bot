@@ -9,7 +9,6 @@ const { routeChillerText } = require("./chillers.js");
 const { parseListRequest } = require("./product-facts.js");
 const { parseSplitListRequest } = require("./split-engine.js");
 const { isMenuTrigger, smallTalkReply } = require("./menu.js");
-const { isVrfTrigger } = require("./vrf/trigger.js");
 const { isSearchAllTrigger, isAiSearchTrigger } = require("./lib/broad-search.js");
 const { libraryQuery } = require("./lib/answers.js");
 
@@ -23,7 +22,6 @@ const INTENTS = [
   { name: "button-tap",         match: (t) => t.startsWith("btn:") },
   { name: "numbered-reply",     match: (t) => /^\d+$/.test(t) },
   { name: "menu",               match: (t) => isMenuTrigger(t) },
-  { name: "vrf-selection",      match: (t) => isVrfTrigger(t) },
   { name: "split-selection",    match: (t) => /^split\s+selection$/i.test(t) },
   { name: "mtz-selection",      match: (t) => /^mtz\s+selection\b/i.test(t) },
   { name: "print",              match: (t) => /^(print|datasheet)$/i.test(t) },
