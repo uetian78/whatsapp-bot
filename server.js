@@ -60,7 +60,7 @@ const { createNumberHealth, metaEventLines, CHECK_EVERY_MS } = require("./lib/nu
 // Sender router and the number-health check.
 const {
   runWithChannel, currentChannel, showTyping,
-  sendText, sendLongText, sendButtons, sendList, sendDocument, sendDriveFile, sendPdfBuffer,
+  sendText, sendLongText, sendButtons, sendList, sendDriveFile,
 } = require("./lib/channel.js");
 const { whatsappAdapter } = require("./lib/channel-whatsapp.js");
 const { NOT_FOUND_MSG } = wa;
@@ -297,7 +297,7 @@ async function fallbackResolve(seriesNameOrText, docType, files) {
 // ============================================================
 //  SENDING
 // ============================================================
-// sendText/sendLongText/sendButtons/sendList/sendDocument/sendDriveFile/sendPdfBuffer
+// sendText/sendLongText/sendButtons/sendList/sendDriveFile
 // come from lib/channel.js (imported above); the WhatsApp side is lib/wa.js.
 
 // Send a unit list in the chosen unit system, then a small
@@ -541,7 +541,7 @@ let webMade = null;
 function webParts() {
   if (!webMade) {
     const conversations = createConversations({ db: getDb() });
-    webMade = { conversations, channel: createWebChannel({ conversations, dataDir }) };
+    webMade = { conversations, channel: createWebChannel({ conversations }) };
   }
   return webMade;
 }
@@ -1296,8 +1296,6 @@ if (require.main === module) {
   try { store.restore(); } // bring back conversations saved before the last restart
   catch (err) { console.error("State restore failed:", err.message); }
   crm.warmUp(); // preload contacts so "Welcome back" works from the first message
-  try { webChannel.cleanupGenerated(); } // old generated files, once at start: no timer, so the app can sleep
-  catch (err) { console.error("Generated-file cleanup failed:", err.message); }
   app.listen(PORT, () => {
     console.log(`🚀 Listening on ${PORT}`);
     if (numberHealth) {

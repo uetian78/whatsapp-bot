@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const {
-  renderRich, shareMode, fileRefUrl, formatSize, fileKind, shareOutcome, prefetchWanted, clipTitle, isRetiredKind, OLD_RESULT_NOTE, SHARE_FILE_MAX,
+  renderRich, shareMode, fileRefUrl, formatSize, fileKind, shareOutcome, prefetchWanted, clipTitle, isRetiredKind, isGeneratedRef, OLD_RESULT_NOTE, SHARE_FILE_MAX,
 } = require("../web/public/render.js");
 
 test("HTML is escaped", () => {
@@ -140,4 +140,9 @@ test("results of features that are gone show as one short note; live kinds are l
   assert.equal(OLD_RESULT_NOTE, "This older result is no longer available.");
   assert.equal(isRetiredKind("rowcheck"), true);
   for (const kind of ["text", "choices", "file", "note", "something-new"]) assert.equal(isRetiredKind(kind), false, kind);
+});
+
+test("a card for a generated file from an older version is recognised, a Drive card is not", () => {
+  assert.equal(isGeneratedRef("gen:0b1c2d3e-0000-4000-8000-000000000000"), true);
+  for (const ref of ["drive:abc", "", null, undefined, 5]) assert.equal(isGeneratedRef(ref), false, String(ref));
 });

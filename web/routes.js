@@ -6,7 +6,7 @@
 //
 //    GET  /app/api/messages?after=<seq>   { messages, busy }
 //    POST /app/api/messages               { text } | { tapId, tapTitle, data? } -> 202 { seq }
-//    GET  /app/files/<ref>[?inline=1]     drive:<id> | gen:<uuid>, streamed
+//    GET  /app/files/<ref>[?inline=1]     drive:<id>, streamed
 //    POST /app/api/share-link             { ref } -> { url }
 //    GET  /s/<token>                      the shared file, no sign-in
 //    GET  /app/, /app/app.js, ...         the chat screen (web/public), signed-in people only
@@ -16,7 +16,6 @@
 //  The POST does not wait for the reply: the page polls GET and sees the
 //  bot's messages arrive. Files are piped to the response and never held whole.
 // ============================================================
-const fs = require("node:fs");
 const crypto = require("node:crypto");
 const path = require("node:path");
 const { pipeline } = require("node:stream");
@@ -29,7 +28,6 @@ const MAX_TAP_FIELD = 200;
 const MAX_TAP_DATA = 4000;
 const PAGE_SIZE = 200;
 const DRIVE_ID = /^[A-Za-z0-9_-]{1,100}$/;
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const MSG_NO_ANSWER = "I couldn't do anything with that. Type *menu* to see what I can do, or tell me what you're looking for.";
 
@@ -230,9 +228,9 @@ function createWebRoutes({
   }));
 
   // ---- files ----
-  // A ref the person (or a share token's owner) may read, as { drive: file } or
-  // { gen: { path, name } }; null for anything else, so every refusal looks alike.
-  async function resolveRef(ref, user) {
+  // A ref that may be read, as { drive: file }; null for anything else (a "gen:" ref
+  // from a file card an older version made included), so every refusal looks alike.
+  async function resolveRef(ref) {
     if (typeof ref !== "string") return null;
     const i = ref.indexOf(":");
     const kind = ref.slice(0, i);
@@ -241,11 +239,6 @@ function createWebRoutes({
       if (!DRIVE_ID.test(id)) return null;
       const file = await getFile(id);
       return file ? { drive: file } : null;
-    }
-    if (kind === "gen") {
-      if (!UUID.test(id) || !user) return null;
-      const found = webChannel.readGenerated(id, user);
-      return found ? { gen: found } : null;
     }
     return null;
   }
@@ -263,31 +256,18 @@ function createWebRoutes({
   // that fails to open is a clean 502; one that dies later destroys the response.
   async function sendFile(req, res, found) {
     let source;
-    let name;
-    let type;
-    let length = null;
-    if (found.drive) {
-      const f = found.drive;
-      name = f.name;
-      type = mimeFor(f.name, f.exportMime);
-      try { source = f.exportMime ? await openExport(f.id, f.exportMime) : await openDrive(f.id); }
-      catch (err) {
-        console.error("Drive file could not be opened:", err && err.message);
-        return refuse(req, res, 502, "That file could not be fetched right now. Try again.");
-      }
-      // No Content-Length for Drive files: the library's saved size goes stale when a
-      // file is replaced in place, and a short length would cut the download off silently.
-    } else {
-      const g = found.gen;
-      name = g.name;
-      type = mimeFor(g.name);
-      try { length = (await fs.promises.stat(g.path)).size; }
-      catch { return unavailable(req, res); }
-      source = fs.createReadStream(g.path);
+    const f = found.drive;
+    const name = f.name;
+    const type = mimeFor(f.name, f.exportMime);
+    try { source = f.exportMime ? await openExport(f.id, f.exportMime) : await openDrive(f.id); }
+    catch (err) {
+      console.error("Drive file could not be opened:", err && err.message);
+      return refuse(req, res, 502, "That file could not be fetched right now. Try again.");
     }
+    // No Content-Length for Drive files: the library's saved size goes stale when a
+    // file is replaced in place, and a short length would cut the download off silently.
     const inline = req.query.inline === "1" && INLINE_OK.has(type);
     res.set({ "Content-Type": type, "Content-Disposition": contentDisposition(name, inline) });
-    if (length !== null) res.set("Content-Length", String(length));
     // pipeline destroys the source when the client leaves and the response when the source fails.
     pipeline(source, res, (err) => {
       if (err && err.code !== "ERR_STREAM_PREMATURE_CLOSE") console.error("File stream ended early:", err.message);
@@ -295,7 +275,7 @@ function createWebRoutes({
   }
 
   router.get("/app/files/:ref", wrap(async (req, res) => {
-    const found = await resolveRef(req.params.ref, req.account.number);
+    const found = await resolveRef(req.params.ref);
     if (!found) return unavailable(req, res);
     await sendFile(req, res, found);
   }));
@@ -305,9 +285,9 @@ function createWebRoutes({
     const ref = req.body && typeof req.body === "object" ? req.body.ref : undefined;
     if (typeof ref !== "string") return bad(res, "Say which file to share.");
     if (!publicUrl || !secret) return res.status(503).json({ error: "Sharing is not set up." });
-    const found = await resolveRef(ref, req.account.number);
+    const found = await resolveRef(ref);
     if (!found) return unavailable(req, res);
-    const token = makeShareToken(ref, found.gen ? req.account.number : null, { secret, now });
+    const token = makeShareToken(ref, null, { secret, now });
     res.set("Cache-Control", "no-store").json({ url: `${String(publicUrl).replace(/\/+$/, "")}/s/${token}` });
   }));
 
@@ -316,7 +296,7 @@ function createWebRoutes({
   router.get("/s/:token", wrap(async (req, res) => {
     const t = verifyShareToken(req.params.token, { secret, now });
     if (!t) return res.status(410).type("html").send(notice("This link has expired."));
-    const found = await resolveRef(t.ref, t.owner);
+    const found = await resolveRef(t.ref);
     if (!found) return res.status(404).type("html").send(notice("That file is no longer available."));
     await sendFile(req, res, found);
   }));

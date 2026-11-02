@@ -47,7 +47,7 @@
     return size <= SHARE_FILE_MAX ? "file" : "link";
   }
 
-  // Drive and generated files both come through /app/files, colon encoded.
+  // Files come through /app/files, colon encoded.
   function fileRefUrl(ref, inline) {
     return "/app/files/" + encodeURIComponent(String(ref)) + (inline ? "?inline=1" : "");
   }
@@ -100,7 +100,10 @@
   // still in people's chats; the screen shows OLD_RESULT_NOTE in their place.
   const RETIRED_KINDS = ["rowcheck", "pages"];
   const isRetiredKind = (kind) => RETIRED_KINDS.includes(kind);
+  // A file card an older version made for a file it generated (ref "gen:..."): the
+  // file is gone, so the screen shows the card without Open or Share.
+  const isGeneratedRef = (ref) => typeof ref === "string" && ref.startsWith("gen:");
   const OLD_RESULT_NOTE = "This older result is no longer available.";
 
-  return { isRetiredKind, OLD_RESULT_NOTE, renderRich, shareMode, fileRefUrl, formatSize, fileKind, shareOutcome, prefetchWanted, clipTitle, escapeHtml, SHARE_FILE_MAX };
+  return { isRetiredKind, isGeneratedRef, OLD_RESULT_NOTE, renderRich, shareMode, fileRefUrl, formatSize, fileKind, shareOutcome, prefetchWanted, clipTitle, escapeHtml, SHARE_FILE_MAX };
 }));

@@ -23,7 +23,7 @@ function setup(name = "web") {
     longText: async (to, body) => { sent.push({ kind: "text", body }); return true; },
     buttons: async (to, text) => { sent.push({ kind: "buttons", body: text }); return true; },
     list: async (to, text, label, rows) => { sent.push({ kind: "list", body: text, rows }); return true; },
-    driveFile: async () => true, generatedFile: async () => true,
+    driveFile: async () => true,
   };
   const h = createHarness(async (value, message) => {
     const { deliverMessage } = require("../server.js");

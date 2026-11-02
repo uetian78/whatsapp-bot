@@ -24,7 +24,7 @@ function make(extra = {}) {
 test("the adapter has the contract's methods", () => {
   const { channel, done } = make();
   assert.equal(channel.name, "web");
-  for (const m of ["typing", "text", "longText", "buttons", "list", "driveFile", "generatedFile"]) {
+  for (const m of ["typing", "text", "longText", "buttons", "list", "driveFile"]) {
     assert.equal(typeof channel[m], "function", m);
   }
   done();
@@ -108,7 +108,6 @@ test("each reply is logged to the CRM in the shape wa.js sends", async () => {
   await channel.list("u1", "List", "Choose", [{ id: "x", title: "Xray" }]);
   await channel.driveFile("u1", { id: "F1", name: "Spec.pdf", folder: "T", size: 1 });
   await channel.driveFile("u1", { id: "F2", name: "Photo.png", folder: "T", size: 1 });
-  await channel.generatedFile("u1", Buffer.from("x"), "S.pdf", "cap");
   const payloads = crmCalls.map(([to, p]) => { assert.equal(to, "u1"); return p; });
   assert.deepEqual(payloads[0], { messaging_product: "whatsapp", to: "u1", type: "text", text: { preview_url: true, body: "hello" } });
   assert.equal(payloads[1].text.body, "long body");
@@ -119,9 +118,6 @@ test("each reply is logged to the CRM in the shape wa.js sends", async () => {
   assert.equal(payloads[4].type, "document");
   assert.equal(payloads[4].document.filename, "Spec.pdf");
   assert.equal(payloads[5].type, "image");
-  assert.equal(payloads[6].type, "document");
-  assert.equal(payloads[6].document.filename, "S.pdf");
-  assert.equal(payloads[6].document.caption, "cap");
   done();
 });
 

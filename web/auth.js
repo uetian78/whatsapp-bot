@@ -90,9 +90,9 @@ function makeSession(number, { secret, now }) {
   return sign({ p: "session", n: digits, exp: nowOf(now) + SESSION_DAYS * DAY }, secret);
 }
 
-// A public link to one file. It holds the ref ("drive:<id>" or "gen:<uuid>")
-// and, for a generated file, whose it is: those are kept per person. Anyone with
-// the link can open the file until it expires; nothing else about the person.
+// A public link to one file. It holds the ref ("drive:<id>") and, optionally, an
+// owner (older links to a generated file carried one). Anyone with the link can
+// open the file until it expires; nothing else about the person.
 function makeShareToken(ref, owner, { secret, now, days = SHARE_DAYS }) {
   if (typeof ref !== "string" || !ref) throw new Error("A file is needed");
   const payload = { p: "share", r: ref, exp: nowOf(now) + days * DAY };

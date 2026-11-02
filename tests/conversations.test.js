@@ -69,11 +69,21 @@ test("savedWork returns the newest file messages for that user only", () => {
   c.append("u1", "bot", "file", { ref: "drive:a", name: "a.pdf" });
   c.append("u1", "bot", "text", "chatter");
   c.append("u2", "bot", "file", { ref: "drive:other", name: "other.pdf" });
-  c.append("u1", "bot", "file", { ref: "gen:1", name: "b.xlsx" });
+  c.append("u1", "bot", "file", { ref: "drive:b", name: "b.xlsx" });
   c.append("u1", "bot", "file", { ref: "drive:c", name: "c.pdf" });
   const names = c.savedWork("u1").map((m) => m.body.name);
   assert.deepEqual(names, ["c.pdf", "b.xlsx", "a.pdf"]);
   assert.deepEqual(c.savedWork("u1", 2).map((m) => m.body.name), ["c.pdf", "b.xlsx"]);
+});
+
+test("savedWork lists Drive files only: a card for a generated file an older version made is left out", () => {
+  const { conversations: c } = make();
+  c.append("u1", "bot", "file", { ref: "drive:a", name: "a.pdf" });
+  c.append("u1", "bot", "file", { ref: "gen:0b1c2d3e-0000-4000-8000-000000000000", name: "Submittal.pdf" });
+  c.append("u1", "bot", "file", { ref: "drive:c", name: "c.pdf" });
+  assert.deepEqual(c.savedWork("u1").map((m) => m.body.name), ["c.pdf", "a.pdf"]);
+  // the old card is not counted against the limit either
+  assert.deepEqual(c.savedWork("u1", 2).map((m) => m.body.name), ["c.pdf", "a.pdf"]);
 });
 
 test("savedWork counts each file once, however many times its card was shown again", () => {

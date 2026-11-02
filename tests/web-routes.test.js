@@ -67,6 +67,7 @@ async function serve(o = {}) {
     await webChannel.text(account.number, "WELCOME");
   });
   const calls = { drive: [], exports: [], streams: [] };
+  const driveBytes = new Map(); // id -> the bytes the fake Drive streams (see putDrive)
   const library = o.library || new Map();
   const app = express();
   app.set("trust proxy", 1);
@@ -77,7 +78,7 @@ async function serve(o = {}) {
     secret: SECRET,
     publicUrl: "https://bot.example.test/",
     getFile: o.getFile || (async (id) => library.get(id) || null),
-    streamDrive: o.streamDrive || (async (id) => { calls.drive.push(id); return Readable.from([Buffer.from("DRIVE-BYTES")]); }),
+    streamDrive: o.streamDrive || (async (id) => { calls.drive.push(id); return Readable.from([driveBytes.get(id) || Buffer.from("DRIVE-BYTES")]); }),
     streamExport: o.streamExport || (async (id, mime) => { calls.exports.push([id, mime]); return Readable.from([Buffer.from("EXPORT-BYTES")]); }),
   }));
   app.use("/app", webErrorHandler);
@@ -90,7 +91,7 @@ async function serve(o = {}) {
   });
   const get = (p, n = SARA) => call(p, { headers: as(n) });
   return {
-    base, call, get, json, as, clock, conversations, webChannel, delivered, welcomes, calls, library, dir, db,
+    driveBytes, base, call, get, json, as, clock, conversations, webChannel, delivered, welcomes, calls, library, dir, db,
     close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(() => { fs.rmSync(dir, { recursive: true, force: true }); r(); }); }),
   };
 }
@@ -381,9 +382,7 @@ test("/files refuses a Drive id not in the library", () => withServer({}, async 
 }));
 
 test("a dead Open link shows a short page in a browser, and JSON to the page's own fetches", () => withServer({}, async (s) => {
-  const id = putGenerated(s, SARA, "old.pdf", Buffer.from("x"));
-  fs.rmSync(path.join(s.dir, "generated", id));
-  for (const ref of [`gen%3A${id}`, "drive%3Aunknown1"]) {
+  for (const ref of ["gen%3A0b1c2d3e-0000-4000-8000-000000000000", "drive%3Aunknown1"]) {
     const page = await s.call(`/app/files/${ref}`, { headers: { ...s.as(), accept: "text/html,application/xhtml+xml,*/*;q=0.8" } });
     assert.equal(page.status, 404);
     assert.match(page.headers.get("content-type"), /text\/html/);
@@ -494,40 +493,31 @@ test("a native Google file is exported with the library's export type, streamed"
   assert.deepEqual(s.calls.drive, []);
 }));
 
-function putGenerated(s, user, name, bytes) {
-  const id = require("node:crypto").randomUUID();
-  fs.mkdirSync(path.join(s.dir, "generated"), { recursive: true });
-  fs.writeFileSync(path.join(s.dir, "generated", id), bytes);
-  s.db.prepare("INSERT INTO generated_files (id, user, name, mime, size, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(id, user, name, "application/octet-stream", bytes.length, T0);
+let driveSeq = 0;
+function putDrive(s, name, bytes) {
+  const id = `g${++driveSeq}`;
+  s.library.set(id, { id, name, folder: "Test" });
+  s.driveBytes.set(id, bytes);
   return id;
 }
 
-test("/files refuses another person's generated file, and sends your own from disk", () => withServer({}, async (s) => {
-  const bytes = Buffer.alloc(300_000, 7);
-  const id = putGenerated(s, SARA, "Submittal.pdf", bytes);
-  const mine = await s.get(`/app/files/gen%3A${id}`);
-  assert.equal(mine.status, 200);
-  assert.ok(Buffer.from(await mine.arrayBuffer()).equals(bytes));
-  assert.equal(mine.headers.get("content-type"), "application/pdf");
-  assert.equal(mine.headers.get("content-length"), String(bytes.length));
-  assert.match(mine.headers.get("content-disposition"), /^attachment; filename="Submittal\.pdf"/);
-  assert.equal((await s.get(`/app/files/gen%3A${id}`, OMAR)).status, 404);
-  assert.equal((await s.get(`/app/files/gen%3A${require("node:crypto").randomUUID()}`)).status, 404);
-}));
-
-test("a generated file whose bytes are gone is a 404", () => withServer({}, async (s) => {
-  const id = putGenerated(s, SARA, "x.pdf", Buffer.from("x"));
-  fs.rmSync(path.join(s.dir, "generated", id));
-  assert.equal((await s.get(`/app/files/gen%3A${id}`)).status, 404);
+test("an old generated-file card (a gen: ref) is refused for Open, for sharing and on a public link", () => withServer({}, async (s) => {
+  const ref = "gen:0b1c2d3e-0000-4000-8000-000000000000";
+  assert.equal((await s.get(`/app/files/${encodeURIComponent(ref)}`)).status, 404);
+  assert.equal((await s.json("/app/api/share-link", { ref })).status, 404);
+  const old = makeShareToken(ref, SARA, { secret: SECRET, now: T0 });
+  const r = await s.call(`/s/${old}`);
+  assert.equal(r.status, 404);
+  assert.match(await r.text(), /no longer available/);
 }));
 
 test("downloads are attachments; only pictures and PDFs may be inline, and HTML never is", () => withServer({}, async (s) => {
-  const pdf = putGenerated(s, SARA, "a.pdf", PDF);
-  const png = putGenerated(s, SARA, "a.png", PNG);
-  const html = putGenerated(s, SARA, "page.html", Buffer.from("<script>alert(1)</script>"));
-  const svg = putGenerated(s, SARA, "x.svg", Buffer.from("<svg onload=alert(1)>"));
-  const xlsx = putGenerated(s, SARA, "x.xlsx", XLSX);
-  const disp = async (id, q = "") => (await s.get(`/app/files/gen%3A${id}${q}`));
+  const pdf = putDrive(s, "a.pdf", PDF);
+  const png = putDrive(s, "a.png", PNG);
+  const html = putDrive(s, "page.html", Buffer.from("<script>alert(1)</script>"));
+  const svg = putDrive(s, "x.svg", Buffer.from("<svg onload=alert(1)>"));
+  const xlsx = putDrive(s, "x.xlsx", XLSX);
+  const disp = async (id, q = "") => (await s.get(`/app/files/drive%3A${id}${q}`));
   assert.match((await disp(pdf)).headers.get("content-disposition"), /^attachment/);
   assert.match((await disp(pdf, "?inline=1")).headers.get("content-disposition"), /^inline/);
   assert.match((await disp(png, "?inline=1")).headers.get("content-disposition"), /^inline/);
@@ -542,16 +532,16 @@ test("downloads are attachments; only pictures and PDFs may be inline, and HTML 
 test("a file name with a quote, a slash, Arabic text and a newline still makes a valid header", () => withServer({}, async (s) => {
   const names = ['we"ird.pdf', "a/b\\c.pdf", "مخطط التكييف.pdf", "line\r\nbreak: x.pdf", "tab\there\u0000.pdf", "‮exe.fdp", "100%.pdf", "o'brien (1)*.pdf", "\ud800lone.pdf", ""];
   for (const name of names) {
-    const id = putGenerated(s, SARA, name, PDF);
-    const r = await s.get(`/app/files/gen%3A${id}`);
+    const id = putDrive(s, name, PDF);
+    const r = await s.get(`/app/files/drive%3A${id}`);
     assert.equal(r.status, 200, JSON.stringify(name));
     const cd = r.headers.get("content-disposition");
     assert.ok(/^attachment; filename="[^"\\]*"; filename\*=UTF-8''[A-Za-z0-9._~%-]+$/.test(cd), cd);
     assert.ok(!/[\r\n]/.test(cd));
     await r.arrayBuffer();
   }
-  const arabic = putGenerated(s, SARA, "مخطط التكييف.pdf", PDF);
-  const cd = (await s.get(`/app/files/gen%3A${arabic}`)).headers.get("content-disposition");
+  const arabic = putDrive(s, "مخطط التكييف.pdf", PDF);
+  const cd = (await s.get(`/app/files/drive%3A${arabic}`)).headers.get("content-disposition");
   const star = /filename\*=UTF-8''(.+)$/.exec(cd)[1];
   assert.equal(decodeURIComponent(star), "مخطط التكييف.pdf");
   assert.match(cd, /filename="[\x20-\x7e]+"/);
@@ -602,8 +592,7 @@ test("a share link is made for a file you can read, as a signed URL on PUBLIC_UR
 
 test("share-link refuses what you cannot read, and bad input", () => withServer({}, async (s) => {
   s.library.set("f1", { id: "f1", name: "Cat.pdf", folder: "x" });
-  const theirs = putGenerated(s, OMAR, "o.pdf", PDF);
-  for (const ref of ["drive:nope", `gen:${theirs}`, "gen:" + require("node:crypto").randomUUID(), "junk", "drive:", ""]) {
+  for (const ref of ["drive:nope", "gen:" + require("node:crypto").randomUUID(), "junk", "drive:", ""]) {
     assert.equal((await s.json("/app/api/share-link", { ref })).status, 404, ref);
   }
   for (const body of [{}, { ref: 5 }, [], null]) assert.equal((await s.json("/app/api/share-link", body)).status, 400);
@@ -683,24 +672,9 @@ test("a shared Drive file removed from the library is a 404", () => withServer({
   assert.equal(r.headers.get("x-robots-tag"), "noindex");
 }));
 
-test("a shared generated file is the owner's, streams from disk, and others cannot forge it", () => withServer({}, async (s) => {
-  const bytes = Buffer.alloc(5000, 9);
-  const id = putGenerated(s, SARA, "Selection.xlsx", bytes);
-  const { url } = await (await s.json("/app/api/share-link", { ref: `gen:${id}` })).json();
-  const ok = await s.call(new URL(url).pathname);
-  assert.equal(ok.status, 200);
-  assert.ok(Buffer.from(await ok.arrayBuffer()).equals(bytes));
-  // a token claiming Omar owns Sara's file finds nothing
-  const forged = makeShareToken(`gen:${id}`, OMAR, { secret: SECRET, now: T0 });
-  assert.equal((await s.call(`/s/${forged}`)).status, 404);
-  // a gen token with no owner finds nothing
-  const noOwner = makeShareToken(`gen:${id}`, null, { secret: SECRET, now: T0 });
-  assert.equal((await s.call(`/s/${noOwner}`)).status, 404);
-}));
-
 test("a share token holds the ref and the owner, expires after 7 days and has its own purpose", () => {
-  const t = makeShareToken("gen:abc", "97455551111", { secret: SECRET, now: T0 });
-  assert.deepEqual(verifyShareToken(t, { secret: SECRET, now: T0 + 6 * DAY }), { ref: "gen:abc", owner: "97455551111" });
+  const t = makeShareToken("drive:abc", "97455551111", { secret: SECRET, now: T0 });
+  assert.deepEqual(verifyShareToken(t, { secret: SECRET, now: T0 + 6 * DAY }), { ref: "drive:abc", owner: "97455551111" });
   assert.equal(verifyShareToken(t, { secret: SECRET, now: T0 + 7 * DAY + 1 }), null);
   assert.equal(verifyShareToken(makeInviteToken(SARA, { secret: SECRET, now: T0 }), { secret: SECRET, now: T0 }), null);
   assert.throws(() => makeShareToken("drive:x", null, { secret: "short", now: T0 }));

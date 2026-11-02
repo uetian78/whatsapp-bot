@@ -31,6 +31,7 @@
     tapAgain: "Tap again to share",
     shareFailed: "Couldn't open the share sheet. Try again.",
     shareLinkFailed: "Couldn't make a share link. Try again.",
+    fileGone: "This file is no longer available.",
   };
 
   const MIME_BY_EXT = {
@@ -206,6 +207,19 @@
     const kind = R.fileKind(name);
     const size = typeof b.size === "number" ? b.size : null;
     const meta = [typeof b.folder === "string" ? b.folder : "", R.formatSize(size).replace(" ", " ")].filter(Boolean).join(" · ");
+
+    // A file an older version made for the person (not in Drive) is gone: the card says so, with no buttons.
+    if (R.isGeneratedRef(b.ref)) {
+      const gone = h("div", "msg bot wide");
+      const old = h("div", "card");
+      const oldHead = h("div", "card-head");
+      const oldTitle = h("div", "card-title");
+      oldTitle.append(h("div", "card-name", name));
+      oldHead.append(h("span", "badge", KIND_LABEL[kind]), oldTitle);
+      old.append(oldHead, h("div", "card-caption", COPY.fileGone));
+      gone.append(old);
+      return withTime(gone, m.ts);
+    }
 
     const el = h("div", "msg bot wide");
     const card = h("div", "card");
