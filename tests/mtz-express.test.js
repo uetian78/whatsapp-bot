@@ -53,7 +53,7 @@ test("a sensible load above the total is ignored, as in the guided steps", () =>
 });
 
 test("a command that is not about MTZ selection gives null", () => {
-  assert.equal(parseMtzExpress("Split Selection 8.5TR 80/67/115"), null);
+  assert.equal(parseMtzExpress("Chiller Selection 8.5TR 80/67/115"), null);
   assert.equal(parseMtzExpress("8.5TR 80/67/115"), null);
 });
 

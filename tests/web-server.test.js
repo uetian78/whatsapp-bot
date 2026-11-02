@@ -77,6 +77,20 @@ test("an old menu row gets the no-longer-available reply, with no tip and no cra
   } finally { t.done(); }
 });
 
+test("the old guided triggers no longer start anything: they are plain requests", { skip }, async () => {
+  const t = setup();
+  try {
+    const { getFlow } = require("../lib/session-store.js");
+    for (const phrase of ["Split Selection", "Schedule Selection", "VRF Selection", "print", "datasheet"]) {
+      t.sent.length = 0;
+      await t.say(textMsg(phrase));
+      const said = t.sent.map((s) => s.body).join("\n");
+      assert.doesNotMatch(said, /Step 1\/3|Split Unit Selector|Schedule \/ BOQ|Send the equipment schedule|VRF session|Generating PDF/, phrase);
+      assert.equal(getFlow(USER), null, phrase);
+    }
+  } finally { t.done(); }
+});
+
 test("Saved work lists the newest 10 files again, oldest first, on the web", { skip }, async () => {
   const t = setup();
   try {

@@ -47,8 +47,6 @@ const crm = require("./crm.js");
 const docReq = require("./lib/doc-requests.js");
 const docReqDedupe = docReq.createDedupe();
 const { generateMtzPdf } = require("./mtz-pdf.js");
-const { FAMILY_MENU, rankSplit, parseSplitListRequest, listSplits } = require("./split-engine.js");
-const { generateSplitPdf } = require("./split-pdf.js");
 const { getSheets, getDrive, withRetry, driveFileId } = require("./lib/google.js");
 const {
   listFolderFiles, docTypeFromFilename, fileMatchesDocType,
@@ -195,14 +193,14 @@ const BOT_CAPABILITIES =
   "• Catalogue — e.g. *APMR catalogue*, *Hisense catalogue*\n" +
   "• IOM manual — e.g. *APMR IOM*\n" +
   "• Model datasheet — e.g. *APMRa 51004*, *APMR 52340 T1*\n" +
-  "• List a full range — e.g. *list APMR units*, *APMRG1 list*, *list of split units*\n\n" +
+  "• List a full range — e.g. *list APMR units*, *APMRG1 list*\n\n" +
   "*🛠️ Quick Selection* (give a capacity → get a model)\n" +
   "• Packaged unit — *package unit 20 tr t3*\n" +
   "• Fresh air / DOAS — *fresh air 15 tr*\n" +
   "• Chiller — *APCY-H 30 tr*\n" +
   "• Fan coil unit — *DMP 10 tr*\n\n" +
   "*🧭 Guided Selectors* (step-by-step + PDF)\n" +
-  "• *MTZ Selection* · *Split Selection*\n\n" +
+  "• *MTZ Selection*\n\n" +
   "💡 Type *menu* anytime, or email hassan.saleem@mannai.com.qa for help.";
 
 // ============================================================
@@ -398,16 +396,16 @@ async function fallbackResolve(seriesNameOrText, docType, files) {
 // sendText/sendLongText/sendButtons/sendList/sendDocument/sendDriveFile/sendPdfBuffer
 // come from lib/channel.js (imported above); the WhatsApp side is lib/wa.js.
 
-// Send a unit list (split or product) in the chosen unit system, then a small
+// Send a unit list in the chosen unit system, then a small
 // button message offering to switch Imperial <-> International. The list itself
 // can exceed the 1024-char interactive-body limit, so it goes as plain text
 // (sendLongText) and the toggle rides in a separate button message.
 //   system: "si"  = International (kW, m³/h) · "imp" = Imperial (TR, CFM)
-async function sendListWithToggle(from, kind, keys, system) {
-  const body = kind === "split" ? listSplits(keys, system) : buildUnitList(keys, system);
-  if (!body) return;
+async function sendListWithToggle(from, keys, system) {
+  const body = buildUnitList(keys, system);
+  if (!body) return false;
   await sendLongText(from, body);
-  store.setCtx(from, "unitList", { kind, keys, system }, 30 * 60 * 1000);
+  store.setCtx(from, "unitList", { keys, system }, 30 * 60 * 1000);
   const other = system === "si" ? "imp" : "si";
   const curName = system === "si" ? "International (kW)" : "Imperial (TR)";
   const otherTitle = other === "si" ? "International (kW)" : "Imperial (TR)";
@@ -416,6 +414,7 @@ async function sendListWithToggle(from, kind, keys, system) {
     `📐 Showing in *${curName}*. Tap to switch units:`,
     [{ id: `units|${other}`, title: otherTitle }]
   );
+  return true;
 }
 
 // ============================================================
@@ -702,355 +701,6 @@ async function runAiSearch(to, query, announce) {
 
 
 // ============================================================
-//  SPLIT UNIT SELECTION HANDLER (Toshiba / TCL / SKM)
-// ============================================================
-
-const SPLIT_BRANDS = [
-  { name: "Toshiba", types: [
-    { label: "Hi-Wall (RAS-18/24/30PKV)",         famKey: "PKV", kind: "grid" },
-    { label: "Ducted Non-Inverter (RAV BSP/ASP)",  famKey: "BSP", kind: "grid" },
-    { label: "Ducted Inverter (RAV SH)",            famKey: "SH",  kind: "grid" },
-  ]},
-  { name: "TCL", types: [
-    { label: "Hi-Wall (SaveIN AI)",                 famKey: "TCL-HW", kind: "t1t3" },
-  ]},
-  { name: "SKM", types: [
-    { label: "Hi-Wall (MSKMP-CVK1C60)",             famKey: "SKM-HW",  kind: "t1t3" },
-    { label: "Ducted (Sierra DDP+RX)",              famKey: "SKM-DCT", kind: "t1t3" },
-  ]},
-];
-
-// Resolve type keyword within a brand to { famKey, kind }
-function resolveSplitType(brand, typeStr) {
-  const t = typeStr.toLowerCase().replace(/[^a-z0-9]/g, "");
-  const b = SPLIT_BRANDS.find(b => b.name.toLowerCase() === brand.toLowerCase());
-  if (!b) return null;
-  if (brand === "TCL") return b.types[0];
-  const isDuctedInv = /sh|inverterd|dinv|ductedinv/.test(t) || (/duct/.test(t) && /inv/.test(t));
-  const isDucted    = /duct|bsp|asp|ddp/.test(t);
-  if (isDuctedInv) return b.types.find(x => /SH/.test(x.famKey)) ?? null;
-  if (isDucted)    return b.types.find(x => /BSP|DCT/.test(x.famKey)) ?? null;
-  // hi-wall / wall / pkv or default
-  return b.types.find(x => /PKV|HW/.test(x.famKey)) ?? b.types[0];
-}
-
-
-// 1 ton refrigeration = 3.51685 kW (matches products.js / vrfIntake.js).
-const SPLIT_TR_KW = 3.51685;
-
-// Parse the rating-condition reply in the guided flow. Accepts T1/T3, bare
-// 1/3, or the ambient (35/46). Returns "T1", "T3", or null.
-function parseSplitCondition(text) {
-  const t = (text || "").trim().toLowerCase();
-  if (/^t?\s*1$/.test(t) || /\bt1\b/.test(t) || /\b35\b/.test(t)) return "T1";
-  if (/^t?\s*3$/.test(t) || /\bt3\b/.test(t) || /\b46\b/.test(t)) return "T3";
-  return null;
-}
-
-// Parse one capacity line in the guided flow: a capacity, with an OPTIONAL
-// type and an OPTIONAL on-coil "DB/WB" (Toshiba only — the grid families
-// interpolate on indoor DB). Capacity may be kW (default) or tonnage
-// ("ton"/"TR"/trailing "t"). Type defaults to Hi-Wall; "ducted"/"D"/"duc"
-// selects ducted. On-coil is null when not given (→ caller uses standard
-// T1/T3 on-coil).
-//   "5", "5 kw", "1.5 ton", "8 kw ducted", "2 ton d", "5 hw",
-//   "5 kw 24/17", "8 kw ducted 26.7/19.4"
-// Returns { loadKw, typeStr, idb, iwb } or null.
-function parseSplitCapacityLine(line) {
-  const raw = (line || "").trim().toLowerCase();
-
-  // Pull out an on-coil DB/WB token first ("num/num") so its numbers aren't
-  // mistaken for the capacity; strip it before reading the rest.
-  let idb = null, iwb = null;
-  const onCoil = raw.match(/(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)/);
-  let rest = raw;
-  if (onCoil) {
-    idb = parseFloat(onCoil[1]);
-    iwb = parseFloat(onCoil[2]);
-    rest = raw.replace(onCoil[0], " ");
-  }
-
-  const numMatch = rest.match(/[\d.]+/);
-  if (!numMatch) return null;
-  const val = parseFloat(numMatch[0]);
-  if (!val || val <= 0) return null;
-
-  // Tonnage if "ton"/"tons"/"tonnage"/"tr" appears, or a number with trailing "t".
-  const isTon = /\bton(s|nage)?\b|\btr\b/.test(rest) || /[\d.]+\s*t\b/.test(rest);
-  const loadKw = isTon ? Math.round(val * SPLIT_TR_KW * 100) / 100 : val;
-
-  // Type: ducted aliases first (D / duc / duct / ducted), else default Hi-Wall.
-  let typeStr = "hi wall";
-  if (/\bduct(ed)?\b|\bduc\b|(?:^|\s)d(?:\s|$)/.test(rest)) typeStr = "ducted";
-
-  return { loadKw, typeStr, idb, iwb };
-}
-
-// Rank with auto-split: if load > biggest model, try dividing by 2,3,4
-// Returns { ranked, count, splitNote }
-function rankSplitWithCount(famKey, loadKw, idb, iwb, odb, condition) {
-  for (let n = 1; n <= 4; n++) {
-    const ranked = rankSplit(famKey, loadKw / n, idb, iwb, odb, condition);
-    if (ranked.length && ranked[0].adequate) {
-      const note = n > 1
-        ? `Load ${loadKw} kW exceeds single unit capacity — split into ${n} units of ${(loadKw/n).toFixed(2)} kW each`
-        : null;
-      return { ranked, count: n, splitNote: note };
-    }
-  }
-  // No adequate found even at /4 — return single-unit closest
-  const ranked = rankSplit(famKey, loadKw, idb, iwb, odb, condition);
-  return { ranked, count: 1, splitNote: null };
-}
-
-// Format one unit result as WhatsApp text
-function formatSplitUnit(unitNum, res) {
-  const { ranked, count, loadKw, condStr, famLabel, splitNote } = res;
-  const f2 = v => v != null ? Number(v).toFixed(2) : "—";
-  const best = ranked[0];
-  if (!best) return `*Unit ${unitNum}* ❌ No data`;
-  const ok        = best.adequate;
-  const margin    = best.margin != null ? ` (+${(best.margin * 100).toFixed(0)}%)` : "";
-  const shc       = best.shc != null ? ` · SC ${f2(best.shc)} kW` : "";
-  const countTag  = count > 1 ? `${count}× ` : "";
-  const statusIcon = ok ? "✅" : "⚠️";
-
-  let out = `*${statusIcon} Unit ${unitNum}* — ${famLabel}\n`;
-  out += `Load ${loadKw} kW · ${condStr}\n`;
-  out += `→ ⭐ *${countTag}${best.key}*\n`;
-  out += `TC ${f2(best.tc)} kW${margin}${shc} · Power ${f2(best.p)} kW · EER ${f2(best.eer)}`;
-  if (count > 1) out += `\n   Combined: TC ${f2(best.tc * count)} kW · Power ${f2(best.p * count)} kW`;
-  if (splitNote) out += `\n   ℹ️ ${splitNote}`;
-  if (res.typeNote) out += `\n   ℹ️ ${res.typeNote}`;
-  if (!ok) out += `\n⚠️ Still undersized — contact supplier`;
-  return out;
-}
-
-async function handleSplitStep(from, s, text) {
-  // ── Step 1/3: choose brand ──────────────────────────────────
-  if (s.step === "brand") {
-    const t = text.trim();
-    let brand = null;
-    if (/^1$|toshiba/i.test(t))  brand = "Toshiba";
-    else if (/^2$|tcl/i.test(t)) brand = "TCL";
-    else if (/^3$|skm/i.test(t)) brand = "SKM";
-    if (!brand) {
-      return sendText(from,
-        "❌ Reply *1*, *2*, or *3*:\n1. Toshiba\n2. TCL\n3. SKM\n\nType *cancel* to exit."
-      );
-    }
-    s.brand = brand;
-    s.step  = "condition";
-
-    return sendText(from,
-      `✅ *${brand}*\n\n` +
-      "*Step 2/3:* Rating condition?\n" +
-      "• *T1* — 35°C ambient\n" +
-      "• *T3* — 46°C ambient\n\n" +
-      "Reply *T1* or *T3*."
-    );
-  }
-
-  // ── Step 2/3: rating condition (T1 / T3) ────────────────────
-  if (s.step === "condition") {
-    const cond = parseSplitCondition(text);
-    if (!cond) {
-      return sendText(from, "❌ Reply *T1* (35°C) or *T3* (46°C).\nType *cancel* to exit.");
-    }
-    s.condition = cond;
-    if (cond === "T1") { s.idb = 27; s.iwb = 19; s.odb = 35; }
-    else               { s.idb = 29; s.iwb = 19; s.odb = 46; }
-    s.step = "capacities";
-
-    const b = SPLIT_BRANDS.find(b => b.name === s.brand);
-    const hasDucted = b.types.some(x => /BSP|DCT|SH/.test(x.famKey));
-    const hasGrid   = b.types.some(x => x.kind === "grid"); // Toshiba only
-
-    const coilHint = hasGrid
-      ? "\n\n*On-coil (optional, Toshiba):* add `DB/WB` to a line —\n" +
-        "• `5 kw 24/17`  → on-coil 24/17°C\n" +
-        `Omit it to use the standard *${cond}* on-coil (${s.idb}/${s.iwb}°C).`
-      : "";
-
-    return sendText(from,
-      `✅ *${s.brand} · ${cond}* (${s.odb}°C ambient)\n\n` +
-      "*Step 3/3:* Enter capacities — one per line.\n" +
-      "kW or tonnage; unit type optional:\n" +
-      "• `5`  or  `5 kw`  → Hi-Wall\n" +
-      "• `1.5 ton`  → Hi-Wall\n" +
-      (hasDucted ? "• `8 kw ducted`  or  `2 ton d`  → Ducted\n" : "") +
-      "\n" +
-      (hasDucted
-        ? "Default type is *Hi-Wall* if you don't specify one."
-        : `${s.brand} splits are *Hi-Wall* only.`) +
-      "\n\n_Aliases — Hi-Wall: HW · WM · Wall · Split   |   Ducted: D · Duc_" +
-      coilHint
-    );
-  }
-
-  // ── Step 3/3: capacities list → rank all → output + store for Print ─
-  if (s.step === "capacities") {
-    const lines = text.split(/\n/).map(l => l.trim()).filter(Boolean);
-    if (!lines.length) {
-      return sendText(from, "❌ No capacities found. Enter at least one line.\nType *cancel* to exit.");
-    }
-
-    const unitResults = [];
-    const errors      = [];
-
-    lines.forEach((line, i) => {
-      const parsed = parseSplitCapacityLine(line);
-      if (!parsed) {
-        errors.push(`Line ${i + 1}: couldn't read a capacity — "${line}"`);
-        unitResults.push({ lineNum: i + 1, error: `Couldn't read: "${line}"` });
-        return;
-      }
-      const resolved = resolveSplitType(s.brand, parsed.typeStr);
-      if (!resolved) {
-        errors.push(`Line ${i + 1}: no "${parsed.typeStr}" type for ${s.brand}`);
-        unitResults.push({ lineNum: i + 1, error: `No ${parsed.typeStr} for ${s.brand}` });
-        return;
-      }
-      // If a ducted unit was asked but the brand has none, resolveSplitType
-      // falls back to Hi-Wall — surface that so the result isn't surprising.
-      const askedDucted = parsed.typeStr === "ducted";
-      const gotDucted   = /BSP|DCT|SH/.test(resolved.famKey);
-      let note = askedDucted && !gotDucted
-        ? `${s.brand} has no ducted split — used Hi-Wall instead`
-        : null;
-
-      // On-coil DB/WB only affects the grid (Toshiba) families. Use the
-      // line's on-coil if given; otherwise the standard T1/T3 on-coil. For
-      // non-grid (TCL/SKM, fixed-point) ratings, a supplied on-coil is ignored.
-      const isGrid = resolved.kind === "grid";
-      const customCoil = isGrid && parsed.idb != null;
-      const useIdb = customCoil ? parsed.idb : s.idb;
-      const useIwb = customCoil ? (parsed.iwb ?? s.iwb) : s.iwb;
-      if (parsed.idb != null && !isGrid) {
-        const n2 = `on-coil ignored — ${s.brand} uses fixed ${s.condition} ratings`;
-        note = note ? `${note}; ${n2}` : n2;
-      }
-
-      const { ranked, count, splitNote } = rankSplitWithCount(
-        resolved.famKey, parsed.loadKw, useIdb, useIwb, s.odb, s.condition
-      );
-      const famLabel = SPLIT_BRANDS.find(b => b.name === s.brand)
-        ?.types.find(t => t.famKey === resolved.famKey)
-        ?.label?.split("(")[0]?.trim() ?? resolved.famKey;
-      const condStr = customCoil
-        ? `${s.condition} · on-coil ${useIdb}/${useIwb}°C @ ${s.odb}°C`
-        : `${s.condition} (${s.odb}°C)`;
-      const best = ranked[0];
-
-      unitResults.push({
-        lineNum:  i + 1,
-        loadKw:   parsed.loadKw,
-        typeStr:  parsed.typeStr,
-        famLabel, condStr,
-        idb: useIdb, iwb: useIwb, odb: s.odb,
-        condition: s.condition,
-        famKey:   resolved.famKey,
-        kind:     resolved.kind,
-        count,    splitNote,
-        ranked,
-        model:    best?.key ?? "—",
-        tc:       best?.tc,
-        shc:      best?.shc ?? null,
-        p:        best?.p,
-        eer:      best?.eer,
-        margin:   best?.margin,
-        adequate: best?.adequate ?? false,
-        typeNote: note,
-      });
-    });
-
-    store.endFlow(from);
-
-    // Store results for PDF print. The PDF does not use each line's model ranking,
-    // so it is not kept: the state stays small and plain JSON.
-    const goodUnits = unitResults.filter(u => !u.error);
-    const saved = { brand: s.brand, units: unitResults.map(({ ranked, ...unit }) => unit), at: resultStamp() };
-    store.setCtx(from, "splitResult", saved, RESULT_TTL_MS);
-
-    // Build WhatsApp text output
-    const textBlocks = unitResults.map((u) =>
-      u.error
-        ? `*❌ Unit ${u.lineNum}* — ${u.error}`
-        : formatSplitUnit(u.lineNum, u)
-    );
-
-    const header = `🧊 *Split Selection — ${s.brand} · ${s.condition}*  (${goodUnits.length} unit${goodUnits.length !== 1 ? "s" : ""})\n`;
-    const body   = textBlocks.join("\n\n─────────────────\n\n");
-    const errStr = errors.length ? "\n\n⚠️ *Skipped:* " + errors.join(" | ") : "";
-
-    await sendText(from,
-      header + "\n" + body + errStr + "\n\n" +
-      "_Verify against manufacturer selection software before submittal._\n\n" +
-      "Reply *Print* for a PDF report · *Split Selection* to run again."
-    );
-    if (goodUnits.length) await sendButtons(from, PRINT_PROMPT, [printButton(saved.at)]); // nothing to print when no line was read
-  }
-}
-
-// Results stay available for 30 days; the button under them is "PDF report".
-const RESULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-// The button's id says which saved result it sits under ("print|<when it was saved>"), so an old
-// button never prints a newer result. A bare "print" (the word, or a chip from before) means the newest.
-const PRINT_TAP = "print";
-const printButton = (at) => ({ id: `${PRINT_TAP}|${at}`, title: "PDF report" });
-const RESULT_KEYS = ["splitResult"]; // kept when the conversation is cleared
-const MSG_NOTHING_TO_PRINT = "No recent results to print. Run *Split Selection* first.";
-const MSG_RESULT_REPLACED = "That result was replaced; tap the newest, or type print.";
-// " (results from 14 Mar, 09:12)", in Qatar time; empty when the save time is not known.
-function savedAt(at) {
-  if (!Number.isFinite(at)) return "";
-  const when = new Date(at).toLocaleString("en-GB", { timeZone: "Asia/Qatar", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit", hour12: false });
-  return ` (results from ${when})`;
-}
-const PRINT_PROMPT = "Want these results as a PDF report?";
-// When a result was saved, so "Print" can tell the newer of two. Never equal, even in one millisecond.
-let lastResultAt = 0;
-const resultStamp = () => (lastResultAt = Math.max(Date.now(), lastResultAt + 1));
-
-// Which saved result a Print request is for, as the function that sends it, or
-// null when there is nothing to send.
-function printTarget(from, word, at) {
-  const split = /^print$/i.test(word) ? store.getCtx(from, "splitResult") : null;
-  if (at !== undefined) { // a button: only the result it sits under
-    return split && split.at === at ? handleSplitPrint : null;
-  }
-  return split ? handleSplitPrint : null;
-}
-
-// Send split PDF report when user replies "Print"
-async function handleSplitPrint(from) {
-  const stored = store.getCtx(from, "splitResult");
-  if (!stored) {
-    return sendText(from, "❌ No recent split results found. Run *Split Selection* first.");
-  }
-
-  await sendText(from, `⏳ Generating PDF report…${savedAt(stored.at)}`);
-
-  let pdfBuffer;
-  try {
-    pdfBuffer = await generateSplitPdf({ brand: stored.brand, units: stored.units });
-  } catch (err) {
-    console.error("❌ Split PDF error:", err.message);
-    return sendText(from, "❌ Failed to generate PDF. Please try again.");
-  }
-
-  try {
-    await sendPdfBuffer(
-      from, pdfBuffer, `Split_Selection_${stored.brand}.pdf`,
-      `${stored.brand} Split Unit Selection — ${stored.units.filter(u => !u.error).length} units`
-    );
-  } catch (err) {
-    console.error("❌ Split PDF send error:", err.message);
-    return sendText(from, "❌ PDF generated but could not be sent. Please try again.");
-  }
-}
-
-// ============================================================
 //  TRANE MTZ STEP HANDLER
 // ============================================================
 const TR_TO_MBH = 12; // 1 TR = 12 MBtu/h
@@ -1324,15 +974,6 @@ async function handleIncomingMessage(value, message) {
       // WhatsApp never offers this tap, so there it is an unknown tap like any other.
       if (btnId === "saved|open" && currentChannel()?.name === "web") return await sendSavedWork(from);
 
-      // "PDF report" under results: the same as typing Print.
-      if (btnId === PRINT_TAP || btnId.startsWith(`${PRINT_TAP}|`)) {
-        const at = btnId === PRINT_TAP ? undefined : Number(btnId.slice(PRINT_TAP.length + 1));
-        const print = printTarget(from, "print", at);
-        if (print) return await print(from);
-        // a button whose result was replaced, or nothing saved at all
-        return await sendText(from, printTarget(from, "print") ? MSG_RESULT_REPLACED : MSG_NOTHING_TO_PRINT);
-      }
-
       // Page button on a search result -> just that page, as a one-page PDF or a JPEG.
       if (btnId.startsWith("page|")) return await sendPageTap(from, btnId);
 
@@ -1345,11 +986,11 @@ async function handleIncomingMessage(value, message) {
       if (btnId.startsWith("units|")) {
         const system = btnId.split("|")[1] === "imp" ? "imp" : "si";
         const st = store.getCtx(from, "unitList");
-        if (!st) {
-          return await sendText(from,
-            "That list has expired — just ask for it again (e.g. *list of split units* or *APMR list*).");
+        // a list that expired, or one saved by an older version that this one cannot draw
+        if (!st || !(await sendListWithToggle(from, st.keys, system))) {
+          return await sendText(from, "That list has expired — just ask for it again (e.g. *APMR list*).");
         }
-        return await sendListWithToggle(from, st.kind, st.keys, system);
+        return;
       }
 
       const action = handleButtonTap(btnId);
@@ -1456,7 +1097,7 @@ async function handleIncomingMessage(value, message) {
     // isMenuTrigger only matches whole-message greetings/menu words, so it never
     // hijacks a real request like "hi can I get the APMR catalogue".
     if (message.type === "text" && isMenuTrigger(message.text.body)) {
-      store.clearAll(from, RESULT_KEYS); // saved results outlive a "menu"; they last 30 days
+      store.clearAll(from);
       console.log(`📋 welcome menu (global escape) -> ${from}`);
       return await showWelcomeMenu(from, profileName);
     }
@@ -1472,10 +1113,10 @@ async function handleIncomingMessage(value, message) {
       // No active flow -> fall through (smallTalkReply gives the friendly bye).
     }
 
-    // ── Active guided flow (split / mtz) ─────────────
+    // ── Active guided flow (mtz) ─────────────
     const flow = store.getFlow(from);
     if (flow?.expired) {
-      const names = { split: "Split Selection", mtz: "MTZ Selection" };
+      const names = { mtz: "MTZ Selection" };
       return await sendText(from, `⏰ ${names[flow.type] || "Your"} session timed out. Type *${names[flow.type] || "menu"}* to start again.`);
     }
     if (flow) store.touchFlow(from);
@@ -1519,25 +1160,6 @@ async function handleIncomingMessage(value, message) {
 
         return await sendManyFiles(from, chosen);
       }
-    }
-
-    // ── Split PDF print request ───────────────────────
-    const printNow = printTarget(from, text.trim());
-    if (printNow) return await printNow(from);
-
-    // ── Split unit multi-step session ──────────────────────────
-    if (flow?.type === "split") {
-      return await handleSplitStep(from, flow.data, text);
-    }
-    // Trigger: exact phrase "Split Selection"
-    if (/^split\s+selection$/i.test(text.trim())) {
-      store.startFlow(from, "split", { step: "brand" });
-      return await sendText(from,
-        "🧊 *Split Unit Selector*\n\n" +
-        "*Step 1/3:* Choose brand:\n" +
-        "1. Toshiba\n2. TCL\n3. SKM\n\n" +
-        "_(Type *cancel* anytime to exit)_"
-      );
     }
 
     // ── MTZ multi-step session ─────────────────────────────────
@@ -1708,23 +1330,13 @@ async function handleIncomingMessage(value, message) {
     // route that can produce a wrong guess gets the escape hatch for free.
     store.setCtx(from, "lastquery", text, 30 * 60 * 1000);
 
-    // ── List split units ─────────────────────────────────────────
-    // "list of split units", "show toshiba splits", "list hi-wall splits" ->
-    // every split model with total cooling at T1/T3 + EER. Checked before the
-    // packaged-unit list and the AI gate so it never hits the API.
-    const splitListReq = parseSplitListRequest(text);
-    if (splitListReq) {
-      console.log(`📋 split list: ${splitListReq.join(", ")}`);
-      return await sendListWithToggle(from, "split", splitListReq, "si");
-    }
-
     // ── List units in a series ───────────────────────────────────
     // "give me list of APMR units", "list all DMP models", "what chillers do
     // you have" -> every model in that series with capacity + airflow.
     const listReq = parseListRequest(text);
     if (listReq) {
       console.log(`📋 unit list: ${listReq.join(", ")}`);
-      return await sendListWithToggle(from, "product", listReq, "imp");
+      return await sendListWithToggle(from, listReq, "imp");
     }
 
     // ── List request for a series with no spec table on file ─────

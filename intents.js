@@ -7,7 +7,6 @@
 const { parseDatasheetRequest, buildSelectionInteractive, parseSeriesRequest, interpretCode } = require("./products.js");
 const { routeChillerText } = require("./chillers.js");
 const { parseListRequest } = require("./product-facts.js");
-const { parseSplitListRequest } = require("./split-engine.js");
 const { isMenuTrigger, smallTalkReply } = require("./menu.js");
 const { isSearchAllTrigger, isAiSearchTrigger } = require("./lib/broad-search.js");
 const { libraryQuery } = require("./lib/answers.js");
@@ -22,15 +21,12 @@ const INTENTS = [
   { name: "button-tap",         match: (t) => t.startsWith("btn:") },
   { name: "numbered-reply",     match: (t) => /^\d+$/.test(t) },
   { name: "menu",               match: (t) => isMenuTrigger(t) },
-  { name: "split-selection",    match: (t) => /^split\s+selection$/i.test(t) },
   { name: "mtz-selection",      match: (t) => /^mtz\s+selection\b/i.test(t) },
-  { name: "print",              match: (t) => /^(print|datasheet)$/i.test(t) },
   { name: "admin-stats",        match: (t) => /^stats$/i.test(t) },
   { name: "small-talk",         match: (t) => !!smallTalkReply(t) },
   { name: "search-all",         match: (t) => isSearchAllTrigger(t) },
   { name: "ai-search",          match: (t) => isAiSearchTrigger(t) },
   { name: "library-search",    match: (t) => !!libraryQuery(t) },
-  { name: "split-list",         match: safe(parseSplitListRequest) },
   { name: "list-units",         match: safe(parseListRequest) },
   { name: "question",           match: (t) => !MENTIONS_DOC.test(t) && (/\?/.test(t) || QUESTION_WORDS.test(t)) },
   { name: "chiller",            match: safe(routeChillerText) },

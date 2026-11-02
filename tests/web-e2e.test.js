@@ -103,7 +103,7 @@ test("everyday messages that do get an answer don't also get the catch-all", asy
 // ---- what older versions left behind ----
 // Messages saved by features that are gone must still be served (the screen shows
 // them as a short note), and taps on their old buttons get the usual reply.
-const OLD_TAPS = ["rows-ok"];
+const OLD_TAPS = ["rows-ok", "print", "print|1767225600000"];
 
 test("old result messages are still served, and an old tap on a removed button gets the no-longer-available reply", async () => {
   await settle();
