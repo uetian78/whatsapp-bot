@@ -34,7 +34,6 @@ const { getDb, dataDir } = require("./lib/db.js");
 const { createConversations } = require("./lib/conversations.js");
 const { createWebChannel } = require("./lib/channel-web.js");
 const { createWebRoutes, webErrorHandler } = require("./web/routes.js");
-const { createUploadStore } = require("./web/uploads.js");
 const { getPageIndex, createUploadHandler, uploadLimitBytes } = require("./lib/page-index.js");
 const { findAccount, runWithAccount, currentAccount } = require("./lib/accounts.js");
 const { loadSheet } = require("./lib/control-sheet.js");
@@ -64,7 +63,7 @@ const { createNumberHealth, metaEventLines, CHECK_EVERY_MS } = require("./lib/nu
 // is handling the message. `wa` stays for the WhatsApp-only parts: the Bot
 // Sender router and the number-health check.
 const {
-  runWithChannel, currentChannel, showTyping, downloadMedia,
+  runWithChannel, currentChannel, showTyping,
   sendText, sendLongText, sendButtons, sendList, sendDocument, sendDriveFile, sendPdfBuffer, sendPageHits,
 } = require("./lib/channel.js");
 const { answerFromLibrary, formatAnswer, pageHitsForSources, libraryQuery, searchStatusLine } = require("./lib/answers.js");
@@ -1250,15 +1249,14 @@ async function showWelcomeMenu(from, profileName) {
 // What an old tap gets when the option it belonged to has gone.
 const MSG_OPTION_GONE = "That option is no longer available. Send me what you're looking for, or type *menu* to see what I can do.";
 
-// The web chat's own parts: conversations, the channel that writes to them, and
-// the uploads waiting to be read. Made on first use, so requiring this file
-// opens no database. Both share the app's one database.
-const webUploads = createUploadStore();
+// The web chat's own parts: conversations and the channel that writes to them.
+// Made on first use, so requiring this file opens no database. Both share the
+// app's one database.
 let webMade = null;
 function webParts() {
   if (!webMade) {
     const conversations = createConversations({ db: getDb() });
-    webMade = { conversations, channel: createWebChannel({ conversations, dataDir, uploads: webUploads }) };
+    webMade = { conversations, channel: createWebChannel({ conversations, dataDir }) };
   }
   return webMade;
 }
@@ -2105,11 +2103,11 @@ function deliverWelcome(account) {
     }
   })));
 }
-// The chat API, files, uploads and share links (web/routes.js). The router goes
+// The chat API, files and share links (web/routes.js). The router goes
 // after mountWeb, so everything under /app is already behind the sign-in check;
 // /s/<token> is outside /app and public by design.
 app.use(createWebRoutes({
-  deliverMessage, conversations: webConversations, webChannel, uploads: webUploads,
+  deliverMessage, conversations: webConversations, webChannel,
   sendWelcome: deliverWelcome,
   getFile: async (id) => {
     if (!process.env.DRIVE_FOLDER_ID) return null;

@@ -46,11 +46,6 @@ function stubModule(id, exports) {
   return resolved;
 }
 
-const FAKE_MEDIA = {
-  "media-image": { buffer: Buffer.from("fake image bytes"), mediaType: "image/jpeg" },
-  "media-document": { buffer: Buffer.from("%PDF-1.4 fake document bytes"), mediaType: "application/pdf" },
-};
-
 function createHarness(deliver) {
   if (typeof deliver !== "function") throw new Error("createHarness needs a deliver(value, message) function");
   purgeProjectModules();
@@ -211,11 +206,6 @@ function createHarness(deliver) {
     sendDriveFile: async (to, file) => { record(to, { kind: "file", file: file.name }); },
     uploadMedia: async ({ filename }) => `media:${filename}`,
     uploadMediaBuffer: async (buffer, filename) => `media:${filename}`,
-    downloadWhatsAppMedia: async (id) => {
-      const m = FAKE_MEDIA[id];
-      if (!m) throw new Error(`unknown fake media ${id}`);
-      return { buffer: Buffer.from(m.buffer), mediaType: m.mediaType };
-    },
     markReadWithTyping: async () => {},
   });
 

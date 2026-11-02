@@ -1,12 +1,11 @@
 // ============================================================
-//  The web app's API: messages, uploads, files and share links.
+//  The web app's API: messages, files and share links.
 //
 //  Mount the router at the root, after mountWeb (web/auth.js): everything under
 //  /app is then behind the sign-in check, and /s/<token> (public) is not.
 //
 //    GET  /app/api/messages?after=<seq>   { messages, busy }
 //    POST /app/api/messages               { text } | { tapId, tapTitle, data? } -> 202 { seq }
-//    POST /app/api/upload?name=<name>     raw body -> 202 { seq }
 //    GET  /app/files/<ref>[?inline=1]     drive:<id> | gen:<uuid>, streamed
 //    POST /app/api/share-link             { ref } -> { url }
 //    GET  /s/<token>                      the shared file, no sign-in
@@ -23,7 +22,6 @@ const path = require("node:path");
 const { pipeline } = require("node:stream");
 const express = require("express");
 const { sameSiteRequest, makeShareToken, verifyShareToken, cleanSecret } = require("./auth.js");
-const { cleanFileName, classifyUpload, readLimited, drain, MAX_BYTES } = require("./uploads.js");
 
 const PUBLIC_DIR = path.join(__dirname, "public");
 const MAX_TEXT = 4000;
@@ -33,14 +31,11 @@ const PAGE_SIZE = 200;
 const DRIVE_ID = /^[A-Za-z0-9_-]{1,100}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-const MSG_TOO_LARGE = "That file is too large. The limit is 32 MB.";
-const MSG_BAD_TYPE = "Send a photo, PDF or Excel file.";
 const MSG_NO_ANSWER = "I couldn't do anything with that. Type *menu* to see what I can do, or tell me what you're looking for.";
 
 // Every response from /app and /s: same-origin only, no inline script, no
-// plugins, no framing. Pictures may also come from blob: and data: so the page
-// can preview what is being sent.
-const CSP = "default-src 'self'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
+// plugins, no framing.
+const CSP = "default-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
 
 // ---- file names and types ----
 const MIME_BY_EXT = {
@@ -104,9 +99,9 @@ function webErrorHandler(err, req, res, next) {
 const wrap = (fn) => (req, res, next) => Promise.resolve(fn(req, res, next)).catch(next);
 
 function createWebRoutes({
-  deliverMessage, conversations, webChannel, getFile, uploads,
+  deliverMessage, conversations, webChannel, getFile,
   streamDrive, streamExport, sendWelcome,
-  secret: rawSecret, publicUrl, now, maxUploadBytes = MAX_BYTES,
+  secret: rawSecret, publicUrl, now,
 }) {
   const secret = cleanSecret(rawSecret);
   const router = express.Router();
@@ -234,44 +229,6 @@ function createWebRoutes({
     res.status(202).json({ seq, busy: true });
   }));
 
-  // ---- uploads ----
-  // The body is the file itself. A refusal waits for the rest of the body to go
-  // by (discarded, up to twice the limit) before answering: a client that is still
-  // sending when the reply arrives sees the connection reset and loses the reply.
-  // The connection is closed afterwards, since the body may not have been read in full.
-  const uploading = new Set(); // people whose file is still arriving: one at a time, and one buffer each
-  const refuseUpload = async (req, res, status, error) => {
-    await drain(req, maxUploadBytes * 2);
-    return res.set("Connection", "close").status(status).json({ error });
-  };
-
-  router.post("/app/api/upload", sameSite, wrap(async (req, res) => {
-    const account = req.account;
-    const number = account.number;
-    if (typeof req.query.name !== "string" || !req.query.name.trim()) return refuseUpload(req, res, 400, "Name the file.");
-    const name = cleanFileName(req.query.name);
-    // One file at a time: a second would replace the first while its message may still be waiting.
-    if (uploads.has(number) || uploading.has(number)) return refuseUpload(req, res, 409, "Wait for the last file to finish first.");
-
-    let body;
-    uploading.add(number);
-    try { body = await readLimited(req, maxUploadBytes); }
-    catch { return; } // the client went away; nobody to answer
-    finally { uploading.delete(number); }
-    if (body.tooLarge) return refuseUpload(req, res, 413, MSG_TOO_LARGE);
-    const kind = classifyUpload(name, body.buffer);
-    if (!kind) return res.status(415).json({ error: MSG_BAD_TYPE });
-
-    const id = uploads.put(number, { buffer: body.buffer, mediaType: kind.mime, name });
-    const base = baseMessage(number);
-    const message = kind.kind === "image"
-      ? { ...base, type: "image", image: { id, mime_type: kind.mime } }
-      : { ...base, type: "document", document: { id, filename: name, mime_type: kind.mime } };
-    const seq = conversations.append(number, "user", "text", name);
-    handle(account, message, seq, () => uploads.remove(id));
-    res.status(202).json({ seq, busy: true });
-  }));
-
   // ---- files ----
   // A ref the person (or a share token's owner) may read, as { drive: file } or
   // { gen: { path, name } }; null for anything else, so every refusal looks alike.
@@ -379,4 +336,4 @@ function createWebRoutes({
   return router;
 }
 
-module.exports = { createWebRoutes, contentDisposition, webErrorHandler, CSP, MSG_TOO_LARGE, MSG_BAD_TYPE, MSG_NO_ANSWER };
+module.exports = { createWebRoutes, contentDisposition, webErrorHandler, CSP, MSG_NO_ANSWER };

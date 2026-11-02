@@ -146,8 +146,6 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .text strong { font-weight: 650; }
 .time { display: block; margin-top: 2px; text-align: right; font-size: 0.68rem; color: var(--muted); line-height: 1.2; }
 .msg.user .time { color: inherit; opacity: 0.65; }
-.msg .attach-name { display: flex; align-items: center; gap: 8px; }
-.msg .thumb-sent { display: block; max-width: 100%; max-height: 220px; border-radius: 10px; margin-bottom: 6px; }
 
 /* Typing */
 .typing { align-self: flex-start; display: inline-flex; align-items: center; gap: 8px; padding: 8px 14px; color: var(--muted); }
@@ -291,7 +289,6 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
   background: var(--bg);
   border-top: 1px solid var(--line);
 }
-.composer .icon-btn { color: var(--muted); }
 #text {
   flex: 1;
   min-width: 0;

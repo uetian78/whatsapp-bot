@@ -25,7 +25,7 @@ function make(extra = {}) {
 test("the adapter has the contract's methods", () => {
   const { channel, done } = make();
   assert.equal(channel.name, "web");
-  for (const m of ["typing", "downloadMedia", "text", "longText", "buttons", "list", "driveFile", "generatedFile", "pageHits"]) {
+  for (const m of ["typing", "text", "longText", "buttons", "list", "driveFile", "generatedFile", "pageHits"]) {
     assert.equal(typeof channel[m], "function", m);
   }
   done();
@@ -222,21 +222,6 @@ test("generated files are kept under GENERATED_MAX_MB, oldest first", async () =
 test("cleanupGenerated with no generated folder does nothing", () => {
   const { channel, done } = make();
   assert.doesNotThrow(() => channel.cleanupGenerated());
-  done();
-});
-
-test("downloadMedia returns the uploaded bytes for that upload id", async () => {
-  const bytes = Buffer.from("photo");
-  const uploads = { get: (id) => (id === "up1" ? { buffer: bytes, mediaType: "image/jpeg" } : null) };
-  const { channel, done } = make({ uploads });
-  assert.deepEqual(await channel.downloadMedia("up1"), { buffer: bytes, mediaType: "image/jpeg" });
-  await assert.rejects(() => channel.downloadMedia("nope"), /upload/i);
-  done();
-});
-
-test("downloadMedia rejects clearly when there is no upload store", async () => {
-  const { channel, done } = make();
-  await assert.rejects(() => channel.downloadMedia("up1"), /upload/i);
   done();
 });
 

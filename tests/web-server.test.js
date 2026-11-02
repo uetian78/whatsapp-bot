@@ -19,7 +19,6 @@ function setup(name = "web") {
   const adapter = {
     name,
     typing: async () => {},
-    downloadMedia: async () => { throw new Error("no media"); },
     text: async (to, body) => { sent.push({ kind: "text", body }); return true; },
     longText: async (to, body) => { sent.push({ kind: "text", body }); return true; },
     buttons: async (to, text) => { sent.push({ kind: "buttons", body: text }); return true; },

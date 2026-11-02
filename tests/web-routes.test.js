@@ -11,7 +11,6 @@ const { createConversations } = require("../lib/conversations.js");
 const { createWebChannel } = require("../lib/channel-web.js");
 const { mountWeb, makeSession, makeShareToken, verifyShareToken, makeInviteToken } = require("../web/auth.js");
 const { createWebRoutes, contentDisposition, webErrorHandler } = require("../web/routes.js");
-const { createUploadStore } = require("../web/uploads.js");
 
 const SECRET = "test-secret-not-real-0000000000001";
 const OTHER_SECRET = "test-secret-not-real-0000000000002";
@@ -20,9 +19,7 @@ const DAY = 24 * 60 * 60 * 1000;
 const MB = 1024 * 1024;
 const SARA = "97455551111";
 const OMAR = "97455552222";
-const CSP = "default-src 'self'; img-src 'self' blob: data:; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
-const TOO_LARGE = "That file is too large. The limit is 32 MB.";
-const BAD_TYPE = "Send a photo, PDF or Excel file.";
+const CSP = "default-src 'self'; img-src 'self'; connect-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'";
 
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64, 1)]);
 const PNG = Buffer.concat([Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]), Buffer.alloc(32, 2)]);
@@ -59,8 +56,7 @@ async function serve(o = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hvac-routes-"));
   const db = openDb(":memory:");
   const conversations = createConversations({ db, now });
-  const uploads = o.uploads || createUploadStore({ now });
-  const webChannel = createWebChannel({ conversations, dataDir: dir, now, uploads, crm: { logOutbound() {} } });
+  const webChannel = createWebChannel({ conversations, dataDir: dir, now, crm: { logOutbound() {} } });
   const delivered = [];
   // The default handler answers, as the real one always does; a test that wants silence passes its own.
   const deliverMessage = o.deliverMessage || (async (value, message, adapter) => { delivered.push({ value, message, adapter }); await webChannel.text(message.from, "ok"); });
@@ -77,7 +73,7 @@ async function serve(o = {}) {
   app.use(express.json());
   mountWeb(app, { secret: SECRET, getAccounts: async () => accounts(), now });
   app.use(createWebRoutes({
-    deliverMessage, conversations, webChannel, uploads, sendWelcome, now,
+    deliverMessage, conversations, webChannel, sendWelcome, now,
     secret: SECRET,
     publicUrl: "https://bot.example.test/",
     getFile: o.getFile || (async (id) => library.get(id) || null),
@@ -93,11 +89,8 @@ async function serve(o = {}) {
     method: "POST", headers: { "content-type": "application/json", ...as(n), ...extra }, body: JSON.stringify(body),
   });
   const get = (p, n = SARA) => call(p, { headers: as(n) });
-  const upload = (name, body, n = SARA, extra = {}) => call(`/app/api/upload?name=${encodeURIComponent(name)}`, {
-    method: "POST", headers: { "content-type": "application/octet-stream", ...as(n), ...extra }, body,
-  });
   return {
-    base, call, get, json, upload, as, clock, conversations, webChannel, uploads, delivered, welcomes, calls, library, dir, db,
+    base, call, get, json, as, clock, conversations, webChannel, delivered, welcomes, calls, library, dir, db,
     close: () => new Promise((r) => { server.closeAllConnections?.(); server.close(() => { fs.rmSync(dir, { recursive: true, force: true }); r(); }); }),
   };
 }
@@ -368,196 +361,11 @@ test("/app with no session shows: Ask for your personal link to sign in.", () =>
   const page = await s.call("/app/", { headers: { accept: "text/html" } });
   assert.equal(page.status, 401);
   assert.match(await page.text(), /Ask for your personal link to sign in\./);
-  for (const [p, opts] of [["/app/api/messages", {}], ["/app/files/drive%3Aabc", {}], ["/app/api/share-link", { method: "POST" }], ["/app/api/upload?name=a.pdf", { method: "POST" }]]) {
+  for (const [p, opts] of [["/app/api/messages", {}], ["/app/files/drive%3Aabc", {}], ["/app/api/share-link", { method: "POST" }]]) {
     const r = await s.call(p, opts);
     assert.equal(r.status, 401, p);
     assert.deepEqual(await r.json(), { error: "Ask for your personal link to sign in." });
   }
-}));
-
-// ---- uploads ----
-test("a 33 MB upload gets 413 with: That file is too large. The limit is 32 MB.", () => withServer({}, async (s) => {
-  const r = await s.upload("big.pdf", Buffer.alloc(33 * MB, 0x25));
-  assert.equal(r.status, 413);
-  assert.deepEqual(await r.json(), { error: TOO_LARGE });
-  assert.equal(s.delivered.length, 0);
-  assert.equal(s.conversations.since(SARA, 0).length, 0);
-  assert.equal(s.uploads.has(SARA), false);
-}));
-
-test("an oversized upload with no Content-Length (chunked) is also stopped at the limit", () => withServer({}, async (s) => {
-  let i = 0;
-  const body = new ReadableStream({ pull(c) { if (i++ < 34) c.enqueue(new Uint8Array(MB)); else c.close(); } });
-  const r = await s.call("/app/api/upload?name=big.pdf", { method: "POST", headers: { "content-type": "application/pdf", ...s.as() }, body, duplex: "half" });
-  assert.equal(r.status, 413);
-  assert.deepEqual(await r.json(), { error: TOO_LARGE });
-  assert.equal(s.uploads.has(SARA), false);
-}));
-
-test("a file of exactly 32 MB is accepted", () => withServer({}, async (s) => {
-  const big = Buffer.concat([PDF, Buffer.alloc(32 * MB - PDF.length)]);
-  assert.equal(big.length, 32 * MB);
-  const r = await s.upload("max.pdf", big);
-  assert.equal(r.status, 202);
-}));
-
-test("a .zip or unconverted HEIC upload gets 415 with: Send a photo, PDF or Excel file.", () => withServer({}, async (s) => {
-  for (const [name, bytes] of [["notes.zip", ZIP], ["photo.heic", HEIC], ["photo.HEIF", HEIC], ["a.docx", ZIP], ["noext", PDF], ["a.html", Buffer.from("<html>")],
-    ["a.svg", Buffer.from("<svg>")], ["a.exe", Buffer.from("MZ")]]) {
-    const r = await s.upload(name, bytes);
-    assert.equal(r.status, 415, name);
-    assert.deepEqual(await r.json(), { error: BAD_TYPE });
-  }
-  assert.equal(s.delivered.length, 0);
-}));
-
-test("the type must match the bytes: wrong magic numbers are refused", () => withServer({}, async (s) => {
-  const cases = [
-    ["a.pdf", JPEG], ["a.jpg", PDF], ["a.png", JPEG], ["a.webp", PNG], ["a.xlsx", ZIP], ["a.xlsx", PDF],
-    ["a.xls", XLSX], ["a.csv", Buffer.from([0x61, 0x2c, 0x00, 0x62])], ["a.jpeg", HEIC], ["a.pdf", Buffer.from("")],
-  ];
-  for (const [name, bytes] of cases) {
-    const r = await s.upload(name, bytes.length ? bytes : Buffer.alloc(0));
-    assert.equal(r.status, 415, name);
-  }
-}));
-
-test("a photo goes to deliverMessage as an image, a PDF or sheet as a document, and the upload id reaches downloadMedia", async () => {
-  const fetched = [];
-  const deliverMessage = async (value, message, adapter) => {
-    const id = (message.image || message.document).id;
-    fetched.push({ message, got: await adapter.downloadMedia(id) });
-  };
-  await withServer({ deliverMessage }, async (s) => {
-    const cases = [
-      ["Floor plan.JPG", JPEG, "image", "image/jpeg"], ["a.jpeg", JPEG, "image", "image/jpeg"], ["a.png", PNG, "image", "image/png"], ["a.webp", WEBP, "image", "image/webp"],
-      ["Schedule.pdf", PDF, "document", "application/pdf"],
-      ["rows.xlsx", XLSX, "document", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"],
-      ["old.xls", XLS, "document", "application/vnd.ms-excel"],
-      ["rows.csv", Buffer.from("a,b\n1,2\n"), "document", "text/csv"],
-    ];
-    for (const [name, bytes, type, mime] of cases) {
-      const r = await s.upload(name, bytes);
-      assert.equal(r.status, 202, name);
-      assert.ok(await until(() => fetched.length === 1 && s.uploads.has(SARA) === false), `${name} handled and removed`);
-      const { message, got } = fetched.pop();
-      assert.equal(message.from, SARA);
-      assert.equal(message.type, type);
-      assert.match(message.id, /^web\./);
-      const media = message[type];
-      assert.equal(media.mime_type, mime);
-      assert.match(media.id, /^[0-9a-f-]{36}$/);
-      if (type === "document") assert.equal(media.filename, name);
-      assert.ok(Buffer.isBuffer(got.buffer) && got.buffer.equals(bytes), "downloadMedia returned the uploaded bytes");
-      assert.equal(got.mediaType, mime);
-    }
-    // the person's message is the file name
-    assert.deepEqual(s.conversations.since(SARA, 0).filter((m) => m.role === "user").map((m) => m.body), cases.map((c) => c[0]));
-  });
-});
-
-test("the uploaded file is gone from memory once the message is handled, and a stale id is not found", async () => {
-  let id;
-  await withServer({ deliverMessage: async (v, m) => { id = m.document.id; } }, async (s) => {
-    await s.upload("a.pdf", PDF);
-    assert.ok(await until(() => id && !s.uploads.has(SARA)));
-    assert.equal(s.uploads.get(id), null);
-    await assert.rejects(() => s.webChannel.downloadMedia(id), /not found/i);
-  });
-});
-
-test("the file is kept while the message is still being handled", async () => {
-  let release, id;
-  const gate = new Promise((r) => { release = r; });
-  await withServer({ deliverMessage: async (v, m) => { id = m.document.id; await gate; } }, async (s) => {
-    await s.upload("a.pdf", PDF);
-    await until(() => id);
-    assert.equal(s.uploads.has(SARA), true);
-    assert.ok(s.uploads.get(id));
-    // a second file while the first is still waiting is refused, so a queued message never loses its file
-    const second = await s.upload("b.pdf", PDF);
-    assert.equal(second.status, 409);
-    assert.ok(s.uploads.get(id), "the first upload is untouched");
-    release();
-    assert.ok(await until(() => !s.uploads.has(SARA)));
-    assert.equal((await s.upload("b.pdf", PDF)).status, 202);
-  });
-});
-
-test("two files arriving at once from one person: one is taken, the other refused", () => withServer({}, async (s) => {
-  const big = Buffer.concat([PDF, Buffer.alloc(8 * MB)]);
-  const results = await Promise.all([s.upload("a.pdf", big), s.upload("b.pdf", big)]);
-  assert.deepEqual(results.map((r) => r.status).sort(), [202, 409]);
-  assert.equal(s.delivered.length, 1);
-}));
-
-test("uploads keep to one per person; another person has their own", async () => {
-  const gate = new Promise(() => {});
-  await withServer({ deliverMessage: () => gate }, async (s) => {
-    assert.equal((await s.upload("a.pdf", PDF, SARA)).status, 202);
-    assert.equal((await s.upload("a.pdf", PDF, OMAR)).status, 202);
-    assert.equal(s.uploads.has(SARA), true);
-    assert.equal(s.uploads.has(OMAR), true);
-  });
-});
-
-test("an upload kept for 15 minutes is dropped after that, and the person can send again", async () => {
-  const gate = new Promise(() => {});
-  let id;
-  await withServer({ deliverMessage: async (v, m) => { id = m.document.id; await gate; } }, async (s) => {
-    assert.equal((await s.upload("a.pdf", PDF)).status, 202);
-    await until(() => id);
-    s.clock.t += 14 * 60 * 1000;
-    assert.ok(s.uploads.get(id));
-    s.clock.t += 61 * 1000;
-    assert.equal(s.uploads.get(id), null);
-    assert.equal(s.uploads.has(SARA), false);
-    assert.equal((await s.upload("c.pdf", PDF)).status, 202);
-  });
-});
-
-test("the upload store: put, get, remove, one per person, expiry", () => {
-  let t = 1000;
-  const store = createUploadStore({ now: () => t });
-  const id = store.put("u1", { buffer: Buffer.from("x"), mediaType: "application/pdf", name: "a.pdf" });
-  assert.deepEqual(store.get(id), { buffer: Buffer.from("x"), mediaType: "application/pdf" });
-  assert.equal(store.has("u1"), true);
-  assert.equal(store.has("u2"), false);
-  store.remove(id);
-  assert.equal(store.get(id), null);
-  assert.equal(store.has("u1"), false);
-  const a = store.put("u1", { buffer: Buffer.from("1"), mediaType: "image/png", name: "a.png" });
-  t += 15 * 60 * 1000 - 1;
-  assert.ok(store.get(a));
-  t += 2;
-  assert.equal(store.get(a), null);
-  assert.equal(store.get("nope"), null);
-  assert.equal(store.get(undefined), null);
-  store.remove("nope");
-});
-
-test("a hostile file name is cleaned before it is shown or passed on", () => withServer({}, async (s) => {
-  const name = "..\\..\\evil/\u0000na\nme<>\".pdf";
-  const r = await s.upload(name, PDF);
-  assert.equal(r.status, 202);
-  await until(() => s.delivered.length === 1);
-  const fn = s.delivered[0].message.document.filename;
-  assert.ok(!/[\\/\u0000-\u001f]/.test(fn), JSON.stringify(fn));
-  assert.ok(fn.endsWith(".pdf"));
-  assert.equal(s.conversations.since(SARA, 0)[0].body, fn);
-  assert.ok(fn.length <= 120);
-}));
-
-test("an upload from another site is refused", () => withServer({}, async (s) => {
-  const r = await s.upload("a.pdf", PDF, SARA, { "sec-fetch-site": "cross-site" });
-  assert.equal(r.status, 403);
-  assert.equal(s.uploads.has(SARA), false);
-  assert.equal((await s.upload("a.pdf", PDF, SARA, { "sec-fetch-site": "same-origin" })).status, 202);
-}));
-
-test("upload with no name or no body is a 400", () => withServer({}, async (s) => {
-  const r = await s.call("/app/api/upload", { method: "POST", headers: { "content-type": "application/pdf", ...s.as() }, body: PDF });
-  assert.equal(r.status, 400);
 }));
 
 // ---- files ----
@@ -811,7 +619,7 @@ test("share-link says so when PUBLIC_URL is not set", async () => {
   const app = express();
   app.use(express.json());
   mountWeb(app, { secret: SECRET, getAccounts: async () => accounts(), now: clock });
-  app.use(createWebRoutes({ deliverMessage: async () => {}, conversations, webChannel: {}, getFile: async () => ({ id: "f", name: "a.pdf" }), secret: SECRET, now: clock, uploads: createUploadStore({ now: clock }) }));
+  app.use(createWebRoutes({ deliverMessage: async () => {}, conversations, webChannel: {}, getFile: async () => ({ id: "f", name: "a.pdf" }), secret: SECRET, now: clock }));
   const server = await new Promise((resolve) => { const x = app.listen(0, () => resolve(x)); });
   try {
     const r = await fetch(`http://127.0.0.1:${server.address().port}/app/api/share-link`, { method: "POST", headers: { "content-type": "application/json", cookie: cookieFor() }, body: JSON.stringify({ ref: "drive:f" }) });
@@ -924,7 +732,7 @@ test("with no usable WEB_SECRET the share route is shut too", async () => {
   const app = express();
   mountWeb(app, { secret: "short", getAccounts: async () => accounts(), now: clock });
   const db = openDb(":memory:");
-  app.use(createWebRoutes({ deliverMessage: async () => {}, conversations: createConversations({ db, now: clock }), webChannel: {}, getFile: async () => ({ id: "f", name: "a.pdf" }), secret: "short", now: clock, uploads: createUploadStore({ now: clock }) }));
+  app.use(createWebRoutes({ deliverMessage: async () => {}, conversations: createConversations({ db, now: clock }), webChannel: {}, getFile: async () => ({ id: "f", name: "a.pdf" }), secret: "short", now: clock }));
   const server = await new Promise((resolve) => { const x = app.listen(0, () => resolve(x)); });
   try {
     const r = await fetch(`http://127.0.0.1:${server.address().port}/s/anything`);
@@ -934,7 +742,7 @@ test("with no usable WEB_SECRET the share route is shut too", async () => {
 
 test("the web routes make no database or network call when created", () => {
   const clock = () => T0;
-  assert.doesNotThrow(() => createWebRoutes({ deliverMessage: async () => {}, conversations: {}, webChannel: {}, getFile: async () => null, secret: SECRET, now: clock, uploads: createUploadStore({ now: clock }) }));
+  assert.doesNotThrow(() => createWebRoutes({ deliverMessage: async () => {}, conversations: {}, webChannel: {}, getFile: async () => null, secret: SECRET, now: clock }));
 });
 
 test("a Drive file bigger than its saved library size is sent in full, by /files and by a share link", () => withServer({}, async (s) => {
@@ -992,6 +800,16 @@ test("the files behind the sign-in: nobody gets styles, scripts or the manifest 
   for (const p of ["/app/app.js", "/app/render.js", "/app/styles.css", "/app/manifest.webmanifest", "/app/icon-192.png"]) {
     assert.equal((await s.call(p)).status, 401, p);
   }
+}));
+
+test("the screen has no attach button or file input, and there is no upload route", () => withServer({}, async (s) => {
+  const page = await (await s.get("/app/")).text();
+  assert.match(page, /id="composer"/);
+  assert.doesNotMatch(page, /id="attach"|type="file"|Attach a photo/);
+  const script = await (await s.get("/app/app.js")).text();
+  assert.doesNotMatch(script, /api\/upload|attachFile|createObjectURL/);
+  const up = await s.call("/app/api/upload?name=a.pdf", { method: "POST", headers: { "content-type": "application/pdf", ...s.as() }, body: Buffer.from("%PDF-1.7\n") });
+  assert.equal(up.status, 404);
 }));
 
 test("a bare /app goes to /app/, files outside web/public are not reachable, and there is no directory listing", () => withServer({}, async (s) => {

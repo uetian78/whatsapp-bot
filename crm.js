@@ -38,7 +38,7 @@ function init({ getSheets }) {
 
 // ── Per-message pending records (collect outbounds, then commit) ──
 const pending = {};   // { [from]: { ts, from, name, text, intent, responses, files, timer } }
-const COMMIT_AFTER_MS = 8000; // give slow flows (uploads) time to attach replies
+const COMMIT_AFTER_MS = 8000; // give a slow reply time to attach
 
 function logInbound({ from, name, text }) {
   try {

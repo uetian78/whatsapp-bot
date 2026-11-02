@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const {
-  renderRich, imageTargetSize, shareMode, fileRefUrl, formatSize, fileKind, shareOutcome, prefetchWanted, clipTitle, isRetiredKind, OLD_RESULT_NOTE, SHARE_FILE_MAX,
+  renderRich, shareMode, fileRefUrl, formatSize, fileKind, shareOutcome, prefetchWanted, clipTitle, isRetiredKind, OLD_RESULT_NOTE, SHARE_FILE_MAX,
 } = require("../web/public/render.js");
 
 test("HTML is escaped", () => {
@@ -53,15 +53,6 @@ test("renderRich copes with non-strings and private-use characters", () => {
   assert.equal(renderRich(undefined), "");
   assert.equal(renderRich(12), "12");
   assert.doesNotMatch(renderRich("\uE000 0 \uE001 https://a.example"), /undefined/);
-});
-
-test("photos shrink to 2000 px on the long side and small ones stay", () => {
-  assert.deepEqual(imageTargetSize(4000, 3000), { w: 2000, h: 1500 });
-  assert.deepEqual(imageTargetSize(3000, 4000), { w: 1500, h: 2000 });
-  assert.deepEqual(imageTargetSize(800, 600), { w: 800, h: 600 });
-  assert.deepEqual(imageTargetSize(2000, 2000), { w: 2000, h: 2000 });
-  assert.deepEqual(imageTargetSize(5000, 100, 1000), { w: 1000, h: 20 });
-  assert.deepEqual(imageTargetSize(20000, 3), { w: 2000, h: 1 });
 });
 
 test("files over 25 MB or without file sharing use a link", () => {

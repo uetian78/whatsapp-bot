@@ -5,7 +5,7 @@ const channel = require("../lib/channel.js");
 const { whatsappAdapter } = require("../lib/channel-whatsapp.js");
 
 const {
-  runWithChannel, currentChannel, downloadMedia, showTyping,
+  runWithChannel, currentChannel, showTyping,
   sendText, sendLongText, sendButtons, sendList, sendDriveFile, sendPdfBuffer, sendDocument, sendPageHits,
 } = channel;
 
@@ -17,7 +17,7 @@ function recorder(name) {
     calls,
     adapter: {
       name,
-      typing: rec("typing"), downloadMedia: rec("downloadMedia"),
+      typing: rec("typing"),
       text: rec("text"), longText: rec("longText"), buttons: rec("buttons"), list: rec("list"),
       driveFile: rec("driveFile"), generatedFile: rec("generatedFile"), pageHits: rec("pageHits"),
     },
@@ -44,7 +44,6 @@ test("every facade function maps to its adapter method", async () => {
     await sendDocument("u", buf, "b.xlsx", "cap2");
     await sendPageHits("u", "Pages:", [{ fileId: "f1", name: "A.pdf", page: 2 }]);
     await showTyping("wamid.1");
-    await downloadMedia("media-1");
   });
   assert.deepEqual(r.calls, [
     ["longText", "u", "long"],
@@ -55,7 +54,6 @@ test("every facade function maps to its adapter method", async () => {
     ["generatedFile", "u", buf, "b.xlsx", "cap2"],
     ["pageHits", "u", "Pages:", [{ fileId: "f1", name: "A.pdf", page: 2 }]],
     ["typing", "wamid.1"],
-    ["downloadMedia", "media-1"],
   ]);
 });
 
@@ -85,7 +83,6 @@ test("sending outside a channel throws", async () => {
   await assert.rejects(sendPdfBuffer("u", Buffer.alloc(0), "a.pdf"), /channel/i);
   await assert.rejects(sendDocument("u", Buffer.alloc(0), "a.xlsx"), /channel/i);
   await assert.rejects(showTyping("m"), /channel/i);
-  await assert.rejects(downloadMedia("m"), /channel/i);
 });
 
 test("currentChannel is the adapter inside, null outside", async () => {
@@ -105,7 +102,7 @@ test("an adapter error reaches the caller", async () => {
 
 test("whatsappAdapter has the contract's shape", () => {
   assert.equal(whatsappAdapter.name, "whatsapp");
-  for (const m of ["typing", "downloadMedia", "text", "longText", "buttons", "list", "driveFile", "generatedFile", "pageHits"]) {
+  for (const m of ["typing", "text", "longText", "buttons", "list", "driveFile", "generatedFile", "pageHits"]) {
     assert.equal(typeof whatsappAdapter[m], "function", m);
   }
 });
@@ -119,7 +116,6 @@ test("whatsappAdapter forwards each send to wa and returns its result", async (t
     sendList: t.mock.method(wa, "sendList", async () => true),
     sendDriveFile: t.mock.method(wa, "sendDriveFile", async () => "drive-result"),
     markReadWithTyping: t.mock.method(wa, "markReadWithTyping", async () => undefined),
-    downloadWhatsAppMedia: t.mock.method(wa, "downloadWhatsAppMedia", async () => ({ buffer: Buffer.from("b"), mediaType: "image/jpeg" })),
   };
   await runWithChannel(whatsappAdapter, async () => {
     assert.equal(await sendText("u", "hi"), true);
@@ -128,7 +124,6 @@ test("whatsappAdapter forwards each send to wa and returns its result", async (t
     assert.equal(await sendList("u", "t", "L", [{ id: "1", title: "A" }]), true);
     assert.equal(await sendDriveFile("u", file), "drive-result"); // callers rely on this
     await showTyping("wamid.1");
-    assert.deepEqual(await downloadMedia("m1"), { buffer: Buffer.from("b"), mediaType: "image/jpeg" });
   });
   assert.deepEqual(mocks.sendText.mock.calls[0].arguments, ["u", "hi"]);
   assert.deepEqual(mocks.sendLongText.mock.calls[0].arguments, ["u", "long"]);
@@ -136,7 +131,6 @@ test("whatsappAdapter forwards each send to wa and returns its result", async (t
   assert.deepEqual(mocks.sendList.mock.calls[0].arguments, ["u", "t", "L", [{ id: "1", title: "A" }]]);
   assert.deepEqual(mocks.sendDriveFile.mock.calls[0].arguments, ["u", file]);
   assert.deepEqual(mocks.markReadWithTyping.mock.calls[0].arguments, ["wamid.1"]);
-  assert.deepEqual(mocks.downloadWhatsAppMedia.mock.calls[0].arguments, ["m1"]);
 });
 
 test("whatsappAdapter.pageHits sends the pages as one plain text message and says it did", async (t) => {

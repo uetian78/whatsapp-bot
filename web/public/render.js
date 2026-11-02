@@ -39,15 +39,6 @@
     return s.replace(/\uE000(\d+)\uE001/g, (m, i) => links[Number(i)] || "");
   }
 
-  // The size a photo is redrawn at: the long side is at most `max`.
-  function imageTargetSize(w, h, max = 2000) {
-    if (!(w > 0) || !(h > 0)) return { w: 0, h: 0 };
-    const long = Math.max(w, h);
-    if (long <= max) return { w, h };
-    const scale = max / long;
-    return { w: Math.max(1, Math.round(w * scale)), h: Math.max(1, Math.round(h * scale)) };
-  }
-
   // "file": share the PDF itself. "link": share a link. An unknown size never
   // counts as small, because the file would be fetched before anyone knows how big it is.
   function shareMode(size, canShareFiles) {
@@ -111,5 +102,5 @@
   const isRetiredKind = (kind) => RETIRED_KINDS.includes(kind);
   const OLD_RESULT_NOTE = "This older result is no longer available.";
 
-  return { isRetiredKind, OLD_RESULT_NOTE, renderRich, imageTargetSize, shareMode, fileRefUrl, formatSize, fileKind, shareOutcome, prefetchWanted, clipTitle, escapeHtml, SHARE_FILE_MAX };
+  return { isRetiredKind, OLD_RESULT_NOTE, renderRich, shareMode, fileRefUrl, formatSize, fileKind, shareOutcome, prefetchWanted, clipTitle, escapeHtml, SHARE_FILE_MAX };
 }));

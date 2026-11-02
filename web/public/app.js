@@ -15,7 +15,6 @@
   const POLL_BUSY_MS = 1500;     // while the bot is working
   const POLL_OFFLINE_MS = 3000;  // after a failed request, until one works
   const PREFETCH_MAX = 3;        // PDFs held in memory ready to share, at most (see Render.prefetchWanted)
-  const MAX_UPLOAD = 32 * 1024 * 1024;
   const PAGE_SIZE = 200;
 
   const COPY = {
@@ -25,9 +24,6 @@
     sendLink: "Send a link instead",
     typing: "Typing…",
     signIn: "Ask for your personal link to sign in.",
-    photo: "This photo couldn't be read. Try a screenshot or a PDF.",
-    stillWorking: "Still working on your last file. Try again in a moment.",
-    tooLarge: "That file is too large. The limit is 32 MB.",
     generic: "Something went wrong. Try again.",
     reload: "Please reload the page and try again.",
     notSent: "Not sent. What you typed is still in the box.",
@@ -47,8 +43,8 @@
   const ICON_SHARE = '<svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M4 12v7a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1v-7"/><path d="M16 6l-4-4-4 4"/><path d="M12 2v13"/></svg>';
 
   const els = {
-    messages: $("messages"), text: $("text"), form: $("composer"), send: $("send"), attach: $("attach"),
-    file: $("file"), saved: $("saved"), banner: $("banner"), toast: $("toast"), jump: $("jump"),
+    messages: $("messages"), text: $("text"), form: $("composer"), send: $("send"),
+    saved: $("saved"), banner: $("banner"), toast: $("toast"), jump: $("jump"),
     gate: $("gate"), gateMsg: $("gate-msg"),
   };
 
@@ -403,16 +399,15 @@
 
   // What to show for a failed request. The server's own copy is written to be
   // read, for the cases where it says something useful; anything else is generic.
-  function failureCopy(r, upload) {
+  function failureCopy(r) {
     if (r.status === 401) return null;
-    if (r.status === 409 && upload) return COPY.stillWorking;
     if ([400, 413, 415].includes(r.status) && r.data && typeof r.data.error === "string") return r.data.error;
     if (r.status === 403) return COPY.reload;
     return COPY.generic;
   }
 
   // One request that changes something. Never throws: { ok, offline, copy, data }.
-  async function post(path, body, contentType, upload) {
+  async function post(path, body, contentType) {
     let r;
     try {
       r = await api(path, { method: "POST", headers: { "Content-Type": contentType }, body });
@@ -421,12 +416,12 @@
       return { ok: false, offline: true, copy: null };
     }
     setOffline(false);
-    if (!r.ok) return { ok: false, copy: failureCopy(r, upload) };
+    if (!r.ok) return { ok: false, copy: failureCopy(r) };
     if (r.data && r.data.busy) setBusy(true);
     poll();
     return { ok: true, data: r.data };
   }
-  const postJson = (body) => post("/app/api/messages", JSON.stringify(body), "application/json", false);
+  const postJson = (body) => post("/app/api/messages", JSON.stringify(body), "application/json");
 
   function schedule() {
     clearTimeout(pollTimer);
@@ -475,9 +470,8 @@
   // ---------------------------------------------------------------
   // A bubble shown at once; the server's copy later takes its place (by text,
   // or by seq when the reply to the POST comes first).
-  function addPending(body, extra) {
+  function addPending(body) {
     const el = h("div", "msg user sending");
-    if (extra) el.append(extra);
     el.append(h("div", "text", body));
     const entry = { msg: { role: "user", kind: "text", body }, el };
     const p = { body, el, entry, adopted: false };
@@ -547,80 +541,6 @@
     if (window.matchMedia && window.matchMedia("(hover: hover) and (pointer: fine)").matches) { e.preventDefault(); sendText(); }
   });
   els.saved.addEventListener("click", () => sendTap("saved|open", "Saved work", els.saved));
-
-  // ---------------------------------------------------------------
-  //  Attaching a photo or file
-  // ---------------------------------------------------------------
-  function loadImage(file) {
-    return new Promise((resolve, reject) => {
-      const url = URL.createObjectURL(file);
-      const img = new Image();
-      img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
-      img.onerror = () => { URL.revokeObjectURL(url); reject(new Error("decode")); };
-      img.src = url;
-    });
-  }
-
-  // Redraws the photo as a JPEG (quality 0.85), at most 2000 px on the long side.
-  async function shrinkImage(file) {
-    let source;
-    try { source = await createImageBitmap(file, { imageOrientation: "from-image" }); }
-    catch (_) { source = await loadImage(file); }
-    const w = source.width || source.naturalWidth;
-    const hgt = source.height || source.naturalHeight;
-    const size = R.imageTargetSize(w, hgt);
-    if (!size.w || !size.h) throw new Error("size");
-    const canvas = document.createElement("canvas");
-    canvas.width = size.w;
-    canvas.height = size.h;
-    const ctx = canvas.getContext("2d");
-    ctx.fillStyle = "#ffffff"; // transparent PNGs would turn black in a JPEG
-    ctx.fillRect(0, 0, size.w, size.h);
-    ctx.drawImage(source, 0, 0, size.w, size.h);
-    if (typeof source.close === "function") source.close();
-    const blob = await new Promise((resolve) => canvas.toBlob(resolve, "image/jpeg", 0.85));
-    if (!blob) throw new Error("encode");
-    return blob;
-  }
-
-  async function attachFile(file) {
-    let blob = file;
-    let name = file.name || "file";
-    let type = file.type || mimeForName(name);
-    let preview = null;
-    const isImage = (file.type || "").startsWith("image/") || R.fileKind(name) === "image";
-    if (isImage) {
-      try {
-        blob = await shrinkImage(file);
-      } catch (_) {
-        toast(COPY.photo);
-        return;
-      }
-      name = (name.replace(/\.[^.]*$/, "") || "photo") + ".jpg";
-      type = "image/jpeg";
-      preview = document.createElement("img");
-      preview.className = "thumb-sent";
-      preview.alt = "";
-      preview.src = URL.createObjectURL(blob);
-    } else {
-      if (file.size > MAX_UPLOAD) { toast(COPY.tooLarge); return; }
-      if (/json/i.test(type)) type = "application/octet-stream"; // a JSON type would be parsed, not stored
-    }
-    const p = addPending(name, preview);
-    if (preview) preview.addEventListener("load", () => { if (stick) scrollToBottom(); });
-    const r = await post(`/app/api/upload?name=${encodeURIComponent(name)}`, blob, type, true);
-    if (r.ok) { settlePending(p, r.data && r.data.seq); return; }
-    dropPending(p);
-    if (preview) URL.revokeObjectURL(preview.src);
-    toast(r.offline ? COPY.notSentShort : (r.copy || COPY.notSentShort));
-  }
-
-  els.attach.addEventListener("click", () => els.file.click());
-  els.file.addEventListener("change", () => {
-    const file = els.file.files && els.file.files[0];
-    els.file.value = "";
-    if (file) attachFile(file);
-  });
 
   // ---------------------------------------------------------------
   //  Share to WhatsApp
