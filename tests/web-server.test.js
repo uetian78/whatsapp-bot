@@ -140,8 +140,10 @@ test("on the web, a photo or PDF with no flow open starts the schedule flow and 
       await t.say(msg); // the fake adapter can't download, which is enough to see the flow start
       assert.match(t.sent[0].body, /reading this as an equipment schedule/);
       assert.match(t.sent[1].body, /couldn't download/);
-      await t.say(textMsg("cancel")); // an open flow answers "Cancelled"
-      assert.match(t.sent.at(-1).body, /Cancelled/);
+      // The file could not be read, and nobody asked for a schedule, so no flow is left waiting:
+      // "cancel" has nothing to cancel.
+      await t.say(textMsg("cancel"));
+      assert.doesNotMatch(t.sent.at(-1).body, /Cancelled/);
     } finally { t.done(); }
   }
 });

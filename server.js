@@ -1540,12 +1540,27 @@ async function startScheduleFlow(from) {
 // with a note saying so. A sheet (xlsx, xls, csv) is only read by VRF Selection,
 // so it is pointed there. Web chat only (see the caller).
 async function handleStrayAttachment(from, message) {
+  // The caller has already dealt with an expired flow and an open schedule flow,
+  // so any flow found here is a split or MTZ one in progress. It is not ours to
+  // overwrite: leave it as it is and say what to do.
+  const open = store.getFlow(from);
+  if (open && !open.expired) {
+    return await sendText(from, "Finish this first, or type *cancel* to stop it, then send the file again.");
+  }
   const doc = message.type === "document" ? message.document : null;
   const isPdf = !!doc && (/pdf/i.test(doc.mime_type || "") || /\.pdf$/i.test(doc.filename || ""));
   if (message.type === "image" || isPdf) {
     const data = store.startFlow(from, "schedule", { step: "awaitImage" });
     await sendText(from, "📎 Nothing was waiting for a file, so I'm reading this as an equipment schedule.");
-    return await handleScheduleStep(from, data, message, "");
+    try {
+      return await handleScheduleStep(from, data, message, "");
+    } finally {
+      // Nobody asked for a schedule, so a read that failed or found no rows must not
+      // leave the flow waiting for one (the next question would be answered with
+      // "Please send the schedule as an image or PDF"). The person's reply stays as sent.
+      const now = store.getFlow(from);
+      if (now && !now.expired && now.data === data && data.step === "awaitImage") store.endFlow(from);
+    }
   }
   if (doc) {
     return await sendText(from, "I read Excel and CSV sheets inside *VRF Selection*. Type *VRF Selection*, then attach the sheet again.");

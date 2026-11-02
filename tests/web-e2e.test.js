@@ -41,13 +41,14 @@ const SCHEDULE = [
   { location: "Roof 1", type: "PACKAGE AC", category: "package", capacity: 10, unit: "TR", qty: 1, airflow: 4000, airflowUnit: "CFM" },
 ];
 const aiCalls = [];
+let aiRows = SCHEDULE; // what the "photo" says; a test sets [] for a photo with no schedule in it
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, opts) => {
   const u = String(url && url.url ? url.url : url);
   if (u.startsWith("http://127.0.0.1")) return realFetch(url, opts); // the test talking to its own server
   if (u === "https://api.anthropic.com/v1/messages") {
     aiCalls.push(JSON.parse(opts.body));
-    return new Response(JSON.stringify({ content: [{ type: "text", text: JSON.stringify(SCHEDULE) }] }), { status: 200, headers: { "content-type": "application/json" } });
+    return new Response(JSON.stringify({ content: [{ type: "text", text: JSON.stringify(aiRows) }] }), { status: 200, headers: { "content-type": "application/json" } });
   }
   throw new Error(`blocked call out: ${u}`);
 };
@@ -56,6 +57,7 @@ const { app } = require("../server.js");
 const { makeSession } = require("../web/auth.js");
 
 const JPEG = Buffer.concat([Buffer.from([0xff, 0xd8, 0xff, 0xe0]), Buffer.alloc(64, 1)]);
+const PDF = Buffer.from("%PDF-1.7\n1 0 obj\n<<>>\nendobj\n%%EOF\n");
 const XLSX = Buffer.concat([Buffer.from([0x50, 0x4b, 0x03, 0x04]), Buffer.from("[Content_Types].xmlxl/workbook.xml"), Buffer.alloc(32)]);
 
 let server;
@@ -182,6 +184,92 @@ test("everyday messages that do get an answer don't also get the catch-all", asy
   }
 });
 
-test("an upload never reaches the network except the one AI call", () => {
-  assert.equal(aiCalls.length, 1);
+// ---- a file while another guided flow is open, and a stray file that can't be read ----
+const flows = () => require("../lib/session-store.js");
+async function fresh() { // no flow open
+  await say("cancel");
+  await settle();
+  assert.equal(flows().getFlow(USER), null);
+}
+
+test("a photo or PDF while a split flow is open leaves that flow exactly as it was, and reads nothing", async () => {
+  await fresh();
+  await say("Split Selection");
+  await settle();
+  const before = JSON.stringify(flows().getFlow(USER));
+  assert.equal(flows().getFlow(USER).type, "split");
+  const calls = aiCalls.length;
+
+  for (const [name, bytes] of [["schedule.jpg", JPEG], ["schedule.pdf", PDF], ["rows.xlsx", XLSX]]) {
+    const n = (await messages()).messages.length;
+    assert.equal((await upload(name, bytes)).status, 202);
+    const said = texts((await settle()).slice(n));
+    assert.deepEqual(said, ["Finish this first, or type *cancel* to stop it, then send the file again."], name);
+    const flow = flows().getFlow(USER);
+    assert.equal(flow.type, "split", name);
+    assert.equal(JSON.stringify(flow), before.replace(/"ts":\d+/, `"ts":${flow.ts}`), `${name}: same step, same answers`);
+  }
+  assert.equal(aiCalls.length, calls, "no AI call");
+  await say("cancel"); await settle();
+});
+
+test("a photo while an MTZ flow is open leaves that flow exactly as it was, and reads nothing", async () => {
+  await fresh();
+  await say("MTZ Selection");
+  await settle();
+  assert.equal(flows().getFlow(USER).type, "mtz");
+  const step = flows().getFlow(USER).data.step;
+  const calls = aiCalls.length;
+  const n = (await messages()).messages.length;
+  await upload("schedule.jpg", JPEG);
+  const said = texts((await settle()).slice(n));
+  assert.deepEqual(said, ["Finish this first, or type *cancel* to stop it, then send the file again."]);
+  assert.equal(flows().getFlow(USER).type, "mtz");
+  assert.equal(flows().getFlow(USER).data.step, step);
+  assert.equal(aiCalls.length, calls);
+  // and the flow still works: the next answer is read as the load
+  const m = (await messages()).messages.length;
+  await say("8.5 TR");
+  assert.match(texts((await settle()).slice(m)).join("\n"), /Load: \*102\.0 MBH/);
+  await say("cancel"); await settle();
+});
+
+test("a stray photo with no schedule in it ends the flow it started, so the next question is not answered with 'send the schedule'", async () => {
+  await fresh();
+  aiRows = [];
+  try {
+    const n = (await messages()).messages.length;
+    await upload("not-a-schedule.jpg", JPEG);
+    const said = texts((await settle()).slice(n));
+    assert.ok(said.some((t) => /reading this as an equipment schedule/.test(t)));
+    assert.ok(said.some((t) => /didn't find any schedule rows/.test(t)), "the person still hears why: " + said.join(" | "));
+    assert.equal(flows().getFlow(USER), null, "the flow it started is closed");
+
+    const m = (await messages()).messages.length;
+    await say("hello");
+    assert.doesNotMatch(texts((await settle()).slice(m)).join("\n"), /Please send the schedule as an image or PDF/);
+  } finally { aiRows = SCHEDULE; }
+});
+
+test("a schedule flow started on purpose keeps waiting for the file when a read finds nothing", async () => {
+  await fresh();
+  await tap("menu|3", "Read a schedule");
+  await settle();
+  assert.equal(flows().getFlow(USER).type, "schedule");
+  aiRows = [];
+  try {
+    const n = (await messages()).messages.length;
+    await upload("blurry.jpg", JPEG);
+    const said = texts((await settle()).slice(n));
+    assert.ok(said.some((t) => /didn't find any schedule rows/.test(t)));
+    assert.equal(flows().getFlow(USER).type, "schedule");
+    assert.equal(flows().getFlow(USER).data.step, "awaitImage");
+  } finally { aiRows = SCHEDULE; }
+  await say("cancel"); await settle();
+});
+
+test("the only AI calls were the three photos that were really read", () => {
+  // the first test's photo, the stray photo with no schedule in it, the one sent on purpose;
+  // the files sent during split and MTZ flows read nothing
+  assert.equal(aiCalls.length, 3);
 });
