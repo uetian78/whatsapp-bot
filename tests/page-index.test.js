@@ -716,3 +716,28 @@ test("compact leaves one self-contained file that still searches, and failures l
     again.close();
   } finally { rm(dir); }
 });
+
+// ── an empty list must never wipe the index ─────────────────────────────
+
+test("sync([]) and a list with no PDFs keep every indexed file and say so", async (t) => {
+  const dir = tmpDir();
+  try {
+    const errors = [];
+    t.mock.method(console, "error", (...a) => errors.push(a.join(" ")));
+    const index = createPageIndex({ path: path.join(dir, "search.db"), maxBytes: 10 * MB, readFile: fakeRead({ a: [`${LONG} keepme`] }) });
+    index.sync([file("a")]);
+    await drain(index);
+    assert.equal(index.search("keepme").length, 1);
+
+    assert.deepEqual(index.sync([]), { queued: 0, removed: 0 });
+    assert.deepEqual(index.sync([{ id: "n", name: "notes.txt", mimeType: "text/plain" }]), { queued: 0, removed: 0 });
+    assert.equal(index.search("keepme").length, 1);
+    assert.equal(index.status().total, 1);
+    assert.ok(errors.some((e) => /no PDFs/.test(e)), "the empty list is logged");
+
+    // A real list still prunes what vanished.
+    index.sync([file("b")]);
+    assert.equal(index.search("keepme").length, 0);
+    index.close();
+  } finally { rm(dir); }
+});

@@ -2541,6 +2541,9 @@ module.exports = { app, handleIncomingMessage, deliverMessage, resolveSeriesFile
 // index file yet (the PC hasn't uploaded one) the server doesn't build it.
 function startPageIndexing() {
   const pageIndex = getPageIndex();
+  if (!pageIndex.exists()) {
+    console.log("🔎 No page-search file yet: page search stays empty until one is uploaded to /admin/search-index");
+  }
   require("./lib/drive-index.js").getLibraryIndex().onRefresh((files) => {
     if (!pageIndex.exists()) return;
     pageIndex.sync(files);

@@ -311,3 +311,24 @@ test("the default instance is made lazily and is reused", () => {
   const { getLibraryIndex } = require("../lib/drive-index.js");
   assert.equal(typeof getLibraryIndex, "function");
 });
+
+test("a file listed twice by Drive (two parents) is saved once, and the first crawl succeeds", async () => {
+  const tree = basicTree();
+  tree.sub1.push(pdf("a1", "APMR-A.pdf", "m1")); // the root's a1 again, via a second parent
+  tree[FOLDER].push({ id: "sub1", name: "Catalogues again", mimeType: FOLDER_MIME }); // a folder reached twice
+  const s = setup(tree);
+  const list = await s.index.list();
+  assert.deepEqual(list.map((f) => f.id), ["a1", "b1", "b2"]);
+  assert.equal(s.index.findById("a1").folder, "(root)"); // the first sighting wins
+});
+
+test("an empty first crawl saves an empty list but calls no onRefresh handler", async () => {
+  const s = setup({ [FOLDER]: [] });
+  let calls = 0;
+  s.index.onRefresh(() => { calls += 1; });
+  await s.index.refresh();
+  assert.equal(calls, 0);
+  s.tree[FOLDER] = [pdf("a1", "APMR-A.pdf", "m1")];
+  await s.index.refresh();
+  assert.equal(calls, 1);
+});

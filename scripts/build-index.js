@@ -6,7 +6,8 @@
 //
 //   --no-upload  build DATA_DIR/search.db and stop (prove it works first).
 //   --limit N    only the first N PDFs of the library, to try it out. The rest
-//                of an existing search.db is left alone.
+//                of an existing search.db is left alone. Implies --no-upload:
+//                a partial file must never replace the app's full one.
 //   --no-retry   don't try files that failed last time again.
 //
 // It saves as it goes, so stopping it (Ctrl+C) and running it again carries on
@@ -16,9 +17,6 @@
 // Logs counts and file ids only, never document text or file names.
 const fs = require("node:fs");
 const path = require("node:path");
-require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
-// Prefer IPv4 for Google, as the server does (see server.js).
-require("node:dns").setDefaultResultOrder("ipv4first");
 
 const WORKER_MEMORY_MB = 2048;
 
@@ -33,6 +31,11 @@ function parseArgs(argv) {
       if (!Number.isInteger(n) || n < 1) throw new Error("--limit needs a whole number of 1 or more");
       opts.limit = n;
     } else throw new Error(`Unknown option ${a}`);
+  }
+  // A partial index uploaded by habit would replace the app's whole one.
+  if (opts.limit && opts.upload) {
+    opts.upload = false;
+    opts.limitImpliedNoUpload = true;
   }
   return opts;
 }
@@ -65,6 +68,9 @@ async function upload(file) {
 }
 
 async function main() {
+  require("dotenv").config({ path: path.join(__dirname, "..", ".env") });
+  // Prefer IPv4 for Google, as the server does (see server.js).
+  require("node:dns").setDefaultResultOrder("ipv4first");
   const opts = parseArgs(process.argv.slice(2));
   if (!process.env.DRIVE_FOLDER_ID) throw new Error("DRIVE_FOLDER_ID is not set (.env)");
   const { crawlDrive } = require("../lib/drive-index.js");
@@ -83,6 +89,7 @@ async function main() {
   if (opts.limit) {
     pdfs = pdfs.slice(0, opts.limit);
     console.log(`--limit ${opts.limit}: only the first ${pdfs.length} PDFs`);
+    if (opts.limitImpliedNoUpload) console.log("--limit builds a partial file, so it implies --no-upload: nothing will be uploaded.");
   }
 
   const index = createPageIndex({
@@ -117,7 +124,11 @@ async function main() {
   else console.log("--no-upload: not uploaded.");
 }
 
-main().then(
-  () => process.exit(0),
-  (err) => { console.error("build-index stopped:", err.message); process.exit(1); }
-);
+module.exports = { parseArgs };
+
+if (require.main === module) {
+  main().then(
+    () => process.exit(0),
+    (err) => { console.error("build-index stopped:", err.message); process.exit(1); }
+  );
+}
