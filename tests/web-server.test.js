@@ -106,6 +106,62 @@ test("find X and search X are document requests: the same reply as typing X, wit
   }
 });
 
+// A written question is not a file request, and nothing answers it. It goes the normal
+// not-found way (close names, AI file finding, Request it). The AI is switched on here
+// with a canned reply so the test sees every request the app would make to it.
+test("a question in plain words gets no spec answer: the not-found path, in words that say the app finds documents", { skip }, async () => {
+  const t = setup();
+  const prevKey = process.env.ANTHROPIC_API_KEY;
+  const realFetch = globalThis.fetch;
+  const requests = [];
+  const CANNED = "The unit gives 24.9 TR at T3, per the product specifications.";
+  try {
+    process.env.ANTHROPIC_API_KEY = "test-key-not-real";
+    globalThis.fetch = async (url, opts) => {
+      const u = String(url && url.url ? url.url : url);
+      if (u !== "https://api.anthropic.com/v1/messages") throw new Error(`blocked call out: ${u}`);
+      requests.push(JSON.parse(opts.body));
+      // "0" is what the file finder answers when nothing fits; any other caller would get the canned answer too
+      const text = /did not match any file/.test(JSON.stringify(JSON.parse(opts.body).system)) ? "0" : CANNED;
+      return new Response(JSON.stringify({ id: "msg_1", type: "message", role: "assistant", model: "claude-haiku-5-5", content: [{ type: "text", text }], stop_reason: "end_turn", usage: { input_tokens: 5, output_tokens: 1 } }), { status: 200, headers: { "content-type": "application/json" } });
+    };
+    for (const q of ["how loud is the compressor in the unit?", "what are your opening hours?", "which refrigerant does it use? tell me the cooling capacity", "explain the difference in sound level"]) {
+      t.sent.length = 0;
+      requests.length = 0;
+      await t.say(textMsg(q));
+      const said = t.sent.map((s) => s.body).join("\n");
+      assert.ok(t.sent.length > 0, q);
+      assert.doesNotMatch(said, /24\.9|specifications|Checking the specs|team member/i, q);
+      // the only thing the app may ask the AI is which FILE fits
+      for (const r of requests) {
+        const sys = JSON.stringify(r.system);
+        assert.doesNotMatch(sys, /PRODUCT SPECIFICATIONS|WhatsApp assistant|BUSINESS INFORMATION/, q);
+        assert.match(sys, /did not match any file/, q);
+      }
+      // it ends where every miss ends: the request button, and words that say what the app does
+      assert.match(said, /Request it/, q);
+      assert.match(said, /find(s|ing)? documents|any document by its name/i, q);
+      assert.doesNotMatch(said, /AI answers are paused/, q);
+    }
+  } finally {
+    globalThis.fetch = realFetch;
+    if (prevKey === undefined) delete process.env.ANTHROPIC_API_KEY; else process.env.ANTHROPIC_API_KEY = prevKey;
+    t.done();
+  }
+});
+
+test("a question with the AI switched off gets the same not-found path, and the wording says the app finds documents", { skip }, async () => {
+  const t = setup();
+  try {
+    await t.say(textMsg("how loud is the compressor in the unit?"));
+    const said = t.sent.map((s) => s.body).join("\n");
+    assert.match(said, /Request it/);
+    assert.match(said, /AI file finding is paused/);
+    assert.match(said, /any document by its name/);
+    assert.doesNotMatch(said, /AI answers/);
+  } finally { t.done(); }
+});
+
 test("search all still means the wider scan of the last request, not a verb", { skip }, async () => {
   const t = setup();
   try {

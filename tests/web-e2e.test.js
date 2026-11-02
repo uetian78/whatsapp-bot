@@ -31,7 +31,7 @@ require.cache[dotenvPath] = noDotenv;
 // ---- the stubs ----
 const google = require("../lib/google.js");
 google.getSheets = async () => ({
-  spreadsheets: { values: { batchGet: async () => ({ data: { valueRanges: [{ values: [] }, { values: [[USER, "Tester"]] }] } }) } },
+  spreadsheets: { values: { batchGet: async () => ({ data: { valueRanges: [{ values: [[USER, "Tester"]] }] } }) } },
 });
 google.getDrive = async () => { throw new Error("Drive is stubbed in this test"); };
 

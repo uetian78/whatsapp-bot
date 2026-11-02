@@ -11,7 +11,6 @@ const { isMenuTrigger, smallTalkReply } = require("./menu.js");
 const { isSearchAllTrigger, isAiSearchTrigger, stripFindVerb } = require("./lib/broad-search.js");
 
 const MENTIONS_DOC = /\b(datasheet|data ?sheet|catalog(?:ue)?|iom|manual|brochure|drawing|pdf|document|file)\b/i;
-const QUESTION_WORDS = /\b(what|whats|what's|how many|how much|which|tell me|explain|compare|difference|capacity|cooling|airflow|eer|iplv|tonnage|weight|dimensions?|sound|dba|refrigerant)\b/i;
 
 const safe = (fn) => (t) => { try { return fn(t); } catch (_) { return null; } };
 
@@ -25,7 +24,6 @@ const INTENTS = [
   { name: "search-all",         match: (t) => isSearchAllTrigger(t) },
   { name: "ai-search",          match: (t) => isAiSearchTrigger(t) },
   { name: "list-units",         match: safe(parseListRequest) },
-  { name: "question",           match: (t) => !MENTIONS_DOC.test(t) && (/\?/.test(t) || QUESTION_WORDS.test(t)) },
   { name: "chiller",            match: safe(routeChillerText) },
   { name: "datasheet",          match: safe(parseDatasheetRequest) },
   { name: "selection",          match: safe(buildSelectionInteractive) },
@@ -49,7 +47,6 @@ function classify(text, depth = 0) {
   const rest = depth === 0 ? stripFindVerb(t) : null;
   if (rest) return classify(rest, depth + 1);
   for (const i of INTENTS) if (!BEFORE_FIND.has(i.name) && i.match(t)) return i.name;
-  if (/\b(price|cost|warranty|deliver|contact|hours)\b/i.test(t)) return "question";
   return "other";
 }
 

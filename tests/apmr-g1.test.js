@@ -1,7 +1,8 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const { PRODUCTS } = require("../products.js");
-const { parseListRequest, buildUnitList, PRODUCT_KB } = require("../product-facts.js");
+const productFacts = require("../product-facts.js");
+const { parseListRequest, buildUnitList } = productFacts;
 
 test("APMRG1 has 19 models, T3-only capacity, G1 model names", () => {
   const p = PRODUCTS["apmr-g1"];
@@ -29,5 +30,6 @@ test("APMRG1 list shows T3 only, in both unit systems", () => {
   assert.match(imp, /T3 \(46°C\)/);
   assert.doesNotMatch(imp, /T1/);
   assert.match(buildUnitList(["apmr-g1"], "si"), /APMR 51055G1 — 13\.7 kW — 802 L\/s/);
-  assert.match(PRODUCT_KB, /APMR 52300G1: net cooling at T3\(46°C\) only/);
+  // the spec text that fed the AI answers is gone
+  assert.equal("PRODUCT_KB" in productFacts, false);
 });

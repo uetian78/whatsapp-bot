@@ -85,9 +85,9 @@ test("latch expires after the TTL so a top-up recovers by itself", () => {
 
 const { aiPausedMessage } = require("../lib/ai-credits.js");
 
-test("the paused message says AI answers are paused and points to the file name", () => {
+test("the paused message says AI file finding is paused and points to the file name", () => {
   const msg = aiPausedMessage();
-  assert.match(msg, /AI answers are paused right now/);
+  assert.match(msg, /AI file finding is paused right now/);
   assert.match(msg, /get any document by its name/);
 });
 

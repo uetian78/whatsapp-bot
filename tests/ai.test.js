@@ -312,7 +312,7 @@ test("the no-AI message never mentions a PAID plan or credits", () => {
 
 test("the no-AI message uses the agreed wording, with no greeting or name", () => {
   assert.equal(credits.aiPausedMessage(),
-    "AI answers are paused right now. You can still get any document by its name.");
+    "I couldn't find a document for that, and AI file finding is paused right now. You can still get any document by its name.");
 });
 
 // ---- a stale "Search with AI?" tap from an old message ----
@@ -403,7 +403,7 @@ test("a miss runs AI search by itself, with no permission question", { skip: ski
 test("over the monthly cap, a miss says AI is paused and sends nothing to the API", { skip: skipHarness }, withFakeAnthropic(0, async ({ h, calls }) => {
   const out = await h.send("100000001", "qzxwvk");
   assert.equal(calls.length, 0);
-  assert.match(allText(out), /AI answers are paused right now\. You can still get any document by its name\./);
+  assert.match(allText(out), /AI file finding is paused right now\. You can still get any document by its name\./);
 }));
 
 // A series that misses the map and the prefix matcher must not cost an AI call

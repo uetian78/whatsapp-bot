@@ -9,9 +9,9 @@
 require("dns").setDefaultResultOrder("ipv4first");
 
 // ============================================================
-//  WhatsApp Auto-Responder + Claude Haiku AI Fallback
-//  - Google Sheet = control panel (AI knowledge + Allowed numbers)
-//  - Claude Haiku answers everything else using YOUR knowledge only
+//  HVAC Assistant: document retrieval and chiller / package selection
+//  - Google Sheet = control panel (the Allowed numbers)
+//  - Claude Haiku only helps find a file when a typed name matches nothing
 // ============================================================
 
 const express = require("express");
@@ -29,7 +29,7 @@ const { parseSelection } = require("./lib/multi-select.js");
 // One reply must not trigger dozens of Drive downloads and media uploads.
 const MAX_BATCH_FILES = 10;
 const { isCreditError, markExhausted, isExhausted, aiPausedMessage } = require("./lib/ai-credits.js");
-const { createAi, textOf } = require("./lib/ai.js");
+const { createAi } = require("./lib/ai.js");
 const { getDb, dataDir } = require("./lib/db.js");
 const { createConversations } = require("./lib/conversations.js");
 const { createWebChannel } = require("./lib/channel-web.js");
@@ -40,8 +40,8 @@ const { mountWeb, cleanSecret, MIN_SECRET_LENGTH } = require("./web/auth.js");
 const { requireAdmin } = require("./lib/http-auth.js");
 const { whatsappEnabled, requiredEnv, startupWarnings } = require("./lib/app-config.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
-const { isMenuTrigger, smallTalkReply, welcomeMenuList, tipFor, optionForTap, MENU_HINT, MENU_OPTIONS } = require("./menu.js");
-const { PRODUCT_KB, parseListRequest, parseUnsupportedSeriesListRequest, buildUnitList } = require("./product-facts.js");
+const { isMenuTrigger, smallTalkReply, welcomeMenuList, tipFor, optionForTap, MENU_OPTIONS } = require("./menu.js");
+const { parseListRequest, parseUnsupportedSeriesListRequest, buildUnitList } = require("./product-facts.js");
 const crm = require("./crm.js");
 const docReq = require("./lib/doc-requests.js");
 const docReqDedupe = docReq.createDedupe();
@@ -125,7 +125,7 @@ if (require.main === module) {
 const anthropic = new Anthropic({ apiKey: ANTHROPIC_API_KEY });
 const ai = createAi({ client: ANTHROPIC_API_KEY ? anthropic : null, db: getDb });
 
-// The Google Sheet (Knowledge and Allowed tabs) is read by lib/control-sheet.js.
+// The Google Sheet (the Allowed tab) is read by lib/control-sheet.js.
 // Static Drive-ID map for chiller datasheets (built by build-chiller-ids.js).
 // Key: "code|series" e.g. "5230|APCY-E" -> { id, name }.
 // Allows button taps to skip listFolderFiles() entirely.
@@ -180,62 +180,6 @@ function levenshtein(a, b) {
   return d[m][n];
 }
 
-// The bot's full menu of capabilities, in copy-paste command form. Shown as the
-// last-resort reply when a request matches nothing AND the AI can't even guess
-// which product the user meant. Also handed to the AI in aiGuidance() as the
-// authoritative list of commands it may suggest (so it never invents one).
-const BOT_CAPABILITIES =
-  "Here's everything I can help you with 👇\n\n" +
-  "*📄 Documents*\n" +
-  "• Catalogue — e.g. *APMR catalogue*, *Hisense catalogue*\n" +
-  "• IOM manual — e.g. *APMR IOM*\n" +
-  "• Model datasheet — e.g. *APMRa 51004*, *APMR 52340 T1*\n" +
-  "• List a full range — e.g. *list APMR units*, *APMRG1 list*\n\n" +
-  "*🛠️ Quick Selection* (give a capacity → get a model)\n" +
-  "• Packaged unit — *package unit 20 tr t3*\n" +
-  "• Fresh air / DOAS — *fresh air 15 tr*\n" +
-  "• Chiller — *APCY-H 30 tr*\n" +
-  "• Fan coil unit — *DMP 10 tr*\n\n" +
-  "*🧭 Guided Selectors* (step-by-step + PDF)\n" +
-  "💡 Type *menu* anytime, or email hassan.saleem@mannai.com.qa for help.";
-
-// ============================================================
-//  CLAUDE HAIKU FALLBACK
-//  Answers ONLY from the Knowledge tab. Refuses to invent.
-// ============================================================
-async function askClaude(question, knowledge) {
-  if (!ai.available()) return null;
-
-  const knowledgeText = knowledge.join("\n");
-
-  // System prompt in two blocks: the big static block (instructions + product
-  // specs, ~5K tokens) goes FIRST and is prompt-cached — repeat questions
-  // within 5 minutes read it at ~10% of the normal input price. The small
-  // dynamic Sheet knowledge follows, outside the cached prefix.
-  const staticBlock = `You are a helpful WhatsApp assistant for an HVAC equipment supplier.
-Answer the customer's question using ONLY the information provided (product specifications below + business info that follows).
-Keep replies short, friendly, and suitable for WhatsApp (2-4 sentences max).
-When quoting a product spec, give the exact figure and its units, and name the model (e.g. "APMR 52340 at T3: 24.9 TR / 87.6 kW, 10500 CFM").
-If the information does not contain the answer, reply exactly:
-"Let me connect you with a team member who can help with that."
-Do NOT make up prices, products, capacities, or details — only use the numbers given.
-
---- PRODUCT SPECIFICATIONS ---
-${PRODUCT_KB}
---- END SPECIFICATIONS ---`;
-
-  const msg = await ai.askMessage({
-    purpose: "askClaude",
-    max_tokens: 1024,
-    system: [
-      { type: "text", text: staticBlock, cache_control: { type: "ephemeral" } },
-      { type: "text", text: `--- BUSINESS INFORMATION ---\n${knowledgeText}\n--- END INFORMATION ---` },
-    ],
-    messages: [{ role: "user", content: question }],
-  });
-  return (msg && textOf(msg).trim()) || null;
-}
-
 // AI fallback for a lookup miss: finds documents that are genuinely relevant
 // to the request (not just loosely related) so a not-found reply can offer
 // alternatives instead of a dead end. Returns [] (never null) when nothing
@@ -271,42 +215,6 @@ ${list}`;
 
   const out = await ai.askText({ purpose: "aiRelatedFiles", system, user: text });
   return out ? parseRelatedFilesResponse(out, files) : [];
-}
-
-// Last-resort "smart guidance" for a request that matched no file. Given the
-// raw message, the AI either (a) recognises the product/brand/intent and
-// replies with a short, human-like note naming the EXACT commands that would
-// work for it (e.g. "SKM package selection" -> how to get the catalogue, IOM,
-// datasheet, run a selection, or list the range), or (b) can't make sense of
-// it and returns the sentinel "SHOW_MENU". Returns the guidance string, or
-// null when the caller should fall back to the full capabilities menu.
-async function aiGuidance(text) {
-  if (!ai.available()) return null;
-
-  const system = `You are the HVAC Assistant. A customer's message did NOT match any document or command. Act like a helpful human colleague: figure out what they probably want and point them to a command that actually works.
-
-These are the ONLY real things the bot can do — never invent a command, model number, or capability outside this list:
-${BOT_CAPABILITIES}
-
-HVAC abbreviations & brands you should recognise:
-- APMR / APMR-A / APMR-V = SKM packaged air conditioners
-- PAC4A / PAC9A = 100% fresh-air / DOAS packaged units
-- APCY-E / APCY-H / APCY-P / ACMR / WPCY = chillers
-- MAH / CAH / HMAH = air handling units (AHU)
-- FCU / DMP / DCMP = fan coil units
-- VRF / VRV = variable refrigerant flow multi-split
-- MTZ = Trane packaged unit
-- Brands: SKM, Hisense, Daikin, Mitsubishi, Trane, Toshiba, TCL
-
-RULES:
-- If you can reasonably tell which product, brand, or intent the customer means, reply with a SHORT, warm message (2–5 short lines). Name the product, then list ONLY the commands that make sense for it, each as an exact phrase in *asterisks* the customer can copy and send.
-- If the message is too vague, or not about HVAC products/documents at all, reply with EXACTLY: SHOW_MENU
-- NEVER claim a document was sent. NEVER give specs, prices, or capacities. You only guide.
-- No "Hello"/greetings — go straight to the helpful guidance.`;
-
-  const out = await ai.askText({ purpose: "aiGuidance", system, user: text });
-  if (!out || /^SHOW_MENU$/i.test(out)) return null;
-  return out;
 }
 
 // Dispatch a chiller response descriptor from chillers.js (text / buttons /
@@ -608,14 +516,9 @@ async function runAiSearch(to, query, announce) {
       `AI's closest matches for "${query}":`, false, query);
   }
 
-  const guidance = await aiGuidance(query);
-  if (guidance) {
-    console.log(`🧭 Smart guidance for "${query}"`);
-    await sendText(to, `${guidance}\n\n${MENU_HINT}`);
-    return sendWithRequestButton(to, query, `Still not what you need?`);
-  }
   return sendWithRequestButton(to, query,
     `Even AI couldn't find anything matching "${query}" in the Drive folder.\n\n` +
+    "I find documents (catalogues, IOM manuals and datasheets); I can't answer questions about specs in words. " +
     "It may not be uploaded yet.");
 }
 
@@ -872,8 +775,6 @@ async function handleIncomingMessage(value, message) {
       }
     }
 
-    const { knowledge } = await loadSheet();
-
     console.log(`📩 ${from}: "${text}"`);
 
     // ── Welcome menu / help ──────────────────────────────────────
@@ -1016,26 +917,6 @@ async function handleIncomingMessage(value, message) {
       );
     }
 
-    // ── Quick Questions about products ───────────────────────────
-    // A spec-style question that is NOT asking for a document is answered by the
-    // AI using PRODUCT_KB (real catalogue/datasheet numbers). Requests that name
-    // a document (catalogue / IOM / datasheet) fall through to the file handlers.
-    const mentionsDocument = /\b(datasheet|data ?sheet|catalog(?:ue)?|iom|manual|brochure|drawing|pdf|document|file)\b/i.test(text);
-    const isSpecQuestion = !mentionsDocument && (
-      /\?/.test(text) ||
-      /\b(what|whats|what's|how many|how much|which|tell me|explain|compare|difference|capacity|cooling|airflow|eer|iplv|tonnage|weight|dimensions?|sound|dba|refrigerant)\b/i.test(text)
-    );
-    if (isSpecQuestion) {
-      console.log(`❓ product question -> AI: "${text}"`);
-      await announceSearch("🔍 Checking the specs…");
-      const aiReply = await askClaude(text, knowledge);
-      if (aiReply && !/connect you with a team member/i.test(aiReply)) {
-        return await sendText(from, aiReply);
-      }
-      // AI had nothing useful -> fall through to the document/selection handlers.
-    }
-    // ─────────────────────────────────────────────────────────────
-
     // 1-chiller) APCY-E / APCY-H chiller intents: model lookup, tonnage select,
     //   datasheet, and series/model comparison. Runs in the equipment-SELECTION
     //   band (before the free-form lookup) so "chiller"/"ton"/"TR" never get
@@ -1146,12 +1027,10 @@ async function handleIncomingMessage(value, message) {
       return await sendNotFoundByName(from, text);
     }
 
-    // From here it's a free-form document lookup (bare code, filename, brand,
-    // or a general question). Announce a search unless it's clearly a
-    // knowledge/general question (which ends in a chat reply, not a file).
-    const isKnowledgeQuestion =
-      /\b(hours|open|close|deliver|delivery|price|cost|warranty|install|contact|email|phone|location|address|about|who are you|what do you)\b/i.test(text);
-    if (!isKnowledgeQuestion) await announceSearch();
+    // From here it is a free-form document lookup (bare code, filename, brand, or
+    // words that name no series). A written question lands here too: it is looked
+    // for as a file name like anything else, and nothing answers it in words.
+    await announceSearch();
 
     const files = await listFolderFiles();
 
@@ -1238,30 +1117,7 @@ async function handleIncomingMessage(value, message) {
       }
     }
 
-    // A message that names a specific MODEL CODE (5-digit) but matched no real
-    // file should NOT get an AI-improvised "details about the unit" reply —
-    // unless the user explicitly asked for "detail(s)". So a bare "APMR52090 t1"
-    // returns not-found; "APMR52090 detail" opts into the descriptive answer.
-    // Genuine knowledge questions (hours/price/etc.) are unaffected.
-    const wantsDetail = /\bdetails?\b/i.test(text);
-    const hasModelCode = /\d{5}/.test(text);
-    if (hasModelCode && !wantsDetail && !isKnowledgeQuestion) {
-      console.log(`🚫 model code without "detail" -> not-found (no AI details): "${text}"`);
-      return await sendNotFoundByName(from, text, files);
-    }
-
-    // 3) General question -> answer from the Knowledge tab via Claude Haiku.
-    //    Gated on isKnowledgeQuestion: a document search that merely missed
-    //    ("MCWFA") is not a question and must not spend a call here — it drops
-    //    to step 5, which tries the free scan and then AI search.
-    if (isKnowledgeQuestion) {
-      const aiReply = await askClaude(text, knowledge);
-      if (aiReply && !/connect you with a team member/i.test(aiReply)) {
-        return await sendText(from, aiReply);
-      }
-    }
-
-    // 4) Nothing matched -> free scan, then AI suggests related documents, or the standard apology
+    // 3) Nothing matched -> close names, then AI suggests related documents, or the Request it button
     await sendNotFoundByName(from, text, files);
 }
 

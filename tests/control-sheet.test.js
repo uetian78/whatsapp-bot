@@ -17,7 +17,6 @@ function fakeSheets(state) {
             return {
               data: {
                 valueRanges: [
-                  { values: state.knowledge || [["Topic", "Info"], ["", "only info"]] },
                   { values: state.allowed || [["+974 5555 1111", "Sara", "paid"], ["97455552222", "Omar"]] },
                 ],
               },
@@ -39,14 +38,14 @@ function make(state = {}, extra = {}) {
   return { state, clock, load };
 }
 
-test("loadSheet returns knowledge lines, the allowed numbers and the accounts", async () => {
+test("loadSheet returns the allowed numbers and the accounts, and reads only the Allowed tab", async () => {
   const { state, load } = make();
   const s = await load();
-  assert.deepEqual(s.knowledge, ["Topic: Info", "only info"]);
+  assert.equal("knowledge" in s, false);
   assert.deepEqual(s.allowed, ["97455551111", "97455552222"]);
   assert.equal(s.accounts.get("97455551111").name, "Sara");
   assert.equal(s.accounts.get("97455551111").paid, true);
-  assert.deepEqual(state.seen.ranges, ["Knowledge!A2:B", "Allowed!A2:C"]);
+  assert.deepEqual(state.seen.ranges, ["Allowed!A2:C"]);
   assert.equal(state.seen.spreadsheetId, "SHEET1");
 });
 
