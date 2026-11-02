@@ -11,7 +11,7 @@ const { pageTapId } = require("../lib/page-extract.js");
 const DAY = 24 * 60 * 60 * 1000;
 
 function make(extra = {}) {
-  const dir = fs.mkdtempSync(path.join(os.tmpdir(), "hvac-web-"));
+  const dir = require("./tmpdirs.js").tmpDir("hvac-web-"); // removed when the run ends, even if a test skips done()
   const clock = { t: 1_000_000 };
   const now = () => clock.t;
   const db = openDb(":memory:");

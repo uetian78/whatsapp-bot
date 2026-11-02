@@ -2,6 +2,7 @@
 // the parser (pure), then the command through the real server.js and the real MTZ
 // engine (replay harness; skipped when the private fixtures are not on this machine).
 const test = require("node:test");
+require("./clean-env.js"); // a DATA_DIR left in the shell must not reach the harness
 const assert = require("node:assert");
 const { parseMtzExpress } = require("../lib/mtz-express.js");
 const { createHarness, createServerDeliver, fixturesExist } = require("./replay/harness.js");

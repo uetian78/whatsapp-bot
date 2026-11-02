@@ -61,7 +61,7 @@ function basicTree() {
   };
 }
 
-function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), "hvac-lib-")); }
+const tmpDir = () => require("./tmpdirs.js").tmpDir("hvac-lib-"); // removed when the run ends
 
 // Resolves when the next refresh finishes (its onRefresh handler fires).
 const nextRefresh = (index) => new Promise((resolve) => {

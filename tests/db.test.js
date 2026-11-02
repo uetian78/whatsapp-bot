@@ -1,4 +1,5 @@
 const test = require("node:test");
+require("./clean-env.js"); // the defaults below must not be shadowed by the shell
 const assert = require("node:assert");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -6,7 +7,7 @@ const path = require("node:path");
 const { spawnSync } = require("node:child_process");
 const { openDb, getDb, closeDb, migrate, dataDir } = require("../lib/db.js");
 
-function tmp() { return fs.mkdtempSync(path.join(os.tmpdir(), "hvac-db-")); }
+function tmp() { return require("./tmpdirs.js").tmpDir("hvac-db-"); } // removed when the run ends
 
 test("migrations run once", () => {
   const d = openDb(":memory:");

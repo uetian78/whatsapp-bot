@@ -77,7 +77,8 @@ function scenario({ files = null, respond = null, spyPageHits = false }, body) {
       if (realSdk) require.cache[sdkId] = realSdk; else delete require.cache[sdkId];
       h.close();
       for (const [k, v] of Object.entries(saved)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
-      fs.rmSync(dir, { recursive: true, force: true });
+      try { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 50 }); }
+      catch (_) { require("./tmpdirs.js").track(dir); } // a locked file: try once more when the run ends
     }
   };
 }

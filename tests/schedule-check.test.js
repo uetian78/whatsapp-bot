@@ -2,6 +2,7 @@
 // the channel facade/adapter pieces, and the schedule flow's step through the real
 // server.js (replay harness; skipped when the private fixtures are not here).
 const test = require("node:test");
+require("./clean-env.js"); // a DATA_DIR left in the shell must not reach the harness
 const assert = require("node:assert");
 const { normalizeRows } = require("../schedule-select.js");
 const { applyRowEdits, rowCheckView, UNITS } = require("../lib/schedule-check.js");

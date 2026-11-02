@@ -7,6 +7,7 @@ const path = require("node:path");
 const crypto = require("node:crypto");
 const { spawnSync } = require("node:child_process");
 const { Readable } = require("node:stream");
+const { track } = require("./tmpdirs.js"); // temp folders are removed when the run ends
 
 // Set before lib/google.js loads: it reads the key once, at require time.
 const { privateKey } = crypto.generateKeyPairSync("rsa", {
@@ -57,7 +58,7 @@ function fakeStream(chunks = [Buffer.from("%PDF-1.4 "), Buffer.from("rest")]) {
 }
 
 async function make(over = {}) {
-  const dataDir = await fsp.mkdtemp(path.join(os.tmpdir(), "page-test-data-"));
+  const dataDir = track(await fsp.mkdtemp(path.join(os.tmpdir(), "page-test-data-")));
   const run = over.run || fakeRun();
   const stream = over.stream || fakeStream();
   const library = over.library || { list: async () => [FILE], findById: (id) => (id === FILE.id ? FILE : null) };
@@ -377,7 +378,7 @@ const toolsInstalled = ["qpdf", "pdftoppm"].every((t) => !spawnSync(t, ["--versi
 
 test("real tools make a one-page PDF and a JPEG", { skip: !toolsInstalled }, async () => {
   const PDFDocument = require("pdfkit");
-  const src = path.join(await fsp.mkdtemp(path.join(os.tmpdir(), "page-test-src-")), "three.pdf");
+  const src = path.join(track(await fsp.mkdtemp(path.join(os.tmpdir(), "page-test-src-"))), "three.pdf");
   await new Promise((resolve, reject) => {
     const doc = new PDFDocument();
     const out = fs.createWriteStream(src);

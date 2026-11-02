@@ -2,6 +2,7 @@
 // harness (private fixtures, skipped when they are not on this machine). The page
 // extractor is replaced by a fake, so no tool runs and nothing reaches Drive.
 const test = require("node:test");
+require("./clean-env.js"); // a DATA_DIR left in the shell must not reach the harness
 const assert = require("node:assert");
 const { createHarness, fixturesExist } = require("./replay/harness.js");
 

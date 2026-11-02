@@ -2,6 +2,7 @@
 // through the replay harness (private fixtures, skipped when they are not on this
 // machine). Replies go to a fake web channel; the database is a temp DATA_DIR.
 const test = require("node:test");
+require("./clean-env.js"); // a DATA_DIR left in the shell must not reach the harness
 const assert = require("node:assert");
 const { createHarness, fixturesExist } = require("./replay/harness.js");
 
