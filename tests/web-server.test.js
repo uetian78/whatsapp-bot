@@ -91,6 +91,44 @@ test("Saved work lists the newest 10 files again, oldest first, on the web", { s
   } finally { t.done(); }
 });
 
+test("tapping Saved work again and again shows the same files, not fewer", { skip }, async () => {
+  const t = setup();
+  try {
+    await t.say(textMsg("hello")); // opens the database
+    const c = t.conversations();
+    for (let i = 1; i <= 3; i++) c.append(USER, "bot", "file", { ref: `drive:f${i}`, name: `File ${i}.pdf`, folder: "x", size: i });
+    const heads = [];
+    for (let tap = 0; tap < 3; tap++) {
+      t.sent.length = 0;
+      await t.say(tapMsg("saved|open", "Saved work"));
+      heads.push(t.sent[0].body);
+    }
+    assert.deepEqual(heads, Array(3).fill("Your last 3 files, newest at the bottom:"));
+    assert.equal(c.savedWork(USER, 10).length, 3);
+  } finally { t.done(); }
+});
+
+test("file choices show their whole names on the web; WhatsApp's own builder still clips them to 24", { skip }, async () => {
+  const names = [
+    "Submittal Paperwork Mannai Tower Project Chiller Plant A.pdf",
+    "Submittal Paperwork Mannai Tower Project Chiller Plant B.pdf",
+  ];
+  const files = names.map((name, i) => ({ id: `long${i}`, name, folder: "Submittals", mimeType: "application/pdf", size: 1000 }));
+  const t = setup();
+  try {
+    require("../lib/drive-index.js").listFolderFiles = async () => files; // before server.js is first required
+    await t.say(textMsg("submittal paperwork mannai tower project chiller plant"));
+    const list = t.sent.find((s) => s.kind === "list");
+    assert.ok(list, JSON.stringify(t.sent));
+    const rows = list.rows.filter((r) => /^fileid\|/.test(r.id));
+    assert.equal(rows.length, 2);
+    assert.ok(rows.every((r) => r.title.length > 24), rows.map((r) => r.title).join(" | "));
+    const wa = require("../lib/wa.js");
+    const sent = wa.buildListPayload("1", "x", "Pick", rows).interactive.action.sections[0].rows;
+    assert.ok(sent.every((r) => r.title.length <= 24));
+  } finally { t.done(); }
+});
+
 test("Saved work with nothing saved says so", { skip }, async () => {
   const t = setup();
   try {

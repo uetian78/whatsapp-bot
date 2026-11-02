@@ -14,13 +14,15 @@
 
   const POLL_BUSY_MS = 1500;     // while the bot is working
   const POLL_OFFLINE_MS = 3000;  // after a failed request, until one works
-  const PREFETCH_MAX = 3;        // PDFs held in memory ready to share: the newest file cards only
+  const PREFETCH_MAX = 3;        // PDFs held in memory ready to share, at most (see Render.prefetchWanted)
   const MAX_UPLOAD = 32 * 1024 * 1024;
   const PAGE_SIZE = 200;
 
   const COPY = {
     emptySend: "Type a message first",
     offline: "You're offline. Trying again…",
+    starting: "Service is starting. Trying again…",
+    sendLink: "Send a link instead",
     typing: "Typing…",
     signIn: "Ask for your personal link to sign in.",
     photo: "This photo couldn't be read. Try a screenshot or a PDF.",
@@ -71,7 +73,9 @@
   let offline = false;
   let signedOut = false;
   let loaded = false;
-  let stick = true;         // the person is at the bottom, so new messages scroll into view
+  let openRef = null;       // the file card that was newest when the chat opened: it is fetched ahead
+  let liveAfter = null;     // its seq: cards after this arrived live and are fetched ahead too
+  let stick = true;        // the person is at the bottom, so new messages scroll into view
   let pollTimer = null;
   let inFlight = false;
   let queued = false;
@@ -94,12 +98,16 @@
     toastTimer = setTimeout(() => { els.toast.hidden = true; }, 4500);
   }
 
-  function setOffline(value) {
-    if (offline === value) return;
+  // `copy` is what the banner says (default: offline). A 503 means the service is
+  // waking up, which is not the person's connection.
+  function setOffline(value, copy) {
+    const text = value ? (copy || COPY.offline) : "";
+    const changed = offline !== value;
+    if (!changed && els.banner.textContent === text) return;
     offline = value;
-    els.banner.textContent = value ? COPY.offline : "";
+    els.banner.textContent = text;
     els.banner.hidden = !value;
-    schedule();
+    if (changed) schedule();
   }
 
   function signOut() {
@@ -236,9 +244,15 @@
     btn.innerHTML = ICON_SHARE;
     const label = h("span", "", "Share to WhatsApp");
     btn.append(label);
-    const fc = { seq: m.seq, ref: b.ref, name, size, btn, label, busy: false };
+    // Shown only after the person closed the share sheet (say WhatsApp wasn't
+    // listed): the way out that doesn't need the sheet.
+    const linkBtn = h("button", "btn", COPY.sendLink);
+    linkBtn.type = "button";
+    linkBtn.hidden = true;
+    const fc = { seq: m.seq, ref: b.ref, name, size, btn, label, linkBtn, busy: false, denied: false };
     btn.addEventListener("click", () => onShareClick(fc));
-    actions.append(btn);
+    linkBtn.addEventListener("click", () => { linkBtn.hidden = true; shareLink(fc); });
+    actions.append(btn, linkBtn);
     card.append(actions);
     el.append(card);
     entry.fileCard = fc;
@@ -532,7 +546,7 @@
     for (const e of rendered) {
       if (e.chips) { last = e; withChips.push(e); continue; }
       if (e.msg.role === "user" && last) {
-        for (const chip of last.chips.children) chip.classList.toggle("picked", chip.dataset.title === e.msg.body);
+        for (const chip of last.chips.children) chip.classList.toggle("picked", R.clipTitle(chip.dataset.title) === e.msg.body);
         last = null;
       }
     }
@@ -606,12 +620,12 @@
         const after = lastSeq;
         const r = await api(after ? `/app/api/messages?after=${after}` : "/app/api/messages");
         if (!r.ok || !r.data || !Array.isArray(r.data.messages)) {
-          if (r.status !== 401) setOffline(true);
+          if (r.status !== 401) setOffline(true, r.status === 503 ? COPY.starting : undefined);
           return;
         }
         setOffline(false);
         addServerMessages(r.data.messages);
-        if (!loaded) { loaded = true; scrollToBottom(); }
+        if (!loaded) { loaded = true; liveAfter = lastSeq; scrollToBottom(); }
         if (after && r.data.messages.length >= PAGE_SIZE) continue;
         setBusy(Boolean(r.data.busy));
         return;
@@ -688,6 +702,7 @@
 
   async function sendTap(id, title, button, data) {
     if (signedOut) return;
+    title = R.clipTitle(title); // the server refuses a title over 200 characters
     if (button) button.disabled = true;
     const p = addPending(title);
     const r = await postJson(data === undefined ? { tapId: id, tapTitle: title } : { tapId: id, tapTitle: title, data });
@@ -785,12 +800,14 @@
   //  Share to WhatsApp
   //
   //  A phone only opens the share sheet inside a tap, so the file has to be on
-  //  the page before the tap. The newest PREFETCH_MAX file cards that are small
-  //  enough (Render.shareMode says "file", 25 MB or less) fetch their file in
-  //  advance; older cards fetch on the first tap, and if the phone no longer
+  //  the page before the tap. To spare mobile data, only the newest file card
+  //  when the chat opens, and each card that arrives while it is open, fetch
+  //  their file in advance (small enough: Render.shareMode says "file", 25 MB or
+  //  less). Older cards fetch on the first tap, and if the phone no longer
   //  counts the tap by then, the button says "Tap again to share" and the
-  //  second tap shares at once. Bigger files, or any whose size is unknown,
-  //  never download: they share a link through wa.me. Memory holds at most
+  //  second tap shares at once; a second refusal, or closing the share sheet,
+  //  leads to the link (wa.me) instead. Bigger files, or any whose size is
+  //  unknown, never download: they share a link. Memory holds at most
   //  PREFETCH_MAX files, plus one for a tapped older card.
   // ---------------------------------------------------------------
   const canShareFiles = (() => {
@@ -833,7 +850,8 @@
 
   function refreshPrefetch() {
     if (!canShareFiles) return;
-    const wanted = fileCards.filter((fc) => R.shareMode(fc.size, true) === "file").slice(-PREFETCH_MAX);
+    const wanted = R.prefetchWanted(fileCards, openRef, liveAfter, PREFETCH_MAX);
+    if (liveAfter === null) openRef = wanted.length ? wanted[0].ref : null; // still opening: remember the newest
     const keep = new Set(wanted.map((fc) => fc.ref));
     for (const [ref, e] of Array.from(cache)) if (!keep.has(ref) && !e.pinned) dropEntry(ref);
     for (const fc of wanted) {
@@ -871,14 +889,16 @@
     try { can = navigator.canShare({ files: [entry.file] }); } catch (_) { can = false; }
     if (!can) return shareLink(fc);
     return navigator.share({ files: [entry.file], title: fc.name }).then(
-      () => { setShareLabel(fc, "Share to WhatsApp"); unpin(fc); },
+      () => { fc.denied = false; fc.linkBtn.hidden = true; setShareLabel(fc, "Share to WhatsApp"); unpin(fc); },
       (err) => {
-        const n = err && err.name;
-        // The phone no longer counted the tap: keep the file for the next one.
-        if (n === "NotAllowedError") { setShareLabel(fc, COPY.tapAgain); return undefined; }
+        const outcome = R.shareOutcome(err && err.name, fc.denied);
+        // The phone no longer counted the tap: keep the file for one more.
+        if (outcome === "again") { fc.denied = true; setShareLabel(fc, COPY.tapAgain); return undefined; }
+        // A second refusal on a fresh tap means this browser won't share files at all.
+        fc.denied = false;
         unpin(fc);
         setShareLabel(fc, "Share to WhatsApp");
-        if (n === "AbortError") return undefined;
+        if (outcome === "aborted") { fc.linkBtn.hidden = false; return undefined; }
         return shareLink(fc);
       });
   }

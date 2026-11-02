@@ -71,18 +71,39 @@
   function fileKind(name) {
     const ext = (String(name || "").split(".").pop() || "").toLowerCase();
     if (ext === "pdf") return "pdf";
-    if (["jpg", "jpeg", "png", "webp"].includes(ext)) return "image";
+    if (["jpg", "jpeg", "png", "webp", "heic", "heif"].includes(ext)) return "image";
     if (["xlsx", "xls", "csv"].includes(ext)) return "sheet";
     return "other";
   }
 
-  // Newest copy of each seq wins; the result is oldest first.
-  function mergeMessages(have, incoming) {
-    const bySeq = new Map();
-    for (const m of have || []) bySeq.set(m.seq, m);
-    for (const m of incoming || []) bySeq.set(m.seq, m);
-    return Array.from(bySeq.values()).sort((a, b) => a.seq - b.seq);
+  // What a failed navigator.share() should lead to. `deniedBefore` is true when
+  // this card already got a NotAllowedError on a tap with its file ready.
+  //   "again"   the phone didn't count the tap: ask for one more
+  //   "aborted" the person closed the share sheet: offer the link, change nothing
+  //   "link"    anything else, or a second NotAllowedError (an in-app browser
+  //             that never allows file sharing): share the link instead
+  function shareOutcome(errorName, deniedBefore) {
+    if (errorName === "NotAllowedError") return deniedBefore ? "link" : "again";
+    if (errorName === "AbortError") return "aborted";
+    return "link";
   }
 
-  return { renderRich, imageTargetSize, shareMode, fileRefUrl, formatSize, fileKind, mergeMessages, escapeHtml, SHARE_FILE_MAX };
+  // Which file cards fetch their file before anyone taps, to spare mobile data.
+  // While the chat is still opening (liveAfterSeq is null) only the newest card
+  // that can be shared as a file; afterwards that card stays, and so does every
+  // card that arrived after the chat opened. At most `max` are held, newest kept.
+  // Any other card fetches on its first tap.
+  function prefetchWanted(cards, openRef, liveAfterSeq, max = 3) {
+    const eligible = (cards || []).filter((fc) => shareMode(fc.size, true) === "file");
+    if (liveAfterSeq === null || liveAfterSeq === undefined) return eligible.slice(-1);
+    return eligible.filter((fc) => fc.ref === openRef || fc.seq > liveAfterSeq).slice(-max);
+  }
+
+  // The server refuses a tap title over 200 characters; a long file name can be.
+  function clipTitle(title, max = 150) {
+    const t = String(title === null || title === undefined ? "" : title);
+    return t.length <= max ? t : t.slice(0, max - 1) + "…";
+  }
+
+  return { renderRich, imageTargetSize, shareMode, fileRefUrl, formatSize, fileKind, shareOutcome, prefetchWanted, clipTitle, escapeHtml, SHARE_FILE_MAX };
 }));

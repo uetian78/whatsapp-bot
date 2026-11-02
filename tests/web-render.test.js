@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const {
-  renderRich, imageTargetSize, shareMode, fileRefUrl, formatSize, fileKind, mergeMessages, SHARE_FILE_MAX,
+  renderRich, imageTargetSize, shareMode, fileRefUrl, formatSize, fileKind, shareOutcome, prefetchWanted, clipTitle, SHARE_FILE_MAX,
 } = require("../web/public/render.js");
 
 test("HTML is escaped", () => {
@@ -98,17 +98,49 @@ test("files are told apart by their name", () => {
   assert.equal(fileKind("photo.jpeg"), "image");
   assert.equal(fileKind("a.png"), "image");
   assert.equal(fileKind("a.webp"), "image");
+  assert.equal(fileKind("IMG_0001.HEIC"), "image", "a typeless iPhone photo is still a photo");
+  assert.equal(fileKind("IMG_0002.heif"), "image");
   assert.equal(fileKind("book.xlsx"), "sheet");
   assert.equal(fileKind("book.csv"), "sheet");
   assert.equal(fileKind("notes.docx"), "other");
   assert.equal(fileKind(undefined), "other");
 });
 
-test("messages are merged by seq, so an optimistic bubble and the server's copy do not double", () => {
-  const have = [{ seq: 1, role: "user", body: "hi" }, { seq: 2, role: "bot", body: "hello" }];
-  const merged = mergeMessages(have, [{ seq: 2, role: "bot", body: "hello" }, { seq: 3, role: "bot", body: "more" }]);
-  assert.deepEqual(merged.map((m) => m.seq), [1, 2, 3]);
-  const sorted = mergeMessages([], [{ seq: 5 }, { seq: 3 }, { seq: 5 }]);
-  assert.deepEqual(sorted.map((m) => m.seq), [3, 5]);
-  assert.deepEqual(mergeMessages(have, []).map((m) => m.seq), [1, 2]);
+test("a failed share leads to: one more tap, then the link; closing the sheet offers the link", () => {
+  assert.equal(shareOutcome("NotAllowedError", false), "again");
+  assert.equal(shareOutcome("NotAllowedError", true), "link", "a second refusal (an in-app browser) goes to the link");
+  assert.equal(shareOutcome("AbortError", false), "aborted");
+  assert.equal(shareOutcome("AbortError", true), "aborted");
+  assert.equal(shareOutcome("TypeError", false), "link");
+  assert.equal(shareOutcome(undefined, false), "link");
 });
+
+test("only the newest file card is fetched ahead on open, then cards that arrive live", () => {
+  const card = (seq, size = 1000) => ({ seq, ref: `drive:f${seq}`, size });
+  const cards = [card(1), card(2), card(3), card(4), card(5)];
+  // opening: just the newest
+  assert.deepEqual(prefetchWanted(cards, null, null).map((c) => c.seq), [5]);
+  // opened with 5 as newest; nothing new yet
+  assert.deepEqual(prefetchWanted(cards, "drive:f5", 5).map((c) => c.seq), [5]);
+  // two arrive live: they join the one from open
+  const live = [...cards, card(6), card(7)];
+  assert.deepEqual(prefetchWanted(live, "drive:f5", 5).map((c) => c.seq), [5, 6, 7]);
+  // at most `max` are held, newest kept
+  const many = [...live, card(8), card(9)];
+  assert.deepEqual(prefetchWanted(many, "drive:f5", 5, 3).map((c) => c.seq), [7, 8, 9]);
+  // cards too big or of unknown size are never fetched ahead
+  const mixed = [card(1), card(2, 30 * 1024 * 1024), card(3, null)];
+  assert.deepEqual(prefetchWanted(mixed, null, null).map((c) => c.seq), [1]);
+  assert.deepEqual(prefetchWanted([], null, null), []);
+});
+
+test("a tap title is clipped to 150 characters, short ones untouched", () => {
+  assert.equal(clipTitle("Page 3 as PDF"), "Page 3 as PDF");
+  const long = "Submittal Paperwork ".repeat(20);
+  const clipped = clipTitle(long);
+  assert.equal(clipped.length, 150);
+  assert.ok(long.startsWith(clipped.slice(0, -1)));
+  assert.equal(clipTitle("x".repeat(150)).length, 150);
+  assert.equal(clipTitle(undefined), "");
+});
+

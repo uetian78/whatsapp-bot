@@ -502,6 +502,30 @@ test("/files refuses a Drive id not in the library", () => withServer({}, async 
   assert.equal(s.calls.drive.length, 0);
 }));
 
+test("a dead Open link shows a short page in a browser, and JSON to the page's own fetches", () => withServer({}, async (s) => {
+  const id = putGenerated(s, SARA, "old.pdf", Buffer.from("x"));
+  fs.rmSync(path.join(s.dir, "generated", id));
+  for (const ref of [`gen%3A${id}`, "drive%3Aunknown1"]) {
+    const page = await s.call(`/app/files/${ref}`, { headers: { ...s.as(), accept: "text/html,application/xhtml+xml,*/*;q=0.8" } });
+    assert.equal(page.status, 404);
+    assert.match(page.headers.get("content-type"), /text\/html/);
+    const html = await page.text();
+    assert.match(html, /no longer available/);
+    assert.doesNotMatch(html, /"error"/);
+    const fetched = await s.call(`/app/files/${ref}`, { headers: s.as() });
+    assert.equal(fetched.status, 404);
+    assert.match(fetched.headers.get("content-type"), /json/);
+    assert.match((await fetched.json()).error, /no longer available/);
+  }
+}));
+
+test("a Drive file that can't be opened is a short page in a browser", () => withServer({ streamDrive: async () => { throw new Error("boom"); } }, async (s) => {
+  s.library.set("f1", { id: "f1", name: "A.pdf", folder: "x" });
+  const page = await s.call("/app/files/drive%3Af1", { headers: { ...s.as(), accept: "text/html" } });
+  assert.equal(page.status, 502);
+  assert.match(await page.text(), /could not be fetched/);
+}));
+
 test("/files asks the library again before refusing: getFile gets the raw id", async () => {
   const seen = [];
   await withServer({ getFile: async (id) => { seen.push(id); return null; } }, async (s) => {

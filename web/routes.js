@@ -278,7 +278,14 @@ function createWebRoutes({
     return null;
   }
 
-  const unavailable = (res, text) => res.status(404).json({ error: text || "That file is not available." });
+  // A person who taps Open lands on this in a new tab: a short page, not raw
+  // JSON. The page's own fetches (which never ask for HTML) still get JSON.
+  const refuse = (req, res, status, text) => {
+    res.set("Cache-Control", "no-store");
+    if (String(req.headers && req.headers.accept || "").includes("text/html")) return res.status(status).type("html").send(notice(text));
+    return res.status(status).json({ error: text });
+  };
+  const unavailable = (req, res) => refuse(req, res, 404, "That file is no longer available.");
 
   // Streams the file. Headers go out only once the source is open, so a source
   // that fails to open is a clean 502; one that dies later destroys the response.
@@ -294,7 +301,7 @@ function createWebRoutes({
       try { source = f.exportMime ? await openExport(f.id, f.exportMime) : await openDrive(f.id); }
       catch (err) {
         console.error("Drive file could not be opened:", err && err.message);
-        return res.status(502).json({ error: "That file could not be fetched right now. Try again." });
+        return refuse(req, res, 502, "That file could not be fetched right now. Try again.");
       }
       // No Content-Length for Drive files: the library's saved size goes stale when a
       // file is replaced in place, and a short length would cut the download off silently.
@@ -303,7 +310,7 @@ function createWebRoutes({
       name = g.name;
       type = mimeFor(g.name);
       try { length = (await fs.promises.stat(g.path)).size; }
-      catch { return unavailable(res); }
+      catch { return unavailable(req, res); }
       source = fs.createReadStream(g.path);
     }
     const inline = req.query.inline === "1" && INLINE_OK.has(type);
@@ -317,7 +324,7 @@ function createWebRoutes({
 
   router.get("/app/files/:ref", wrap(async (req, res) => {
     const found = await resolveRef(req.params.ref, req.account.number);
-    if (!found) return unavailable(res);
+    if (!found) return unavailable(req, res);
     await sendFile(req, res, found);
   }));
 
@@ -327,7 +334,7 @@ function createWebRoutes({
     if (typeof ref !== "string") return bad(res, "Say which file to share.");
     if (!publicUrl || !secret) return res.status(503).json({ error: "Sharing is not set up." });
     const found = await resolveRef(ref, req.account.number);
-    if (!found) return unavailable(res);
+    if (!found) return unavailable(req, res);
     const token = makeShareToken(ref, found.gen ? req.account.number : null, { secret, now });
     res.set("Cache-Control", "no-store").json({ url: `${String(publicUrl).replace(/\/+$/, "")}/s/${token}` });
   }));

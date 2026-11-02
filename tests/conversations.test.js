@@ -76,6 +76,29 @@ test("savedWork returns the newest file messages for that user only", () => {
   assert.deepEqual(c.savedWork("u1", 2).map((m) => m.body.name), ["c.pdf", "b.xlsx"]);
 });
 
+test("savedWork counts each file once, however many times its card was shown again", () => {
+  const { conversations: c } = make();
+  for (let i = 1; i <= 12; i++) c.append("u1", "bot", "file", { ref: `drive:f${i}`, name: `f${i}.pdf` });
+  const names = () => c.savedWork("u1", 10).map((m) => m.body.name);
+  const first = names();
+  assert.deepEqual(first, Array.from({ length: 10 }, (_, i) => `f${12 - i}.pdf`));
+  // "Saved work" tapped three times: it appends the 10 cards again each time.
+  for (let tap = 0; tap < 3; tap++) for (const m of c.savedWork("u1", 10).reverse()) c.append("u1", "bot", "file", m.body);
+  assert.deepEqual(names(), first, "the same 10 files, not pushed out by their own copies");
+  assert.equal(c.savedWork("u1", 12).length, 12, "the older files are still there");
+  assert.equal(new Set(c.savedWork("u1", 50).map((m) => m.body.ref)).size, c.savedWork("u1", 50).length);
+  // more copies than one page of rows
+  for (let i = 0; i < 30; i++) for (const m of c.savedWork("u1", 10).reverse()) c.append("u1", "bot", "file", m.body);
+  assert.deepEqual(names(), first);
+});
+
+test("savedWork keeps file messages that have no ref", () => {
+  const { conversations: c } = make();
+  c.append("u1", "bot", "file", { name: "a.pdf" });
+  c.append("u1", "bot", "file", { name: "b.pdf" });
+  assert.deepEqual(c.savedWork("u1").map((m) => m.body.name), ["b.pdf", "a.pdf"]);
+});
+
 test("isEmpty is true until the user has a message", () => {
   const { conversations: c } = make();
   assert.equal(c.isEmpty("u1"), true);

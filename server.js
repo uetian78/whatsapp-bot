@@ -507,7 +507,7 @@ async function sendFileOptions(to, matchedFiles, prompt, autoSendSingle = true, 
 
     const rows = matchedFiles.map((f) => ({
       id: `fileid|${f.id}`,
-      title: displayName(f).slice(0, 24),
+      title: displayName(f),
       description: shortPath(f.folder),
     }));
     // "Send all" needs something to send all OF, and needs a spare row — a
