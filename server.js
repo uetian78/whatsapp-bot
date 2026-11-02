@@ -46,7 +46,6 @@ const { PRODUCT_KB, parseListRequest, parseUnsupportedSeriesListRequest, buildUn
 const crm = require("./crm.js");
 const docReq = require("./lib/doc-requests.js");
 const docReqDedupe = docReq.createDedupe();
-const { generateMtzPdf } = require("./mtz-pdf.js");
 const { getSheets, getDrive, withRetry, driveFileId } = require("./lib/google.js");
 const {
   listFolderFiles, docTypeFromFilename, fileMatchesDocType,
@@ -142,8 +141,9 @@ try { chillerDriveIds = require('./chiller-drive-ids.json'); } catch (_) {}
 let productDriveIds = {};
 try { productDriveIds = require('./product-drive-ids.json'); } catch (_) {}
 
-// Unified per-user session state (guided flows + auxiliary ctx). Replaces the
-// 8 previous ad-hoc per-user stores that each had their own TTL and expiry logic.
+// Unified per-user session state (the open menu, a numbered list, the last
+// request). One store with one TTL and expiry rule, saved to SQLite so it
+// survives a restart.
 const store = require("./lib/session-store.js");
 const { enqueue } = require("./lib/user-queue.js");
 
@@ -200,7 +200,6 @@ const BOT_CAPABILITIES =
   "• Chiller — *APCY-H 30 tr*\n" +
   "• Fan coil unit — *DMP 10 tr*\n\n" +
   "*🧭 Guided Selectors* (step-by-step + PDF)\n" +
-  "• *MTZ Selection*\n\n" +
   "💡 Type *menu* anytime, or email hassan.saleem@mannai.com.qa for help.";
 
 // ============================================================
@@ -700,178 +699,6 @@ async function runAiSearch(to, query, announce) {
 }
 
 
-// ============================================================
-//  TRANE MTZ STEP HANDLER
-// ============================================================
-const TR_TO_MBH = 12; // 1 TR = 12 MBtu/h
-const { rankModels: mtzRank } = require("./mtz-engine.js");
-const { parseMtzExpress, parseLoadReply } = require("./lib/mtz-express.js");
-
-// The load step reads "8.5 TR", "100 MBH", a bare number (MBH) and
-// "8.5TR / 7TR" with the same parser as the one-line command
-// (lib/mtz-express.js), which refuses other units instead of guessing.
-
-// Parse "80/67/115" or "80 67 115" → { db, wb, amb }
-function parseConditions(text) {
-  const nums = text.match(/[\d.]+/g);
-  if (!nums || nums.length < 3) return null;
-  return { db: parseFloat(nums[0]), wb: parseFloat(nums[1]), amb: parseFloat(nums[2]) };
-}
-
-// Parse "2800 | Project Name | TAG-01" or "rated | Project Name"
-function parseExtras(text) {
-  const parts = text.split(/\|/).map(p => p.trim());
-  const afRaw = parts[0];
-  const useRated = /^(rated|skip|auto)$/i.test(afRaw);
-  const cfm = useRated ? null : parseFloat(afRaw.match(/[\d.]+/)?.[0] ?? "");
-  if (!useRated && (!cfm || cfm < 500 || cfm > 20000)) return null;
-  return {
-    airflow: useRated ? null : cfm,
-    project: parts[1] || "",
-    tag:     parts[2] || "",
-  };
-}
-
-// Build a ranked text summary of top models
-function mtzRankSummary(reqTC, reqSC, db, wb, amb) {
-  const ranked = mtzRank(reqTC, reqSC || 0, db, wb, amb);
-  const adequate = ranked.filter(r => r.adequate);
-  const show = (adequate.length ? adequate : ranked).slice(0, 3);
-  const fmt1 = v => v.toFixed(1);
-  const lines = show.map((r, i) => {
-    const eer = r.r.PI > 0 ? (r.r.TC * 1000 / r.r.PI).toFixed(2) : "—";
-    const margin = r.tcMargin != null ? ` (+${(r.tcMargin * 100).toFixed(0)}%)` : "";
-    const label = i === 0 ? "⭐ " : `${i + 1}. `;
-    return `${label}*${r.key}* — TC ${fmt1(r.r.TC)} MBH (${fmt1(r.r.TC/TR_TO_MBH)} TR)${margin}\n` +
-           `   SC ${fmt1(r.r.SC)} MBH · ${fmt1(r.r.PI)} kW · EER ${eer}\n` +
-           `   Off-coil DB ${fmt1(r.oc.dbOff)}°F / WB ${fmt1(r.oc.wbOff)}°F`;
-  });
-  return lines.join("\n\n");
-}
-
-async function handleMtzStep(from, s, text) {
-  // ── Step 1: cooling load ────────────────────────────────────
-  if (s.step === "load") {
-    const parsed = parseLoadReply(text);
-    const load = parsed.error ? null : parsed;
-    if (parsed.error === "unit") {
-      return sendText(from,
-        "❌ I only take the load in *TR* or *MBH*, and I don't convert other units (kW, BTU/h…) for you.\n" +
-        "• `8.5 TR`  or  `100 MBH`  _(a bare number counts as MBH)_\n" +
-        "• With sensible: `8.5TR / 7TR`\n" +
-        "Type *cancel* to exit."
-      );
-    }
-    if (!load) {
-      return sendText(from,
-        "❌ Couldn't read that load. Try:\n" +
-        "• `8.5 TR`  or  `100 MBH`\n" +
-        "• With sensible: `8.5TR / 7TR`\n" +
-        "Type *cancel* to exit."
-      );
-    }
-    s.reqTC = load.tc;
-    s.reqSC = load.sc;
-    s.step  = "conditions";
-    const scNote = load.sc ? ` · sensible ${load.sc.toFixed(1)} MBH (${(load.sc/TR_TO_MBH).toFixed(2)} TR)` : "";
-    return sendText(from,
-      `✅ Load: *${load.tc.toFixed(1)} MBH (${(load.tc/TR_TO_MBH).toFixed(2)} TR)*${scNote}\n\n` +
-      "*Step 2/3:* Enter on-coil *DB / WB* and *outdoor ambient* on one line:\n" +
-      "e.g. `80/67/115`  _(DB°F / WB°F / Amb°F)_\n" +
-      "_(Typical Gulf: 80/67/115)_"
-    );
-  }
-
-  // ── Step 2: DB / WB / Ambient (combined) ───────────────────
-  if (s.step === "conditions") {
-    const c = parseConditions(text);
-    if (!c || c.db < 60 || c.db > 100 || c.wb < 50 || c.wb > 85 || c.wb > c.db || c.amb < 70 || c.amb > 135) {
-      return sendText(from,
-        "❌ Couldn't parse. Enter three numbers: DB / WB / Ambient in °F\n" +
-        "e.g. `80/67/115`\n" +
-        "DB: 60–100 · WB: 50–85 · Amb: 70–135 · WB ≤ DB\n" +
-        "Type *cancel* to exit."
-      );
-    }
-    s.db   = c.db;
-    s.wb   = c.wb;
-    s.amb  = c.amb;
-    s.step = "extras";
-    return sendText(from,
-      `✅ Conditions: *DB ${c.db}°F / WB ${c.wb}°F · Ambient ${c.amb}°F*\n\n` +
-      "*Step 3/3:* Enter supply *airflow* (CFM), or *rated* for catalogue default.\n" +
-      "Optionally add project name & unit tag separated by `|`:\n" +
-      "• `rated`\n" +
-      "• `2800`\n" +
-      "• `2800 | MOEHE School | PAC-01`\n" +
-      "• `rated | Cooling Tower Project | CU-03`"
-    );
-  }
-
-  // ── Step 3: airflow + optional project/tag → generate PDF ──
-  if (s.step === "extras") {
-    const ex = parseExtras(text);
-    if (!ex) {
-      return sendText(from,
-        "❌ Enter airflow CFM (500–20000), or *rated*.\n" +
-        "Examples: `2800`  |  `rated`  |  `2800 | Project | TAG`\n" +
-        "Type *cancel* to exit."
-      );
-    }
-    s.airflow = ex.airflow;
-    s.project = ex.project;
-    s.tag     = ex.tag;
-    store.endFlow(from);
-
-    // Show ranked text preview first
-    let previewText = "";
-    try {
-      previewText = mtzRankSummary(s.reqTC, s.reqSC, s.db, s.wb, s.amb);
-    } catch (_) { /* skip preview on error */ }
-
-    const cfmLabel = ex.airflow ? `${ex.airflow} CFM` : "rated (catalogue)";
-    await sendText(from,
-      `✅ Airflow: *${cfmLabel}*\n\n` +
-      (previewText ? `*📊 Top Models @ DB${s.db}/WB${s.wb}°F, ${s.amb}°F amb:*\n\n${previewText}\n\n` : "") +
-      "⏳ Generating full datasheet PDF…"
-    );
-
-    console.log(`📊 MTZ selection: reqTC=${s.reqTC} reqSC=${s.reqSC} DB=${s.db} WB=${s.wb} amb=${s.amb} airflow=${s.airflow}`);
-
-    let pdfBuffer;
-    try {
-      pdfBuffer = await generateMtzPdf({
-        reqTC:   s.reqTC,
-        reqSC:   s.reqSC || 0,
-        db:      s.db,
-        wb:      s.wb,
-        amb:     s.amb,
-        airflow: s.airflow,
-        project: s.project,
-        tag:     s.tag,
-      });
-    } catch (err) {
-      console.error("❌ MTZ PDF error:", err.message);
-      return sendText(from, "❌ Failed to generate the datasheet. Please try again or contact support.");
-    }
-
-    if (!pdfBuffer) {
-      return sendText(from, "❌ No MTZ model found for those conditions. Please try different values.");
-    }
-
-    try {
-      const projLabel = s.project ? ` · ${s.project}${s.tag ? " / " + s.tag : ""}` : "";
-      await sendPdfBuffer(
-        from, pdfBuffer, `MTZ_Selection${s.tag ? "_" + s.tag : ""}.pdf`,
-        `Trane MTZ — ${(s.reqTC / TR_TO_MBH).toFixed(1)} TR @ DB${s.db}/WB${s.wb}°F, ${s.amb}°F amb${projLabel}`
-      );
-    } catch (err) {
-      console.error("❌ MTZ send error:", err.message);
-      return sendText(from, "❌ PDF was generated but could not be sent. Please try again.");
-    }
-  }
-}
-
 // A page button (page|<fileId>|<n>|pdf or |image): say it is working, then send
 // just that page. The extractor checks the file against the library and the page
 // against the file; its PageError messages are written to be shown as they are.
@@ -1092,8 +919,8 @@ async function handleIncomingMessage(value, message) {
     }
 
     // ── Global escape: a bare greeting / "menu" / "help" ALWAYS shows the menu
-    // and clears any in-flight session, so a stuck or half-finished flow can
-    // never trap the user with no reply. Runs BEFORE every session check.
+    // and clears what it was waiting for (an open menu, a numbered list). Runs
+    // BEFORE every other check.
     // isMenuTrigger only matches whole-message greetings/menu words, so it never
     // hijacks a real request like "hi can I get the APMR catalogue".
     if (message.type === "text" && isMenuTrigger(message.text.body)) {
@@ -1101,25 +928,6 @@ async function handleIncomingMessage(value, message) {
       console.log(`📋 welcome menu (global escape) -> ${from}`);
       return await showWelcomeMenu(from, profileName);
     }
-
-    // ── Global cancel: ends ANY active flow from anywhere. Each flow used to
-    // implement its own copy; this is now the single authority.
-    if (message.type === "text" && /^(cancel|stop|exit|quit|reset)$/i.test(message.text.body.trim())) {
-      const hadFlow = !!store.getFlow(from);
-      store.endFlow(from);
-      if (hadFlow) {
-        return await sendText(from, "✅ Cancelled. Type *menu* to see everything I can do.");
-      }
-      // No active flow -> fall through (smallTalkReply gives the friendly bye).
-    }
-
-    // ── Active guided flow (mtz) ─────────────
-    const flow = store.getFlow(from);
-    if (flow?.expired) {
-      const names = { mtz: "MTZ Selection" };
-      return await sendText(from, `⏰ ${names[flow.type] || "Your"} session timed out. Type *${names[flow.type] || "menu"}* to start again.`);
-    }
-    if (flow) store.touchFlow(from);
 
     // Nothing reads a photo or a file any more, so one that arrives is left alone.
     if (message.type !== "text") return;
@@ -1161,39 +969,6 @@ async function handleIncomingMessage(value, message) {
         return await sendManyFiles(from, chosen);
       }
     }
-
-    // ── MTZ multi-step session ─────────────────────────────────
-    if (flow?.type === "mtz") {
-      return await handleMtzStep(from, flow.data, text);
-    }
-    // Trigger: "MTZ Selection", alone or with a one-line request (the menu's
-    // "MTZ Selection 8.5TR 80/67/115"). A line that does not read cleanly gets
-    // the guided steps, as the bare phrase does.
-    if (/^mtz\s+selection\b/i.test(text.trim())) {
-      const express = parseMtzExpress(text);
-      if (express) {
-        const { reqTC, reqSC, db, wb, amb } = express;
-        store.startFlow(from, "mtz", { step: "extras", reqTC, reqSC, db, wb, amb });
-        const scNote = reqSC ? ` / SC ${reqSC.toFixed(1)} MBH` : "";
-        return await sendText(from,
-          `✅ *${reqTC.toFixed(1)} MBH${scNote} · DB${db}/WB${wb}°F · Amb ${amb}°F*\n\n` +
-          "*Step 3/3:* Enter supply airflow CFM, or *rated*.\n" +
-          "Optionally add project name & tag:\n" +
-          "• `rated`  or  `2800`\n" +
-          "• `2800 | Project Name | TAG-01`"
-        );
-      }
-      store.startFlow(from, "mtz", { step: "load" });
-      return await sendText(from,
-        "🌡️ *Trane MTZ Package Unit Selector*\n\n" +
-        "3 quick steps → ranked models + PDF datasheet.\n\n" +
-        "*Step 1/3:* Required total cooling load?\n" +
-        "• `8.5 TR`  or  `100 MBH`\n" +
-        "• With sensible: `8.5 TR / 7 TR`\n\n" +
-        "_(Type *cancel* anytime to exit)_"
-      );
-    }
-    // ────────────────────────────────────────────────────────────
 
     const { knowledge } = await loadSheet();
 

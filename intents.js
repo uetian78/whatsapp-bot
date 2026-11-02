@@ -21,7 +21,6 @@ const INTENTS = [
   { name: "button-tap",         match: (t) => t.startsWith("btn:") },
   { name: "numbered-reply",     match: (t) => /^\d+$/.test(t) },
   { name: "menu",               match: (t) => isMenuTrigger(t) },
-  { name: "mtz-selection",      match: (t) => /^mtz\s+selection\b/i.test(t) },
   { name: "admin-stats",        match: (t) => /^stats$/i.test(t) },
   { name: "small-talk",         match: (t) => !!smallTalkReply(t) },
   { name: "search-all",         match: (t) => isSearchAllTrigger(t) },

@@ -81,11 +81,11 @@ test("the old guided triggers no longer start anything: they are plain requests"
   const t = setup();
   try {
     const { getFlow } = require("../lib/session-store.js");
-    for (const phrase of ["Split Selection", "Schedule Selection", "VRF Selection", "print", "datasheet"]) {
+    for (const phrase of ["Split Selection", "Schedule Selection", "VRF Selection", "MTZ Selection", "MTZ Selection 8.5TR 80/67/115", "print", "datasheet", "cancel"]) {
       t.sent.length = 0;
       await t.say(textMsg(phrase));
       const said = t.sent.map((s) => s.body).join("\n");
-      assert.doesNotMatch(said, /Step 1\/3|Split Unit Selector|Schedule \/ BOQ|Send the equipment schedule|VRF session|Generating PDF/, phrase);
+      assert.doesNotMatch(said, /Step [123]\/3|Split Unit Selector|MTZ Package Unit Selector|Cancelled|Schedule \/ BOQ|Send the equipment schedule|VRF session|Generating PDF/, phrase);
       assert.equal(getFlow(USER), null, phrase);
     }
   } finally { t.done(); }
