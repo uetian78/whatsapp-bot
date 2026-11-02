@@ -37,6 +37,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const MSG_TOO_LARGE = "That file is too large. The limit is 32 MB.";
 const MSG_BAD_TYPE = "Send a photo, PDF or Excel file.";
+const MSG_NO_ANSWER = "I couldn't do anything with that. Type *menu* to see what I can do, or tell me what you're looking for.";
 
 // Every response from /app and /s: same-origin only, no inline script, no
 // plugins, no framing. Pictures may also come from blob: and data: so the page
@@ -128,14 +129,30 @@ function createWebRoutes({
   const busy = new Map(); // number -> messages still being handled (in memory only)
   const isBusy = (number) => (busy.get(number) || 0) > 0;
 
+  // A message that settled with nothing said back (a tap on a menu row that is
+  // gone, a handler that found nothing to do) must not look like the app
+  // ignoring the person. `seq` is the person's own message just saved: if no bot
+  // message followed it, say something short. A crash already gets its apology
+  // from deliverMessage, which counts as a bot message, so nothing doubles up.
+  async function answerIfSilent(number, seq) {
+    if (typeof seq !== "number") return;
+    try {
+      if (conversations.since(number, seq, 50).some((m) => m.role === "bot")) return;
+      await webChannel.text(number, MSG_NO_ANSWER);
+    } catch (err) {
+      console.error("Web catch-all failed:", err && err.message);
+    }
+  }
+
   // Saves nothing itself. Runs deliverMessage in the background: a failure is
   // logged (never the message) and busy clears either way.
-  function handle(account, message, afterwards) {
+  function handle(account, message, seq, afterwards) {
     const number = account.number;
     busy.set(number, (busy.get(number) || 0) + 1);
     const value = { contacts: [{ profile: { name: account.name || "" } }] };
     (async () => deliverMessage(value, message, webChannel))()
       .catch((err) => console.error("Web message failed:", err && err.message))
+      .then(() => answerIfSilent(number, seq))
       .finally(() => {
         const left = (busy.get(number) || 1) - 1;
         if (left > 0) busy.set(number, left); else busy.delete(number);
@@ -215,7 +232,7 @@ function createWebRoutes({
       message = { ...base, type: "text", text: { body: text } };
     }
     const seq = conversations.append(account.number, "user", "text", shown);
-    handle(account, message);
+    handle(account, message, seq);
     res.status(202).json({ seq, busy: true });
   }));
 
@@ -253,7 +270,7 @@ function createWebRoutes({
       ? { ...base, type: "image", image: { id, mime_type: kind.mime } }
       : { ...base, type: "document", document: { id, filename: name, mime_type: kind.mime } };
     const seq = conversations.append(number, "user", "text", name);
-    handle(account, message, () => uploads.remove(id));
+    handle(account, message, seq, () => uploads.remove(id));
     res.status(202).json({ seq, busy: true });
   }));
 
@@ -364,4 +381,4 @@ function createWebRoutes({
   return router;
 }
 
-module.exports = { createWebRoutes, contentDisposition, webErrorHandler, CSP, MSG_TOO_LARGE, MSG_BAD_TYPE };
+module.exports = { createWebRoutes, contentDisposition, webErrorHandler, CSP, MSG_TOO_LARGE, MSG_BAD_TYPE, MSG_NO_ANSWER };

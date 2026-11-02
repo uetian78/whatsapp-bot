@@ -62,7 +62,8 @@ async function serve(o = {}) {
   const uploads = o.uploads || createUploadStore({ now });
   const webChannel = createWebChannel({ conversations, dataDir: dir, now, uploads, crm: { logOutbound() {} } });
   const delivered = [];
-  const deliverMessage = o.deliverMessage || (async (value, message, adapter) => { delivered.push({ value, message, adapter }); });
+  // The default handler answers, as the real one always does; a test that wants silence passes its own.
+  const deliverMessage = o.deliverMessage || (async (value, message, adapter) => { delivered.push({ value, message, adapter }); await webChannel.text(message.from, "ok"); });
   const welcomes = [];
   const sendWelcome = o.sendWelcome || (async (account) => {
     welcomes.push(account.number);
@@ -182,7 +183,7 @@ test("text reaches deliverMessage as the signed-in number, in the webhook's mess
   assert.equal(message.text.body, "APMR catalogue");
   assert.match(message.id, /^web\./);
   assert.match(String(message.timestamp), /^\d+$/);
-  const saved = s.conversations.since(SARA, 0);
+  const saved = s.conversations.since(SARA, 0).filter((m) => m.role === "user"); // (the default handler also answers "ok")
   assert.deepEqual(saved.map((m) => [m.role, m.kind, m.body]), [["user", "text", "APMR catalogue"]]);
 }));
 
@@ -198,7 +199,7 @@ test("a tap reaches deliverMessage as a button reply with its data, and its titl
     button_reply: { id: "menu|3", title: "Read a schedule", data: { rows: [1, 2] } },
   });
   assert.equal(value.contacts[0].profile.name, "Omar");
-  assert.deepEqual(s.conversations.since(OMAR, 0).map((m) => m.body), ["Read a schedule"]);
+  assert.deepEqual(s.conversations.since(OMAR, 0).filter((m) => m.role === "user").map((m) => m.body), ["Read a schedule"]);
   assert.deepEqual(s.conversations.since(SARA, 0), []);
 }));
 
@@ -233,6 +234,75 @@ test("two messages in a row both count; busy stays true until the last settles",
     assert.ok(await until(async () => (await (await s.get("/app/api/messages")).json()).busy === false));
   });
 });
+
+// ---- a message that settles with nothing said back ----
+const { MSG_NO_ANSWER } = require("../web/routes.js");
+const botBodies = (s, user = SARA) => s.conversations.since(user, 0).filter((m) => m.role === "bot").map((m) => m.body);
+const settled = async (s, user = SARA) => { await until(async () => !(await (await s.get("/app/api/messages", user)).json()).busy); await tick(); };
+
+test("a text or tap that settles with no bot message gets a short reply offering the menu", () => withServer({ deliverMessage: async () => {} }, async (s) => {
+  await s.json("/app/api/messages", { text: "5 kW" });
+  await settled(s);
+  assert.deepEqual(botBodies(s), [MSG_NO_ANSWER]);
+  assert.match(MSG_NO_ANSWER, /menu/i);
+  await s.json("/app/api/messages", { tapId: "menu|9", tapTitle: "An old row" });
+  await settled(s);
+  assert.deepEqual(botBodies(s), [MSG_NO_ANSWER, MSG_NO_ANSWER]);
+}));
+
+test("busy stays true until the catch-all is written, so the poll that sees busy=false sees it", () => withServer({ deliverMessage: async () => {} }, async (s) => {
+  await s.json("/app/api/messages", { text: "hello" });
+  for (let i = 0; i < 100; i++) {
+    const r = await (await s.get("/app/api/messages")).json();
+    if (!r.busy) { assert.deepEqual(r.messages.filter((m) => m.role === "bot").map((m) => m.body), [MSG_NO_ANSWER]); return; }
+    await tick(5);
+  }
+  assert.fail("busy never cleared");
+}));
+
+test("a handler that answers (text, file or choices) gets no catch-all", () => withServer({
+  deliverMessage: async (value, message, adapter) => {
+    const t = message.text && message.text.body;
+    if (t === "text") await adapter.text(message.from, "an answer");
+    else if (t === "buttons") await adapter.buttons(message.from, "pick", [{ id: "a", title: "A" }]);
+    else if (t === "list") await adapter.list(message.from, "pick", "Choose", [{ id: "a", title: "A" }]);
+  },
+}, async (s) => {
+  for (const text of ["text", "buttons", "list"]) { await s.json("/app/api/messages", { text }); await settled(s); }
+  const bots = botBodies(s);
+  assert.equal(bots.length, 3);
+  assert.ok(!bots.includes(MSG_NO_ANSWER));
+}));
+
+test("a crash that was apologised for is not apologised for twice", async (t) => {
+  t.mock.method(console, "error", () => {});
+  await withServer({
+    deliverMessage: async (value, message, adapter) => {
+      try { throw new Error("handler blew up"); }
+      catch { await adapter.text(message.from, "⚠️ Something went wrong on my side."); } // what server.js's deliverMessage does
+    },
+  }, async (s) => {
+    await s.json("/app/api/messages", { text: "x" });
+    await settled(s);
+    assert.deepEqual(botBodies(s), ["⚠️ Something went wrong on my side."]);
+  });
+});
+
+test("a crash whose apology failed too still leaves the person with one short reply", async (t) => {
+  t.mock.method(console, "error", () => {});
+  await withServer({ deliverMessage: async () => { throw new Error("handler blew up"); } }, async (s) => {
+    await s.json("/app/api/messages", { text: "x" });
+    await settled(s);
+    assert.deepEqual(botBodies(s), [MSG_NO_ANSWER]);
+  });
+});
+
+test("a bot message from earlier in the chat doesn't count as the answer", () => withServer({ deliverMessage: async () => {} }, async (s) => {
+  s.conversations.append(SARA, "bot", "text", "an old answer");
+  await s.json("/app/api/messages", { text: "again" });
+  await settled(s);
+  assert.deepEqual(botBodies(s), ["an old answer", MSG_NO_ANSWER]);
+}));
 
 test("a failing deliverMessage is logged, never crashes, and busy clears", async () => {
   const errs = [];
@@ -269,7 +339,7 @@ test("a blank message or one over 4000 characters gets 400", () => withServer({}
     assert.equal(typeof (await r.json()).error, "string");
   }
   assert.equal((await s.json("/app/api/messages", { text: "x".repeat(4000) })).status, 202);
-  assert.equal(s.conversations.since(SARA, 0).length, 1, "refused messages are not saved");
+  assert.equal(s.conversations.since(SARA, 0).filter((m) => m.role === "user").length, 1, "refused messages are not saved");
 }));
 
 test("JSON endpoints need Content-Type: application/json, and a broken body is a clean 400", () => withServer({}, async (s) => {
@@ -291,7 +361,7 @@ test("a POST from another site is refused", () => withServer({}, async (s) => {
   assert.equal(o.status, 403);
   const same = await s.json("/app/api/messages", { text: "hi" }, SARA, { "sec-fetch-site": "same-origin" });
   assert.equal(same.status, 202);
-  assert.equal(s.conversations.since(SARA, 0).length, 1);
+  assert.equal(s.conversations.since(SARA, 0).filter((m) => m.role === "user").length, 1);
 }));
 
 test("/app with no session shows: Ask for your personal link to sign in.", () => withServer({}, async (s) => {
@@ -382,7 +452,7 @@ test("a photo goes to deliverMessage as an image, a PDF or sheet as a document, 
       assert.equal(got.mediaType, mime);
     }
     // the person's message is the file name
-    assert.deepEqual(s.conversations.since(SARA, 0).map((m) => m.body), cases.map((c) => c[0]));
+    assert.deepEqual(s.conversations.since(SARA, 0).filter((m) => m.role === "user").map((m) => m.body), cases.map((c) => c[0]));
   });
 });
 

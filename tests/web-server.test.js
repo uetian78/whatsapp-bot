@@ -129,6 +129,59 @@ test("file choices show their whole names on the web; WhatsApp's own builder sti
   } finally { t.done(); }
 });
 
+const imageMsg = () => ({ type: "image", image: { id: "photo-1", mime_type: "image/jpeg" } });
+const docMsg = (mime, filename) => ({ type: "document", document: { id: "doc-1", mime_type: mime, filename } });
+
+test("on the web, a photo or PDF with no flow open starts the schedule flow and says so", { skip }, async () => {
+  for (const msg of [imageMsg(), docMsg("application/pdf", "sched.pdf")]) {
+    const t = setup();
+    try {
+      await t.say(msg); // the fake adapter can't download, which is enough to see the flow start
+      assert.match(t.sent[0].body, /reading this as an equipment schedule/);
+      assert.match(t.sent[1].body, /couldn't download/);
+      await t.say(textMsg("cancel")); // an open flow answers "Cancelled"
+      assert.match(t.sent.at(-1).body, /Cancelled/);
+    } finally { t.done(); }
+  }
+});
+
+test("on the web, a sheet with no flow open is pointed to VRF Selection", { skip }, async () => {
+  for (const msg of [
+    docMsg("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "rows.xlsx"),
+    docMsg("application/vnd.ms-excel", "rows.xls"), docMsg("text/csv", "rows.csv"),
+  ]) {
+    const t = setup();
+    try {
+      await t.say(msg);
+      assert.equal(t.sent.length, 1);
+      assert.match(t.sent[0].body, /VRF Selection/);
+      await t.say(textMsg("cancel"));
+      assert.doesNotMatch(t.sent.at(-1).body, /Cancelled/, "no flow was started for a sheet");
+    } finally { t.done(); }
+  }
+});
+
+test("on WhatsApp a photo or file with no flow open is still ignored", { skip }, async () => {
+  for (const msg of [imageMsg(), docMsg("application/pdf", "sched.pdf"), docMsg("text/csv", "rows.csv")]) {
+    const t = setup("whatsapp");
+    try {
+      await t.say(msg);
+      assert.deepEqual(t.sent, []);
+    } finally { t.done(); }
+  }
+});
+
+test("a photo while the schedule flow is open is still read by that flow, with no note", { skip }, async () => {
+  const t = setup();
+  try {
+    await t.say(tapMsg("menu|3", "Read a schedule"));
+    t.sent.length = 0;
+    await t.say(imageMsg());
+    assert.doesNotMatch(t.sent.map((s) => s.body).join("\n"), /reading this as an equipment schedule/);
+    assert.match(t.sent[0].body, /couldn't download/);
+  } finally { t.done(); }
+});
+
 test("Saved work with nothing saved says so", { skip }, async () => {
   const t = setup();
   try {

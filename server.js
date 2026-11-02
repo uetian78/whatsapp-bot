@@ -1536,6 +1536,22 @@ async function startScheduleFlow(from) {
   return await sendText(from, SCHEDULE_PROMPT);
 }
 
+// A photo or PDF with no flow open starts the schedule flow and is read at once,
+// with a note saying so. A sheet (xlsx, xls, csv) is only read by VRF Selection,
+// so it is pointed there. Web chat only (see the caller).
+async function handleStrayAttachment(from, message) {
+  const doc = message.type === "document" ? message.document : null;
+  const isPdf = !!doc && (/pdf/i.test(doc.mime_type || "") || /\.pdf$/i.test(doc.filename || ""));
+  if (message.type === "image" || isPdf) {
+    const data = store.startFlow(from, "schedule", { step: "awaitImage" });
+    await sendText(from, "📎 Nothing was waiting for a file, so I'm reading this as an equipment schedule.");
+    return await handleScheduleStep(from, data, message, "");
+  }
+  if (doc) {
+    return await sendText(from, "I read Excel and CSV sheets inside *VRF Selection*. Type *VRF Selection*, then attach the sheet again.");
+  }
+}
+
 // A menu row or its number: the row's own action (the schedule row starts the
 // schedule flow), else its tip card. A number with no row sends nothing.
 async function sendMenuPick(from, n, options = MENU_OPTIONS) {
@@ -1830,7 +1846,13 @@ async function handleIncomingMessage(value, message) {
       return await handleScheduleStep(from, flow.data, message, vText);
     }
 
-    if (message.type !== "text") return;
+    if (message.type !== "text") {
+      // The web chat's attach button is always on screen, and a redeploy or a
+      // sleep drops an open VRF session (kept in memory), so a file can arrive
+      // with nothing waiting for it. WhatsApp keeps ignoring such files.
+      if (currentChannel()?.name === "web") return await handleStrayAttachment(from, message);
+      return;
+    }
     let text = message.text.body.trim(); // a "find ..." that is really a document request continues without the verb
 
     // Reply to a pending document list: "2", "1,3,5", "1-4", or "all".
