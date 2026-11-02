@@ -59,7 +59,7 @@ test("a flow and its later edits survive a restart", () => {
   assert.equal(b.getFlow("u").data.step, "condition");
 });
 
-test("expired entries are not restored, and their rows are deleted", () => {
+test("after a restart an expired ctx is gone, but an expired flow still reports that it timed out, once", () => {
   const db = openDb(":memory:");
   let t = 1_000;
   const a = createSessionStore({ db, now: () => t });
@@ -71,10 +71,48 @@ test("expired entries are not restored, and their rows are deleted", () => {
   t = 5_000; // flow and menu are past their ttl, list is not
   const b = createSessionStore({ db, now: () => t });
   b.restore();
-  assert.equal(b.getFlow("u"), null);
-  assert.equal(b.getCtx("u", "menu"), null);
+  assert.equal(b.getCtx("u", "menu"), null, "an expired ctx is not brought back");
   assert.deepEqual(b.getCtx("u", "list"), ["a"]);
-  assert.deepEqual(rows(db, "u").map((r) => r.key), ["ctx:list"]);
+  assert.deepEqual(rows(db, "u").map((r) => r.key), ["ctx:list", "flow"], "the ctx row is deleted; the flow row waits to be reported");
+  assert.deepEqual(b.getFlow("u"), { expired: true, type: "split" });
+  assert.equal(b.getFlow("u"), null, "reported once");
+  b.persist("u"); // the end of the message that reported it
+  assert.deepEqual(rows(db, "u").map((r) => r.key), ["ctx:list"], "and then its row is gone");
+  const c = createSessionStore({ db, now: () => t });
+  c.restore();
+  assert.equal(c.getFlow("u"), null, "a later restart doesn't report it again");
+});
+
+test("an expired flow that nobody came back to is dropped after 24 hours", () => {
+  const db = openDb(":memory:");
+  const DAY = 24 * 60 * 60 * 1000;
+  let t = 1_000;
+  const a = createSessionStore({ db, now: () => t });
+  a.startFlow("fresh", "mtz", {}, 100);
+  a.startFlow("old", "split", {}, 100);
+  a.persist("fresh"); a.persist("old");
+  t = 1_000 + 100 + DAY - 1; // just inside the day
+  const b = createSessionStore({ db, now: () => t });
+  b.restore();
+  assert.equal(b.getFlow("fresh").expired, true);
+  t = 1_000 + 100 + DAY + 1; // just past it
+  const c = createSessionStore({ db, now: () => t });
+  c.restore();
+  assert.equal(c.getFlow("old"), null, "months-old sessions don't report");
+  assert.deepEqual(rows(db, "old"), []);
+});
+
+test("persist keeps an expired flow for the day too, and the sweep leaves it to be reported", () => {
+  const db = openDb(":memory:");
+  let t = 1_000;
+  const a = createSessionStore({ db, now: () => t });
+  a.startFlow("u", "schedule", { step: "awaitImage" }, 100);
+  t = 2_000; // expired, not yet reported
+  a.persist("u");
+  assert.deepEqual(rows(db, "u").map((r) => r.key), ["flow"]);
+  a.sweep();
+  assert.deepEqual(a.getFlow("u"), { expired: true, type: "schedule" });
+  assert.equal(a.getFlow("u"), null);
 });
 
 test("expires_at comes from each entry's own ts + ttl", () => {
