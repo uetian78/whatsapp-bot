@@ -17,7 +17,6 @@ require("dns").setDefaultResultOrder("ipv4first");
 const express = require("express");
 const axios = require("axios");
 const Anthropic = require("@anthropic-ai/sdk");
-const FormData = require("form-data");
 const { buildSelectionReply, buildSelectionInteractive, handleButtonTap, interpretCode, parseSeriesRequest, seriesMenu, parseDatasheetRequest, datasheetMenu, detectDocType } = require("./products.js");
 const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSeries, datasheetCondition, DATASHEET_FOLDERS } = require("./catalogue-map.js");
 const { routeChillerText, handleChillerButton } = require("./chillers.js");

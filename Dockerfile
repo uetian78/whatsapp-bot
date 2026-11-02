@@ -10,11 +10,6 @@ FROM node:24-slim
 # "production". (server.js also never returns one, whatever this is.)
 ENV NODE_ENV=production
 
-# PDF tools for the page search.
-RUN apt-get update \
-    && apt-get install -y --no-install-recommends qpdf poppler-utils \
-    && rm -rf /var/lib/apt/lists/*
-
 WORKDIR /app
 
 # Node deps (own layer so it caches unless package*.json changes).

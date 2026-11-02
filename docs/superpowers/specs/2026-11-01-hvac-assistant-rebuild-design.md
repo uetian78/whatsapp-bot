@@ -1,5 +1,7 @@
 # HVAC Assistant: new plan after the Meta lock
 
+> **Update, 2026-11-02:** the app was then reduced to a document retrieval service with chiller and package selection. The VRF, split and MTZ selection engines, the schedule reader, search within files, uploads and the question answering were removed on branch `feat/chat-web-app`, because the user decided the app should only find and send documents. Everything below describes the larger plan and is kept as a historical record; where it mentions those features, they no longer exist.
+
 **Date:** 2026-11-01
 **Status:** Approved in its 3-person version. Nothing has been built.
 **Scope:** Every bot feature except the insides of the VRF and split selection engines, which stay as they are.
