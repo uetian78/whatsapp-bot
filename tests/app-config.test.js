@@ -68,7 +68,7 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 
-function runIdle(extraEnv = {}) {
+function runIdle(extraEnv = {}, script = path.join(__dirname, "..", "server.js")) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), "idle-"));
   // cwd is empty so dotenv finds no .env: only the dummy settings below exist.
   const env = {
@@ -77,7 +77,7 @@ function runIdle(extraEnv = {}) {
     WEB_SECRET: "x".repeat(40), DATA_DIR: dir, PORT: "0",
     ...extraEnv,
   };
-  const child = fork(path.join(__dirname, "..", "server.js"), [], {
+  const child = fork(script, [], {
     cwd: dir, env, execArgv: ["-r", path.join(__dirname, "idle-hook.js")], silent: true,
   });
   let out = "";
@@ -108,8 +108,12 @@ function runIdle(extraEnv = {}) {
 
 // Both runs start together so the file takes one boot of time, not two.
 const idleRun = runIdle();
-const rogueRun = runIdle({ IDLE_TEST_ROGUE: "1" });
-idleRun.catch(() => {}); rogueRun.catch(() => {}); // reported by the tests below
+const rogueRun = runIdle({ IDLE_TEST_ROGUE: "fetch" });
+// The other planted controls need no app, only the hook, so they run in a do-nothing process.
+const target = path.join(__dirname, "idle-target.js");
+const httpsRun = runIdle({ IDLE_TEST_ROGUE: "https" }, target);
+const chainedRun = runIdle({ IDLE_TEST_ROGUE: "chained" }, target);
+for (const run of [idleRun, rogueRun, httpsRun, chainedRun]) run.catch(() => {}); // reported by the tests below
 
 test("with WhatsApp off, no timer makes a network call while idle", async (t) => {
   const r = await idleRun;
@@ -126,6 +130,19 @@ test("the idle check does catch a timer that calls out", async () => {
   const r = await rogueRun;
   assert.ok(r.idleCalls.length > 0, "a planted timer that fetches must be seen");
   assert.equal(r.idleCalls[0].what, "fetch");
+});
+
+test("the idle check also catches an https.request from a timer, not only fetch", async () => {
+  const r = await httpsRun;
+  assert.ok(r.idleCalls.some((c) => c.what === "https.request"), JSON.stringify(r.idleCalls.map((c) => c.what)));
+});
+
+test("the idle check fires a timer that a timer scheduled (an interval that sets a longer one-shot), once", async () => {
+  const r = await chainedRun;
+  assert.ok(r.idleCalls.some((c) => c.what === "fetch"), "the chained one-shot's fetch must be seen: " + JSON.stringify(r.idleCalls.map((c) => c.what)));
+  // The interval was fired in at least three rounds, yet the one-shot it made fetched once.
+  assert.equal(r.idleCalls.filter((c) => c.what === "fetch").length, 1, "the one-shot was fired by hand exactly once");
+  assert.ok(r.fired >= 4, `the interval fired in several rounds (${r.fired} firings in all)`);
 });
 
 test("the phone sharing test page and the Render blueprint are gone", () => {
