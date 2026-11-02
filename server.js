@@ -42,7 +42,7 @@ const { mountWeb, cleanSecret, MIN_SECRET_LENGTH } = require("./web/auth.js");
 const { requireAdmin } = require("./lib/http-auth.js");
 const { whatsappEnabled, requiredEnv, startupWarnings } = require("./lib/app-config.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
-const { isMenuTrigger, smallTalkReply, welcomeMenu, welcomeMenuList, tipFor, MENU_HINT, MENU_OPTIONS, SCHEDULE_PROMPT } = require("./menu.js");
+const { isMenuTrigger, smallTalkReply, welcomeMenuList, tipFor, optionForTap, MENU_HINT, MENU_OPTIONS, SCHEDULE_PROMPT } = require("./menu.js");
 const { PRODUCT_KB, parseListRequest, parseUnsupportedSeriesListRequest, buildUnitList } = require("./product-facts.js");
 const crm = require("./crm.js");
 const docReq = require("./lib/doc-requests.js");
@@ -1527,7 +1527,7 @@ async function sendPageTap(to, tapId) {
 // The menu as a list (a numbered reply still works for 15 minutes).
 async function showWelcomeMenu(from, profileName) {
   const m = welcomeMenuList(profileName, crm.isKnownContact(from));
-  store.setCtx(from, "menu", { options: m.options }, 15 * 60 * 1000);
+  store.setCtx(from, "menu", { open: true }, 15 * 60 * 1000); // numbers are read against the menu as it is now
   return await sendList(from, m.body, m.buttonLabel, m.rows);
 }
 
@@ -1567,14 +1567,8 @@ async function handleStrayAttachment(from, message) {
   }
 }
 
-// A menu row or its number: the row's own action (the schedule row starts the
-// schedule flow), else its tip card. A number with no row sends nothing.
-async function sendMenuPick(from, n, options = MENU_OPTIONS) {
-  const opt = options.find((o) => o.n === n);
-  if (opt && opt.action === "schedule") return await startScheduleFlow(from);
-  const tip = tipFor(n, options);
-  if (tip) return await sendText(from, tip);
-}
+// What an old tap gets when the option it belonged to has gone.
+const MSG_OPTION_GONE = "That option is no longer available. Send me what you're looking for, or type *menu* to see what I can do.";
 
 // The web chat's own parts: conversations, the channel that writes to them, and
 // the uploads waiting to be read. Made on first use, so requiring this file
@@ -1641,9 +1635,11 @@ async function handleIncomingMessage(value, message) {
       const btnId = tapId;
       console.log(`🔘 ${from} tapped: ${btnId}`);
 
-      // Menu row tap -> that section's tip card.
+      // Menu row tap -> that section's tip card. A row this menu no longer has
+      // (an old message's) gets the same reply as any other tap that is gone.
       if (btnId.startsWith("menu|")) {
-        return await sendMenuPick(from, parseInt(btnId.split("|")[1], 10)); // a stale row sends nothing
+        const opt = optionForTap(btnId);
+        return await sendText(from, opt ? opt.tip : MSG_OPTION_GONE);
       }
 
       // "Saved work" on the web chat: the person's recent files again, at the bottom.
@@ -1776,7 +1772,7 @@ async function handleIncomingMessage(value, message) {
       }
 
       // A tap on something this version no longer offers (an old message's button).
-      return await sendText(from, "That option is no longer available. Send me what you're looking for, or type *menu* to see what I can do.");
+      return await sendText(from, MSG_OPTION_GONE);
     }
 
     // ── Global escape: a bare greeting / "menu" / "help" ALWAYS shows the menu
@@ -1968,13 +1964,13 @@ async function handleIncomingMessage(value, message) {
     // "how to ask" tip card.
     const openMenu = store.getCtx(from, "menu");
     if (/^\d+$/.test(text) && openMenu) {
-      const { options } = openMenu;
       const n = parseInt(text, 10);
-      if (tipFor(n, options)) {
+      const tip = tipFor(n);
+      if (tip) {
         console.log(`📋 ${from} menu pick ${n}`);
-        return await sendMenuPick(from, n, options);
+        return await sendText(from, tip);
       }
-      return await sendText(from, `Please reply with a number between 1 and ${options.length}, or type *menu*.`);
+      return await sendText(from, `Please reply with a number between 1 and ${MENU_OPTIONS.length}, or type *menu*.`);
     }
 
     // A bare number with no open menu/list would fall into document search and

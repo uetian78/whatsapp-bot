@@ -1,13 +1,9 @@
 // ============================================================
 //  WELCOME MENU + "HOW TO ASK" TIPS
-//  A greeting / "menu" / "help" shows a numbered list (10 items).
-//  Replying with a number sends that section's tip card, with
-//  copy-paste example messages that are VERIFIED (see test-menu.js)
-//  to trigger the matching handler in server.js.
-//
-//  Convention (matches sendFileOptions): <=3 choices use tappable
-//  buttons; >3 choices use a numbered list. The top menu has 10
-//  items, so it's a numbered list the user replies to with a number.
+//  A greeting / "menu" / "help" shows the three-row menu (Documents, Chiller
+//  and package selection, Help). Replying with a number, or tapping a row,
+//  sends that section's tip card, with copy-paste example messages that
+//  tests/menu.test.js checks are requests the app understands.
 // ============================================================
 
 // Greeting / menu / help trigger. Matches ONLY when the whole message is a
@@ -38,22 +34,25 @@ function smallTalkReply(text) {
   return null;
 }
 
-// What the bot says when the schedule flow starts (typed "Schedule Selection" or
-// the "Read a schedule" menu row). One text, so both ways read the same.
+// What the bot says when the schedule flow starts (typed "Schedule Selection").
+// Goes with the schedule flow when that is removed.
 const SCHEDULE_PROMPT =
   "📋 *Schedule / BOQ Selection*\n\nSend the equipment schedule as an *image* or *PDF*.\n_(Type *cancel* anytime to exit)_";
 
-// Each option: n (number), title (menu line), tip (sent when picked).
-// `action`, when set, is done instead of sending the tip.
+// Each option: n (the number typed to pick it), id (the row's tap id), title
+// (menu line), tip (sent when picked). The ids are the ones the rows had before
+// the menu shrank to three (Help was row 6), so an old row still on someone's
+// screen opens the same tip or nothing, never a different one.
 const MENU_OPTIONS = [
   {
     n: 1,
-    title: "Document Search (Catalogues & IOM)",
+    id: "menu|1",
+    title: "Documents (Catalogues, IOM & Datasheets)",
     short: "Documents",
     desc: "Catalogues, IOM manuals & model datasheets",
     tip:
-      "*📄 Document Search*\n" +
-      "Get a catalogue, IOM manual, or model datasheet — I'll send the PDF to your chat.\n\n" +
+      "*📄 Documents*\n" +
+      "Get a catalogue, IOM manual, or model datasheet. I'll send the PDF to your chat.\n\n" +
       "👉 Examples (copy & send):\n" +
       "• Catalogue: *APMR catalogue*\n" +
       "• IOM manual: *APMR IOM*\n" +
@@ -61,16 +60,17 @@ const MENU_OPTIONS = [
       "• Chiller: *APCY-H catalogue*\n" +
       "• Datasheet (model code): *APMRa 51004*  or  *APMR 52340 T1*\n" +
       "• Other brands: *Hisense catalogue*\n" +
-      "• Search inside the PDFs: *find sound level*",
+      "• Not sure of the exact name? Type a few words from it: *find coil connection sheet*",
   },
   {
     n: 2,
-    title: "Quick Selection Tools (Package / AHU / Chiller)",
-    short: "Quick Selection",
-    desc: "Capacity in → model out (package, chiller, FCU)",
+    id: "menu|2",
+    title: "Chiller & Package Selection",
+    short: "Chiller and package",
+    desc: "Capacity in, model and datasheet out",
     tip:
-      "*🛠️ Quick Selection Tools*\n" +
-      "Tell me the capacity and I'll pick the model for you.\n\n" +
+      "*🛠️ Chiller & Package Selection*\n" +
+      "Tell me the capacity and I'll pick the model, with its datasheet.\n\n" +
       "👉 Examples:\n" +
       "• Packaged unit: *package unit 20 tr t3*  or  *5000 cfm package unit*\n" +
       "• Fresh air / DOAS: *fresh air 15 tr*\n" +
@@ -79,82 +79,30 @@ const MENU_OPTIONS = [
   },
   {
     n: 3,
-    title: "Read a Schedule (photo or PDF)",
-    short: "Read a schedule",
-    desc: "Send a schedule or BOQ; I pick the units",
-    action: "schedule", // tapping it starts the schedule flow (server.js) instead of showing a tip
-    tip: SCHEDULE_PROMPT,
-  },
-  {
-    n: 4,
-    title: "Guided Selectors (Schedule / VRF / MTZ / Split)",
-    short: "Guided Selectors",
-    desc: "Schedule · VRF · MTZ · Split — step-by-step + PDF",
-    tip:
-      "*🧭 Guided Selectors — Step-by-step with PDF output*\n\n" +
-      "━━━━━━━━━━━━━━\n" +
-      "📋 *Schedule / BOQ Selection* — whole schedule at once\n" +
-      "Type: *Schedule Selection*  (or *BOQ Selection*)\n" +
-      "Send a photo/PDF of an equipment schedule → I read every row,\n" +
-      "size each Package & Split unit from our range, and reply with a\n" +
-      "per-row summary (required vs proposed, T1/T3).\n" +
-      "• Reply *Print* or *Datasheet* for a PDF report — plus the\n" +
-      "  selected SKM package datasheets and Trane MTZ datasheets.\n\n" +
-      "━━━━━━━━━━━━━━\n" +
-      "🏢 *VRF Selection* — Toshiba VRF BOQ\n" +
-      "Type: *VRF Selection*\n" +
-      "Upload a schedule or enter room loads → full BOQ + PDF report.\n\n" +
-      "━━━━━━━━━━━━━━\n" +
-      "🌡️ *MTZ Selection* — Trane Package Unit\n" +
-      "Type: *MTZ Selection*\n" +
-      "Steps: load → conditions (DB/WB/Amb) → airflow → ranked models + PDF.\n" +
-      "⚡ Express: `MTZ Selection 8.5TR 80/67/115`\n\n" +
-      "━━━━━━━━━━━━━━\n" +
-      "🧊 *Split Selection* — Toshiba / TCL / SKM\n" +
-      "Type: *Split Selection*\n" +
-      "Steps: brand → T1 or T3 → capacities (one per line):\n" +
-      "• `5`  or  `5 kw`  or  `1.5 ton`  → Hi-Wall\n" +
-      "• `8 kw ducted`  or  `2 ton d`  → Ducted\n" +
-      "Default type is Hi-Wall if you don't specify.\n" +
-      "• Toshiba on-coil (optional): add DB/WB — `5 kw 24/17`\n" +
-      "• Auto-splits oversized loads into 2×, 3×, 4× units\n" +
-      "• Reply *Print* after results for a PDF report\n" +
-      "• Browse the range: *list of split units* (T1/T3 capacities)",
-  },
-  {
-    n: 5,
-    title: "Ask a Question (specs & manuals)",
-    short: "Ask a question",
-    desc: "Specs and answers from our catalogues & manuals",
-    tip:
-      "*❓ Ask a question*\n" +
-      "Ask about a model's specs, or what the manuals say. I answer from our product data and PDF pages, and name the page it came from.\n\n" +
-      "👉 Examples (copy & send):\n" +
-      "• Specs: *What is the cooling capacity of APMR 52340 at T3?*\n" +
-      "• Inside the PDFs: *find sound level*\n\n" +
-      "If I can't answer from our documents I'll say so — I don't guess.",
-  },
-  {
-    n: 6,
-    title: "Help (how to use this bot)",
+    id: "menu|6",
+    title: "Help (how to use this assistant)",
     short: "Help",
     desc: "How to ask, with copy-paste examples",
     tip:
       "*🙋 How to use this assistant*\n" +
-      "Just type what you need — three ways:\n\n" +
+      "I find documents and pick chillers and packaged units. I don't answer written questions about specs: ask for the datasheet or catalogue instead.\n\n" +
       "1️⃣ *Find a document* — product + *catalogue* / *IOM*, or a model code.\n" +
       "   e.g. *APMR catalogue*, *APMRa 51004*\n\n" +
-      "2️⃣ *Quick select* — capacity + type.\n" +
-      "   e.g. *package unit 20 tr*, *fresh air 15 tr*\n\n" +
-      "3️⃣ *Guided selectors* — step-by-step with PDF output:\n" +
-      "   *Schedule Selection* · *VRF Selection* · *MTZ Selection* · *Split Selection*\n\n" +
+      "2️⃣ *Select a unit* — capacity + type.\n" +
+      "   e.g. *package unit 20 tr*, *APCY-H 30 tr*\n\n" +
       "📋 *See a whole range* — *list APMR units*, *APMRG1 list* (also PAC4A, DMP, chillers…)\n\n" +
+      "🔎 If I can't find a name I suggest the closest files. Still nothing? Tap *Request it* and the team will add it.\n\n" +
       "Type *menu* anytime. For anything else: *hassan.saleem@mannai.com.qa*",
   },
 ];
 
-const NUM  = ["", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"];
-const ICON = ["", "📄", "🛠️", "📋", "🧭", "❓", "🙋"];
+const NUM  = ["", "1️⃣", "2️⃣", "3️⃣"];
+const ICON = ["", "📄", "🛠️", "🙋"];
+
+// The option a row's tap id opens, or null (an id this menu no longer has).
+function optionForTap(id) {
+  return MENU_OPTIONS.find((o) => o.id === id) || null;
+}
 
 // Build the welcome message (numbered list) + the options array to remember.
 // `name` = WhatsApp profile name (optional); `returning` = seen before (CRM).
@@ -166,12 +114,12 @@ function welcomeMenu(name, returning) {
   const line = (o) => `${NUM[o.n] || o.n + "."} ${ICON[o.n] || ""} *${o.title}*`;
   const text =
     `${hello}\n` +
-    "_HVAC Assistant_ — catalogues, datasheets & equipment selections.\n" +
+    "_HVAC Assistant_ — catalogues, datasheets & chiller and package selection.\n" +
     "━━━━━━━━━━━━━━\n" +
     "Reply with a *number*:\n\n" +
     MENU_OPTIONS.map(line).join("\n") + "\n" +
     "━━━━━━━━━━━━━━\n" +
-    "💡 Or just type what you need — e.g. *APMR catalogue* · *Schedule Selection* · *Split Selection*";
+    "💡 Or just type what you need — e.g. *APMR catalogue* · *APCY-H 30 tr*";
   return { text, options: MENU_OPTIONS };
 }
 
@@ -182,20 +130,20 @@ function tipFor(n, options = MENU_OPTIONS) {
 }
 
 // Native list-message version of the welcome menu. Rows tap straight into the
-// same tips as the numbered replies (ids "menu|<n>"), so both entry paths work.
+// same tips as the numbered replies (each row's own id), so both entry paths work.
 function welcomeMenuList(name, returning) {
   const first = (name || "").trim().split(/\s+/)[0];
   const hello = first
     ? (returning ? `👋 *Welcome back, ${first}!*` : `👋 *Welcome, ${first}!*`)
     : "👋 *Welcome!*";
   const body =
-    `${hello}\n_HVAC Assistant_ — catalogues, datasheets & equipment selections.\n\n` +
-    "Tap below to see what I can do — or just type what you need, e.g. *APMR catalogue* · *Split Selection*.";
+    `${hello}\n_HVAC Assistant_ — catalogues, datasheets & chiller and package selection.\n\n` +
+    "Tap below to see what I can do — or just type what you need, e.g. *APMR catalogue* · *APCY-H 30 tr*.";
   return {
     body,
     buttonLabel: "What I can do",
     rows: MENU_OPTIONS.map((o) => ({
-      id: `menu|${o.n}`,
+      id: o.id,
       title: `${ICON[o.n] || ""} ${o.short}`.trim().slice(0, 24),
       description: (o.desc || "").slice(0, 72),
     })),
@@ -203,4 +151,4 @@ function welcomeMenuList(name, returning) {
   };
 }
 
-module.exports = { isMenuTrigger, smallTalkReply, welcomeMenu, welcomeMenuList, tipFor, MENU_HINT, MENU_OPTIONS, SCHEDULE_PROMPT };
+module.exports = { isMenuTrigger, smallTalkReply, welcomeMenu, welcomeMenuList, tipFor, optionForTap, MENU_HINT, MENU_OPTIONS, SCHEDULE_PROMPT };

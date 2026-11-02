@@ -165,12 +165,13 @@ test("a sheet with nothing open is pointed to VRF Selection, not ignored", async
   assert.match(said[0], /VRF Selection/);
 });
 
-test("a tap on a menu row that no longer exists gets the short catch-all reply, once", async () => {
-  const { MSG_NO_ANSWER } = require("../web/routes.js");
+test("a tap on a menu row that no longer exists gets the no-longer-available reply, once", async () => {
   const before = (await messages()).messages.length;
   await tap("menu|99", "An old row");
   const msgs = (await settle()).slice(before);
-  assert.deepEqual(texts(msgs), [MSG_NO_ANSWER]);
+  const said = texts(msgs);
+  assert.equal(said.length, 1, said.join(" | "));
+  assert.match(said[0], /no longer available/);
 });
 
 test("everyday messages that do get an answer don't also get the catch-all", async () => {
@@ -253,7 +254,7 @@ test("a stray photo with no schedule in it ends the flow it started, so the next
 
 test("a schedule flow started on purpose keeps waiting for the file when a read finds nothing", async () => {
   await fresh();
-  await tap("menu|3", "Read a schedule");
+  await say("Schedule Selection");
   await settle();
   assert.equal(flows().getFlow(USER).type, "schedule");
   aiRows = [];

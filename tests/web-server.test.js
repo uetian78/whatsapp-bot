@@ -1,4 +1,4 @@
-// The web-related taps in the real server.js (menu rows, Read a schedule, Saved work),
+// The web-related taps in the real server.js (menu rows, Saved work),
 // through the replay harness (private fixtures, skipped when they are not on this
 // machine). Replies go to a fake web channel; the database is a temp DATA_DIR.
 const test = require("node:test");
@@ -44,34 +44,37 @@ function setup(name = "web") {
   };
 }
 
-test("the Read a schedule row starts the schedule flow", { skip }, async () => {
+test("the three menu rows send their tips, by tap and by number", { skip }, async () => {
   const t = setup();
   try {
-    const { SCHEDULE_PROMPT } = require("../menu.js");
-    await t.say(tapMsg("menu|3", "Read a schedule"));
-    assert.deepEqual(t.sent.map((s) => s.body), [SCHEDULE_PROMPT]);
-    await t.say(textMsg("cancel")); // only an open flow answers "Cancelled"
-    assert.match(t.sent[1].body, /Cancelled/);
+    const { tipFor } = require("../menu.js");
+    await t.say(textMsg("menu"));
+    assert.equal(t.sent[0].kind, "list");
+    assert.deepEqual(t.sent[0].rows.map((r) => r.id), ["menu|1", "menu|2", "menu|6"]);
+    await t.say(textMsg("2"));
+    assert.equal(t.sent[1].body, tipFor(2));
+    await t.say(textMsg("menu"));
+    await t.say(textMsg("3"));
+    assert.equal(t.sent[3].body, tipFor(3));
+    await t.say(textMsg("menu"));
+    await t.say(textMsg("4"));
+    assert.match(t.sent[5].body, /between 1 and 3/);
+    await t.say(tapMsg("menu|1"));
+    assert.equal(t.sent[6].body, tipFor(1));
+    await t.say(tapMsg("menu|6"));
+    assert.equal(t.sent[7].body, tipFor(3));
   } finally { t.done(); }
 });
 
-test("the menu number for Read a schedule starts it too, and the other rows still send their tips", { skip }, async () => {
+test("an old menu row gets the no-longer-available reply, with no tip and no crash", { skip }, async () => {
   const t = setup();
   try {
-    const { SCHEDULE_PROMPT, tipFor } = require("../menu.js");
-    await t.say(textMsg("menu"));
-    assert.equal(t.sent[0].kind, "list");
-    assert.equal(t.sent[0].rows.length, 6);
-    await t.say(textMsg("3"));
-    assert.equal(t.sent[1].body, SCHEDULE_PROMPT);
-    await t.say(textMsg("menu"));
-    await t.say(textMsg("5"));
-    assert.equal(t.sent[3].body, tipFor(5));
-    await t.say(tapMsg("menu|1"));
-    assert.equal(t.sent[4].body, tipFor(1));
-    const before = t.sent.length;
-    await t.say(tapMsg("menu|9")); // a row that no longer exists: nothing sent
-    assert.equal(t.sent.length, before);
+    for (const id of ["menu|3", "menu|4", "menu|5", "menu|9", "menu|"]) {
+      const before = t.sent.length;
+      await t.say(tapMsg(id, "An old row"));
+      assert.equal(t.sent.length, before + 1, id);
+      assert.match(t.sent.at(-1).body, /no longer available/, id);
+    }
   } finally { t.done(); }
 });
 
@@ -177,7 +180,7 @@ test("on WhatsApp a photo or file with no flow open is still ignored", { skip },
 test("a photo while the schedule flow is open is still read by that flow, with no note", { skip }, async () => {
   const t = setup();
   try {
-    await t.say(tapMsg("menu|3", "Read a schedule"));
+    await t.say(textMsg("Schedule Selection"));
     t.sent.length = 0;
     await t.say(imageMsg());
     assert.doesNotMatch(t.sent.map((s) => s.body).join("\n"), /reading this as an equipment schedule/);
@@ -251,7 +254,7 @@ test("a new person's chat opens with the same welcome as typing menu, and typing
     assert.equal(b.json().messages.length, 1);
     assert.equal(first[0].role, "bot");
     assert.equal(first[0].kind, "choices");
-    assert.deepEqual(first[0].body.choices.map((c) => c.id), ["menu|1", "menu|2", "menu|3", "menu|4", "menu|5", "menu|6"]);
+    assert.deepEqual(first[0].body.choices.map((c) => c.id), ["menu|1", "menu|2", "menu|6"]);
     assert.match(first[0].body.text, /HVAC Assistant/);
 
     const sent = await call("POST", "/app/api/messages", { text: "menu" });
@@ -266,11 +269,11 @@ test("a new person's chat opens with the same welcome as typing menu, and typing
     assert.deepEqual(all[2].body, first[0].body, "typing menu gives exactly the welcome");
 
     // a tap the screen would send, with its data
-    await call("POST", "/app/api/messages", { tapId: "menu|3", tapTitle: "Read a schedule", data: { x: 1 } });
+    await call("POST", "/app/api/messages", { tapId: "menu|2", tapTitle: "Chiller and package", data: { x: 1 } });
     assert.ok(await wait(async () => (await call("GET", "/app/api/messages")).json().messages.length >= 5));
     const last = (await call("GET", "/app/api/messages")).json().messages.slice(-2);
-    assert.equal(last[0].body, "Read a schedule");
-    assert.match(last[1].body, /Schedule \/ BOQ Selection/);
+    assert.equal(last[0].body, "Chiller and package");
+    assert.match(last[1].body, /Chiller & Package Selection/);
   } finally {
     if (server) await new Promise((r) => { server.closeAllConnections?.(); server.close(r); });
     try { require("../lib/db.js").closeDb(); } catch (_) { /* never opened */ }

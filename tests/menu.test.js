@@ -41,12 +41,12 @@ test("welcomeMenuList builds API-safe rows for every option", () => {
   assert.match(m.body, /Welcome, Hassan/);
 });
 
-test("the menu offers document, quick selection, schedule, guided and question rows, and says HVAC Assistant", () => {
+test("the menu offers Documents, Chiller and package selection, and Help, and says HVAC Assistant", () => {
   const { welcomeMenuList } = require("../menu.js");
-  assert.deepEqual(MENU_OPTIONS.map((o) => o.short), ["Documents", "Quick Selection", "Read a schedule", "Guided Selectors", "Ask a question", "Help"]);
-  assert.deepEqual(MENU_OPTIONS.map((o) => o.n), [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(MENU_OPTIONS.map((o) => o.short), ["Documents", "Chiller and package", "Help"]);
+  assert.deepEqual(MENU_OPTIONS.map((o) => o.n), [1, 2, 3]);
   const list = welcomeMenuList("Hassan", false);
-  assert.deepEqual(list.rows.map((r) => r.id), ["menu|1", "menu|2", "menu|3", "menu|4", "menu|5", "menu|6"]);
+  assert.deepEqual(list.rows.map((r) => r.id), ["menu|1", "menu|2", "menu|6"]);
   for (const text of [welcomeMenu("Hassan", false).text, list.body]) {
     assert.match(text, /HVAC Assistant/);
     assert.doesNotMatch(text, /Mannai/);
@@ -57,14 +57,49 @@ test("the menu offers document, quick selection, schedule, guided and question r
   }
 });
 
-test("the Documents tip explains find sound level, and the schedule row starts the schedule flow", () => {
-  assert.match(tipFor(1), /find sound level/);
-  const schedule = MENU_OPTIONS.find((o) => o.short === "Read a schedule");
-  assert.equal(schedule.action, "schedule");
-  assert.equal(MENU_OPTIONS.filter((o) => o.action).length, 1);
+test("nothing the menu says advertises a removed feature", () => {
+  const { welcomeMenuList, MENU_HINT } = require("../menu.js");
+  const everything = [
+    welcomeMenu("Hassan", true).text, welcomeMenuList("Hassan", false).body, MENU_HINT,
+    smallTalkReply("thanks"), smallTalkReply("bye"), smallTalkReply("ok"),
+    ...MENU_OPTIONS.map((o) => `${o.title} ${o.short} ${o.desc} ${o.tip}`),
+  ].join("\n");
+  for (const word of [/VRF/i, /split/i, /MTZ/i, /schedule/i, /BOQ/i, /guided/i, /ask a question/i, /inside the PDFs/i, /find sound level/i, /\bPrint\b/]) {
+    assert.doesNotMatch(everything, word, String(word));
+  }
 });
 
-test("the welcome text numbers every option, including 5 and 6", () => {
+test("the Help tip says the assistant finds documents and does not answer written spec questions", () => {
+  const help = MENU_OPTIONS.find((o) => o.short === "Help").tip;
+  assert.match(help, /find/i);
+  assert.match(help, /don't answer|do not answer|can't answer/i);
+});
+
+test("an old row id never opens a different tip: only the ids of the three rows open one", () => {
+  const { optionForTap } = require("../menu.js");
+  assert.equal(optionForTap("menu|1").short, "Documents");
+  assert.equal(optionForTap("menu|2").short, "Chiller and package");
+  assert.equal(optionForTap("menu|6").short, "Help");
+  for (const id of ["menu|3", "menu|4", "menu|5", "menu|7", "menu|9", "menu|", "menu|x", "other"]) assert.equal(optionForTap(id), null, id);
+});
+
+test("every example the Documents and selection tips advertise is a request the app understands", () => {
+  const { classify } = require("../intents.js");
+  const examples = [];
+  for (const o of MENU_OPTIONS.filter((o) => o.short !== "Help")) {
+    for (const m of o.tip.matchAll(/\*([^*\n]+)\*/g)) examples.push(m[1]);
+  }
+  const typed = examples.filter((e) => /\d|catalogue|IOM|find |search |fcu/i.test(e));
+  assert.ok(typed.length >= 8, "the tips carry examples");
+  for (const e of typed) {
+    for (const variant of e.split(/\s+or\s+/i)) {
+      const kind = classify(variant.trim());
+      assert.ok(!["other", "empty", "question"].includes(kind), `"${variant}" classifies as ${kind}`);
+    }
+  }
+});
+
+test("the welcome text numbers every option", () => {
   const m = welcomeMenu("Hassan", false);
-  for (let n = 1; n <= 6; n++) assert.ok(m.text.includes(`${["", "1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣"][n]} `), `number ${n}`);
+  for (let n = 1; n <= MENU_OPTIONS.length; n++) assert.ok(m.text.includes(`${["", "1️⃣", "2️⃣", "3️⃣"][n]} `), `number ${n}`);
 });

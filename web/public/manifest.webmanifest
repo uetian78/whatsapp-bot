@@ -1,7 +1,7 @@
 {
   "name": "HVAC Assistant",
   "short_name": "HVAC Assistant",
-  "description": "Catalogues, datasheets and selections",
+  "description": "Catalogues, datasheets and manuals",
   "start_url": "/app/",
   "scope": "/app/",
   "display": "standalone",

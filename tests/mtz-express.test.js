@@ -60,15 +60,10 @@ test("a command that is not about MTZ selection gives null", () => {
 const skip = !fixturesExist() && "replay fixtures not found (run tests/replay/export-log.js)";
 const USER = "100000001";
 
-test("the advertised example starts the MTZ steps at the airflow question and then runs the engine", { skip }, async () => {
+test("the one-line example starts the MTZ steps at the airflow question and then runs the engine", { skip }, async () => {
   const h = createHarness(createServerDeliver());
   try {
-    const { MENU_OPTIONS } = require("../menu.js");
-    const advertised = /`(MTZ Selection [^`]+)`/.exec(MENU_OPTIONS.map((o) => o.tip || "").join("\n"));
-    assert.ok(advertised, "the menu advertises an example");
-    assert.equal(advertised[1], "MTZ Selection 8.5TR 80/67/115");
-
-    const first = await h.send(USER, advertised[1]);
+    const first = await h.send(USER, "MTZ Selection 8.5TR 80/67/115");
     assert.equal(first.length, 1);
     assert.match(first[0].text, /102\.0 MBH/);
     assert.match(first[0].text, /DB80\/WB67°F · Amb 115°F/);
