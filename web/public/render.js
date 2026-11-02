@@ -105,5 +105,11 @@
     return t.length <= max ? t : t.slice(0, max - 1) + "…";
   }
 
-  return { renderRich, imageTargetSize, shareMode, fileRefUrl, formatSize, fileKind, shareOutcome, prefetchWanted, clipTitle, escapeHtml, SHARE_FILE_MAX };
+  // Message kinds whose features no longer exist. Old messages of these kinds are
+  // still in people's chats; the screen shows OLD_RESULT_NOTE in their place.
+  const RETIRED_KINDS = ["rowcheck"];
+  const isRetiredKind = (kind) => RETIRED_KINDS.includes(kind);
+  const OLD_RESULT_NOTE = "This older result is no longer available.";
+
+  return { isRetiredKind, OLD_RESULT_NOTE, renderRich, imageTargetSize, shareMode, fileRefUrl, formatSize, fileKind, shareOutcome, prefetchWanted, clipTitle, escapeHtml, SHARE_FILE_MAX };
 }));

@@ -29,8 +29,6 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const MAX_TEXT = 4000;
 const MAX_TAP_FIELD = 200;
 const MAX_TAP_DATA = 4000;
-const MAX_TABLE_DATA = 90000; // the schedule table's tap (rows-ok) carries a whole table; express.json stops anything over 100 KB
-const TABLE_TAP = "rows-ok";
 const PAGE_SIZE = 200;
 const DRIVE_ID = /^[A-Za-z0-9_-]{1,100}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -219,7 +217,7 @@ function createWebRoutes({
       if (b.data !== undefined) {
         let size = Infinity;
         try { size = JSON.stringify(b.data).length; } catch { /* stays too big */ }
-        if (!(size <= (b.tapId === TABLE_TAP ? MAX_TABLE_DATA : MAX_TAP_DATA))) return bad(res, "That choice carries too much.");
+        if (!(size <= MAX_TAP_DATA)) return bad(res, "That choice carries too much.");
         reply.data = b.data;
       }
       shown = title;

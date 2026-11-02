@@ -17,7 +17,7 @@ function setup(name = "web") {
   const sent = [];
   const script = [];
   const adapter = {
-    name, supports: { rowCheck: true },
+    name,
     typing: async () => {},
     downloadMedia: async () => { throw new Error("no media"); },
     text: async (to, body) => { sent.push({ kind: "text", body }); return true; },
@@ -130,61 +130,6 @@ test("file choices show their whole names on the web; WhatsApp's own builder sti
     const wa = require("../lib/wa.js");
     const sent = wa.buildListPayload("1", "x", "Pick", rows).interactive.action.sections[0].rows;
     assert.ok(sent.every((r) => r.title.length <= 24));
-  } finally { t.done(); }
-});
-
-const imageMsg = () => ({ type: "image", image: { id: "photo-1", mime_type: "image/jpeg" } });
-const docMsg = (mime, filename) => ({ type: "document", document: { id: "doc-1", mime_type: mime, filename } });
-
-test("on the web, a photo or PDF with no flow open starts the schedule flow and says so", { skip }, async () => {
-  for (const msg of [imageMsg(), docMsg("application/pdf", "sched.pdf")]) {
-    const t = setup();
-    try {
-      await t.say(msg); // the fake adapter can't download, which is enough to see the flow start
-      assert.match(t.sent[0].body, /reading this as an equipment schedule/);
-      assert.match(t.sent[1].body, /couldn't download/);
-      // The file could not be read, and nobody asked for a schedule, so no flow is left waiting:
-      // "cancel" has nothing to cancel.
-      await t.say(textMsg("cancel"));
-      assert.doesNotMatch(t.sent.at(-1).body, /Cancelled/);
-    } finally { t.done(); }
-  }
-});
-
-test("on the web, a sheet with no flow open is pointed to VRF Selection", { skip }, async () => {
-  for (const msg of [
-    docMsg("application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", "rows.xlsx"),
-    docMsg("application/vnd.ms-excel", "rows.xls"), docMsg("text/csv", "rows.csv"),
-  ]) {
-    const t = setup();
-    try {
-      await t.say(msg);
-      assert.equal(t.sent.length, 1);
-      assert.match(t.sent[0].body, /VRF Selection/);
-      await t.say(textMsg("cancel"));
-      assert.doesNotMatch(t.sent.at(-1).body, /Cancelled/, "no flow was started for a sheet");
-    } finally { t.done(); }
-  }
-});
-
-test("on WhatsApp a photo or file with no flow open is still ignored", { skip }, async () => {
-  for (const msg of [imageMsg(), docMsg("application/pdf", "sched.pdf"), docMsg("text/csv", "rows.csv")]) {
-    const t = setup("whatsapp");
-    try {
-      await t.say(msg);
-      assert.deepEqual(t.sent, []);
-    } finally { t.done(); }
-  }
-});
-
-test("a photo while the schedule flow is open is still read by that flow, with no note", { skip }, async () => {
-  const t = setup();
-  try {
-    await t.say(textMsg("Schedule Selection"));
-    t.sent.length = 0;
-    await t.say(imageMsg());
-    assert.doesNotMatch(t.sent.map((s) => s.body).join("\n"), /reading this as an equipment schedule/);
-    assert.match(t.sent[0].body, /couldn't download/);
   } finally { t.done(); }
 });
 

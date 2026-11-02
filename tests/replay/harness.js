@@ -51,13 +51,6 @@ const FAKE_MEDIA = {
   "media-document": { buffer: Buffer.from("%PDF-1.4 fake document bytes"), mediaType: "application/pdf" },
 };
 
-// A schedule the stubbed reader "finds" in any image or PDF: one split and one
-// package row, no condition printed, so the flow's questions are exercised.
-const FAKE_SCHEDULE_ROWS = [
-  { location: "Room 1", type: "SPLIT", category: "split", capacity: 24000, unit: "BTU/HR", qty: 2 },
-  { location: "Roof 1", type: "PACKAGE AC", category: "package", capacity: 10, unit: "TR", qty: 1, airflow: 4000, airflowUnit: "CFM" },
-];
-
 const FAKE_VRF_ROWS = [
   { type: "Hi-Wall", required_kw: 2.5, qty: 1, system: "S1", room: "Room 1", tag: null, _srcValue: 2.5, _srcUnit: "kW" },
 ];
@@ -73,8 +66,7 @@ function createHarness(deliver) {
   // ── environment: dummy values only, and the real .env is never read ───────
   const savedEnv = { ...process.env };
   for (const k of ["VERIFY_TOKEN", "WHATSAPP_ENABLED", "ADMIN_PASSWORD", "SENDER_PIN", "WHATSAPP_REGISTER_PIN",
-    "VRF_API_KEY", "VRF_SIDECAR_URL", "VRF_EXTRACT_MODEL", "VRF_EXTRACT_MODEL_IMAGE", "VRF_EXTRACT_MODEL_PDF",
-    "SCHEDULE_EXTRACT_MODEL"]) delete process.env[k];
+    "VRF_API_KEY", "VRF_SIDECAR_URL", "VRF_EXTRACT_MODEL", "VRF_EXTRACT_MODEL_IMAGE", "VRF_EXTRACT_MODEL_PDF"]) delete process.env[k];
   Object.assign(process.env, {
     GOOGLE_SHEET_ID: "dummy-sheet",
     GOOGLE_SERVICE_ACCOUNT_JSON: "dummy",
@@ -177,12 +169,7 @@ function createHarness(deliver) {
   crm.statsMessage = async () => "[stats]";
   crm.logDocRequest = async () => true;
 
-  // ── schedule + VRF readers (these call Claude / the sidecar) ──────────────
-  const schedule = require("../../schedule-select.js");
-  schedule.rowsFromScheduleImage = async () => {
-    const norm = schedule.normalizeRows(FAKE_SCHEDULE_ROWS);
-    return { ...norm, scheduleCondition: schedule.summarize(norm.rows).scheduleCondition };
-  };
+  // ── VRF readers (these call Claude / the sidecar) ─────────────────────────
   const vrfClient = require("../../vrf/vrfClient.js");
   const vrfBoq = (project) => ({
     xlsxBuffer: Buffer.from("fake xlsx"), summary: { project: project || "VRF" }, warnings: [], excluded: [],

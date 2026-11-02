@@ -1,7 +1,7 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const {
-  renderRich, imageTargetSize, shareMode, fileRefUrl, formatSize, fileKind, shareOutcome, prefetchWanted, clipTitle, SHARE_FILE_MAX,
+  renderRich, imageTargetSize, shareMode, fileRefUrl, formatSize, fileKind, shareOutcome, prefetchWanted, clipTitle, isRetiredKind, OLD_RESULT_NOTE, SHARE_FILE_MAX,
 } = require("../web/public/render.js");
 
 test("HTML is escaped", () => {
@@ -144,3 +144,9 @@ test("a tap title is clipped to 150 characters, short ones untouched", () => {
   assert.equal(clipTitle(undefined), "");
 });
 
+
+test("results of features that are gone show as one short note; live kinds are left alone", () => {
+  assert.equal(OLD_RESULT_NOTE, "This older result is no longer available.");
+  assert.equal(isRetiredKind("rowcheck"), true);
+  for (const kind of ["text", "choices", "file", "note", "something-new"]) assert.equal(isRetiredKind(kind), false, kind);
+});

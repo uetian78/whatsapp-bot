@@ -24,7 +24,6 @@ const INTENTS = [
   { name: "numbered-reply",     match: (t) => /^\d+$/.test(t) },
   { name: "menu",               match: (t) => isMenuTrigger(t) },
   { name: "vrf-selection",      match: (t) => isVrfTrigger(t) },
-  { name: "schedule-selection", match: (t) => /^(image|boq|schedule)\s+selection$/i.test(t) },
   { name: "split-selection",    match: (t) => /^split\s+selection$/i.test(t) },
   { name: "mtz-selection",      match: (t) => /^mtz\s+selection\b/i.test(t) },
   { name: "print",              match: (t) => /^(print|datasheet)$/i.test(t) },

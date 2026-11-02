@@ -22,10 +22,9 @@ function make(extra = {}) {
   return { dir, clock, db, conversations, channel, crmCalls, done: () => fs.rmSync(dir, { recursive: true, force: true }) };
 }
 
-test("the adapter has the contract's methods and supports rowCheck", () => {
+test("the adapter has the contract's methods", () => {
   const { channel, done } = make();
   assert.equal(channel.name, "web");
-  assert.deepEqual(channel.supports, { rowCheck: true });
   for (const m of ["typing", "downloadMedia", "text", "longText", "buttons", "list", "driveFile", "generatedFile", "pageHits"]) {
     assert.equal(typeof channel[m], "function", m);
   }

@@ -188,7 +188,7 @@ test("text reaches deliverMessage as the signed-in number, in the webhook's mess
 }));
 
 test("a tap reaches deliverMessage as a button reply with its data, and its title is the person's message", () => withServer({}, async (s) => {
-  const r = await s.json("/app/api/messages", { tapId: "menu|3", tapTitle: "Read a schedule", data: { rows: [1, 2] } }, OMAR);
+  const r = await s.json("/app/api/messages", { tapId: "menu|2", tapTitle: "Chiller and package", data: { rows: [1, 2] } }, OMAR);
   assert.equal(r.status, 202);
   await until(() => s.delivered.length === 1);
   const { message, value } = s.delivered[0];
@@ -196,10 +196,10 @@ test("a tap reaches deliverMessage as a button reply with its data, and its titl
   assert.equal(message.type, "interactive");
   assert.deepEqual(message.interactive, {
     type: "button_reply",
-    button_reply: { id: "menu|3", title: "Read a schedule", data: { rows: [1, 2] } },
+    button_reply: { id: "menu|2", title: "Chiller and package", data: { rows: [1, 2] } },
   });
   assert.equal(value.contacts[0].profile.name, "Omar");
-  assert.deepEqual(s.conversations.since(OMAR, 0).filter((m) => m.role === "user").map((m) => m.body), ["Read a schedule"]);
+  assert.deepEqual(s.conversations.since(OMAR, 0).filter((m) => m.role === "user").map((m) => m.body), ["Chiller and package"]);
   assert.deepEqual(s.conversations.since(SARA, 0), []);
 }));
 
@@ -1005,16 +1005,3 @@ test("a bare /app goes to /app/, files outside web/public are not reachable, and
   assert.doesNotMatch(await missing.text(), /Index of|<ul>/);
 }));
 
-test("the schedule table's tap may carry a long table; other taps still carry little", () => withServer({}, async (s) => {
-  const rows = Array.from({ length: 200 }, (_, i) => ({ id: `r${i}`, tag: `Room ${i} `.padEnd(60, "x"), type: "split", value: 24000, unit: "BTU/h", qty: 2 }));
-  const size = JSON.stringify({ rows }).length;
-  assert.ok(size > 20000 && size < 60000, String(size));
-  const ok = await s.json("/app/api/messages", { tapId: "rows-ok", tapTitle: "Looks right", data: { rows } });
-  assert.equal(ok.status, 202);
-  await until(() => s.delivered.length === 1);
-  assert.equal(s.delivered[0].message.interactive.button_reply.data.rows.length, 200);
-  const other = await s.json("/app/api/messages", { tapId: "menu|3", tapTitle: "x", data: { rows } });
-  assert.equal(other.status, 400, "another tap keeps the small limit");
-  const huge = await s.json("/app/api/messages", { tapId: "rows-ok", tapTitle: "Looks right", data: { rows: [...rows, ...rows, ...rows, ...rows] } });
-  assert.ok(huge.status === 400 || huge.status === 413, `got ${huge.status}`);
-}));

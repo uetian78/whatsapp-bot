@@ -34,11 +34,6 @@ function smallTalkReply(text) {
   return null;
 }
 
-// What the bot says when the schedule flow starts (typed "Schedule Selection").
-// Goes with the schedule flow when that is removed.
-const SCHEDULE_PROMPT =
-  "📋 *Schedule / BOQ Selection*\n\nSend the equipment schedule as an *image* or *PDF*.\n_(Type *cancel* anytime to exit)_";
-
 // Each option: n (the number typed to pick it), id (the row's tap id), title
 // (menu line), tip (sent when picked). The ids are the ones the rows had before
 // the menu shrank to three (Help was row 6), so an old row still on someone's
@@ -151,4 +146,4 @@ function welcomeMenuList(name, returning) {
   };
 }
 
-module.exports = { isMenuTrigger, smallTalkReply, welcomeMenu, welcomeMenuList, tipFor, optionForTap, MENU_HINT, MENU_OPTIONS, SCHEDULE_PROMPT };
+module.exports = { isMenuTrigger, smallTalkReply, welcomeMenu, welcomeMenuList, tipFor, optionForTap, MENU_HINT, MENU_OPTIONS };

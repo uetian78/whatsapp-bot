@@ -35,7 +35,6 @@
     tapAgain: "Tap again to share",
     shareFailed: "Couldn't open the share sheet. Try again.",
     shareLinkFailed: "Couldn't make a share link. Try again.",
-    checkTable: "Check the rows marked in red, then tap Looks right again.",
   };
 
   const MIME_BY_EXT = {
@@ -304,181 +303,10 @@
     return withTime(el, m.ts);
   }
 
-  // ---------------------------------------------------------------
-  //  The schedule table (kind "rowcheck")
-  //
-  //  Shows what was read from the schedule photo as inputs, nothing more: the
-  //  capacities are worked out by the server again from the load and unit, and
-  //  the server checks every field. The checks here only save a round trip.
-  // ---------------------------------------------------------------
-  const LOOKS_RIGHT = "Looks right";
-  const RC_TYPES = [["split", "Split"], ["ducted", "Ducted"], ["package", "Package"]];
-  const RC_UNITS = ["kW", "TR", "MBH", "BTU/h", "kcal/h"];
-  const rcRows = [];        // the tables on screen, oldest first: { entry, box, button, rows, locked }
-
-  function rcSelect(options, value, blank) {
-    const sel = h("select");
-    if (blank) sel.append(new Option("Choose…", ""));
-    let found = !value;
-    for (const [v, label] of options) {
-      sel.append(new Option(label, v));
-      if (v === value) found = true;
-    }
-    if (!found) sel.append(new Option(String(value), String(value))); // a typed value the server turned down stays visible
-    sel.value = value == null ? "" : String(value);
-    return sel;
-  }
-
-  function rcField(label, control, cls) {
-    const wrap = h("label", "rc-field" + (cls ? " " + cls : ""));
-    wrap.append(h("span", "rc-label", label), control);
-    return wrap;
-  }
-
-  function rcInput(value, opts) {
-    const input = h("input");
-    input.type = "text";
-    input.autocomplete = "off";
-    input.spellcheck = false;
-    if (opts.mode) input.inputMode = opts.mode;
-    if (opts.max) input.maxLength = opts.max;
-    input.value = value == null ? "" : String(value);
-    return input;
-  }
-
-  function rowcheckMsg(m, entry) {
-    const b = m.body && typeof m.body === "object" ? m.body : {};
-    const rows = Array.isArray(b.rows) ? b.rows.filter((r) => r && typeof r.id === "string") : [];
-    const skipped = Array.isArray(b.skipped) ? b.skipped.filter((r) => r && typeof r.id === "string") : [];
-    const el = h("div", "msg bot wide");
-    if (b.text) {
-      const t = h("div", "text prompt");
-      t.innerHTML = R.renderRich(b.text);
-      el.append(t);
-    }
-    if (Array.isArray(b.errors) && b.errors.length) {
-      const list = h("ul", "rc-errors");
-      for (const e of b.errors) list.append(h("li", "", String(e)));
-      el.append(list);
-    }
-
-    const table = h("div", "rc");
-    const fields = [];   // { id, tag, type, value, unit, qty, node, skipped }
-    const addRow = (r, index, isSkipped) => {
-      const row = h("div", "rc-row" + (isSkipped ? " skipped" : "") + (r.bad ? " bad" : ""));
-      const head = h("div", "rc-head");
-      head.append(h("span", "rc-num", isSkipped ? "Couldn't read" : "Row " + (index + 1)));
-      if (isSkipped && r.raw) head.append(h("span", "rc-raw", String(r.raw)));
-      const removeBtn = h("button", "rc-remove", "Remove row");
-      removeBtn.type = "button";
-      head.append(removeBtn);
-      row.append(head);
-      const f = {
-        id: r.id, skipped: isSkipped, node: row, removeBtn, removed: false,
-        tag: rcInput(r.tag, { max: 80 }),
-        type: rcSelect(RC_TYPES, r.type, isSkipped),
-        value: rcInput(r.value, { mode: "decimal", max: 20 }),
-        unit: rcSelect(RC_UNITS.map((u) => [u, u]), r.unit, isSkipped),
-        qty: rcInput(r.qty, { mode: "numeric", max: 3 }),
-      };
-      row.append(
-        rcField("Tag", f.tag, "tag"), rcField("Type", f.type, "type"),
-        rcField("Load", f.value, "load"), rcField("Unit", f.unit, "unit"), rcField("Qty", f.qty, "qty")
-      );
-      removeBtn.addEventListener("click", () => { setRemoved(f, !f.removed); });
-      if (r.remove === true) f.removed = true;
-      fields.push(f);
-      table.append(row);
-    };
-    rows.forEach((r, i) => addRow(r, i, false));
-    skipped.forEach((r, i) => addRow(r, i, true));
-    el.append(table);
-
-    const actions = h("div", "rc-actions");
-    const button = h("button", "btn primary", LOOKS_RIGHT);
-    button.type = "button";
-    actions.append(button);
-    el.append(actions);
-
-    const tbl = { entry, button, fields, locked: false, tableId: typeof b.tableId === "string" ? b.tableId : "" };
-    button.addEventListener("click", () => submitRowcheck(tbl));
-    for (const f of fields) if (f.removed) setRemoved(f, true);
-    entry.rowcheck = tbl;
-    return withTime(el, m.ts);
-  }
-
-  const rcControls = (f) => [f.tag, f.type, f.value, f.unit, f.qty];
-
-  // A removed row is dimmed with its fields off, and goes to the server as remove: true.
-  function setRemoved(f, removed) {
-    f.removed = removed;
-    f.node.classList.toggle("removed", removed);
-    f.removeBtn.textContent = removed ? "Keep row" : "Remove row";
-    for (const c of rcControls(f)) c.disabled = removed;
-  }
-
-  const rcNumber = (text) => /^\s*[+]?(\d+\.?\d*|\.\d+)\s*$/.test(text) && Number(text) > 0;
-
-  // A first look before sending; the server decides. Marks what is missing or not a number.
-  function rcCheck(tbl) {
-    let ok = true;
-    for (const f of tbl.fields) {
-      const filled = !f.skipped || f.type.value || f.value.value.trim() || f.unit.value;
-      f.node.classList.remove("bad");
-      for (const c of [f.type, f.value, f.unit, f.qty]) c.classList.remove("invalid");
-      if (f.removed || !filled) continue;
-      const wrong = [];
-      if (!f.type.value) wrong.push(f.type);
-      if (!rcNumber(f.value.value)) wrong.push(f.value);
-      if (!f.unit.value) wrong.push(f.unit);
-      const q = f.qty.value.trim();
-      const qtyOk = (f.skipped && q === "") || (/^\d+$/.test(q) && Number(q) >= 1 && Number(q) <= 999);
-      if (!qtyOk) wrong.push(f.qty);
-      if (wrong.length) {
-        ok = false;
-        f.node.classList.add("bad");
-        for (const c of wrong) c.classList.add("invalid");
-      }
-    }
-    return ok;
-  }
-
-  function submitRowcheck(tbl) {
-    if (tbl.locked) return;
-    if (!rcCheck(tbl)) { toast(COPY.checkTable); return; }
-    const rows = tbl.fields.map((f) => ({
-      id: f.id, tag: f.tag.value, type: f.type.value, value: f.value.value.trim(), unit: f.unit.value, qty: f.qty.value.trim(),
-      ...(f.removed ? { remove: true } : {}),
-    }));
-    // The table's own id goes back with it, so the server can tell this table from a newer one.
-    sendTap("rows-ok", LOOKS_RIGHT, tbl.button, { tableId: tbl.tableId, rows });
-  }
-
-  // Only the newest table is live, and only until "Looks right" has been sent after it.
-  function refreshRowchecks() {
-    let live = null;
-    let sentAfter = false;
-    for (const e of rendered) {
-      if (e.rowcheck) { live = e.rowcheck; sentAfter = false; continue; }
-      if (live && e.msg.role === "user" && e.msg.body === LOOKS_RIGHT) sentAfter = true;
-    }
-    for (const e of rendered) {
-      const tbl = e.rowcheck;
-      if (!tbl) continue;
-      const lock = tbl !== live || sentAfter;
-      tbl.locked = lock;
-      e.el.classList.toggle("locked", lock);
-      for (const f of tbl.fields) {
-        for (const c of rcControls(f)) c.disabled = lock || f.removed;
-        f.removeBtn.disabled = lock;
-      }
-      tbl.button.disabled = lock;
-    }
-  }
-
   function buildMessage(m, entry) {
+    // Results from features that are gone (old messages still in the chat) show as a muted note.
+    if (R.isRetiredKind(m.kind)) return noteMsg({ body: R.OLD_RESULT_NOTE });
     switch (m.kind) {
-      case "rowcheck": return rowcheckMsg(m, entry);
       case "text": return textMsg(m);
       case "choices": return choicesMsg(m, entry);
       case "file": return fileMsg(m, entry);
@@ -551,7 +379,6 @@
       }
     }
     withChips.forEach((e, i) => e.chips.classList.toggle("stale", i < withChips.length - 1));
-    refreshRowchecks();
   }
 
   function setBusy(value) {
@@ -700,14 +527,13 @@
     toast(r.offline ? COPY.notSent : (r.copy || COPY.notSentShort));
   }
 
-  async function sendTap(id, title, button, data) {
+  async function sendTap(id, title, button) {
     if (signedOut) return;
     title = R.clipTitle(title); // the server refuses a title over 200 characters
     if (button) button.disabled = true;
     const p = addPending(title);
-    const r = await postJson(data === undefined ? { tapId: id, tapTitle: title } : { tapId: id, tapTitle: title, data });
+    const r = await postJson({ tapId: id, tapTitle: title });
     if (button) button.disabled = false;
-    refreshRowchecks(); // a table that was just sent stays locked
     if (r.ok) { settlePending(p, r.data && r.data.seq); return; }
     dropPending(p);
     if (r.copy) toast(r.copy); else if (r.offline) toast(COPY.notSentShort);

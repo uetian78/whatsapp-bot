@@ -28,7 +28,7 @@ const { parseSelection } = require("./lib/multi-select.js");
 
 // One reply must not trigger dozens of Drive downloads and media uploads.
 const MAX_BATCH_FILES = 10;
-const { isCreditError, isAiUnavailableError, markExhausted, isExhausted, aiPausedMessage, aiFeatureUnavailableMessage } = require("./lib/ai-credits.js");
+const { isCreditError, markExhausted, isExhausted, aiPausedMessage } = require("./lib/ai-credits.js");
 const { createAi, textOf } = require("./lib/ai.js");
 const { getDb, dataDir } = require("./lib/db.js");
 const { createConversations } = require("./lib/conversations.js");
@@ -42,16 +42,14 @@ const { mountWeb, cleanSecret, MIN_SECRET_LENGTH } = require("./web/auth.js");
 const { requireAdmin } = require("./lib/http-auth.js");
 const { whatsappEnabled, requiredEnv, startupWarnings } = require("./lib/app-config.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
-const { isMenuTrigger, smallTalkReply, welcomeMenuList, tipFor, optionForTap, MENU_HINT, MENU_OPTIONS, SCHEDULE_PROMPT } = require("./menu.js");
+const { isMenuTrigger, smallTalkReply, welcomeMenuList, tipFor, optionForTap, MENU_HINT, MENU_OPTIONS } = require("./menu.js");
 const { PRODUCT_KB, parseListRequest, parseUnsupportedSeriesListRequest, buildUnitList } = require("./product-facts.js");
 const crm = require("./crm.js");
 const docReq = require("./lib/doc-requests.js");
 const docReqDedupe = docReq.createDedupe();
 const { generateMtzPdf } = require("./mtz-pdf.js");
-const schedule = require("./schedule-select.js");
 const { FAMILY_MENU, rankSplit, parseSplitListRequest, listSplits } = require("./split-engine.js");
 const { generateSplitPdf } = require("./split-pdf.js");
-const { generateSchedulePdf } = require("./schedule-pdf.js");
 const { isVrfTrigger } = require("./vrf/trigger.js");
 const {
   initVrf, onVrfKeyword, onVrfMessage, sessions: vrfSessions,
@@ -71,9 +69,8 @@ const { createNumberHealth, metaEventLines, CHECK_EVERY_MS } = require("./lib/nu
 // Sender router and the number-health check.
 const {
   runWithChannel, currentChannel, showTyping, downloadMedia,
-  supports, sendText, sendLongText, sendButtons, sendList, sendDocument, sendDriveFile, sendPdfBuffer, sendPageHits, sendRowCheck,
+  sendText, sendLongText, sendButtons, sendList, sendDocument, sendDriveFile, sendPdfBuffer, sendPageHits,
 } = require("./lib/channel.js");
-const { applyRowEdits, tableId } = require("./lib/schedule-check.js");
 const { answerFromLibrary, formatAnswer, pageHitsForSources, libraryQuery, searchStatusLine } = require("./lib/answers.js");
 const { whatsappAdapter } = require("./lib/channel-whatsapp.js");
 const { getPageExtractor, parsePageTap, PageError, MSG_BAD_PAGE, MSG_FAILED } = require("./lib/page-extract.js");
@@ -1002,177 +999,14 @@ async function handleSplitStep(from, s, text) {
   }
 }
 
-async function handleScheduleStep(from, s, message, vText) {
-  // 1) Waiting for the image/PDF.
-  if (s.step === "awaitImage") {
-    let media = null;
-    if (message.type === "image" && message.image?.id) media = message.image.id;
-    else if (message.type === "document" && message.document?.id) media = message.document.id;
-    if (!media) return await sendText(from, "Please send the schedule as an *image* or *PDF*.");
-
-    s.step = "processing"; // guard against a second image launching a duplicate extraction
-    let dl;
-    try { dl = await downloadMedia(media); }
-    catch (err) {
-      console.error("❌ Schedule media download error:", err.response?.data || err.message);
-      s.step = "awaitImage";
-      return await sendText(from, "I couldn't download that file. Try again, or send a clearer photo.");
-    }
-    const mediaType = message.type === "document"
-      ? (message.document.mime_type || dl.mediaType) : dl.mediaType;
-
-    await sendText(from, "🔍 Reading the schedule, one moment…");
-    let extracted;
-    try { extracted = await schedule.rowsFromScheduleImage(dl.buffer.toString("base64"), mediaType); }
-    catch (err) {
-      console.error("❌ Schedule extraction error:", err.message);
-      s.step = "awaitImage";
-      // "The API refused us" and "the model couldn't make out the photo" both
-      // land here, but they need opposite advice — a clearer image won't help
-      // when there's no key or no credit.
-      if (isAiUnavailableError(err)) {
-        if (isCreditError(err)) markExhausted();
-        console.error("💳 Schedule reading unavailable — AI refused the request");
-        return await sendText(from, aiFeatureUnavailableMessage());
-      }
-      return await sendText(from, "Sorry, I couldn't read that schedule. Try a clearer image or a PDF.");
-    }
-    if (!extracted.rows.length) {
-      s.step = "awaitImage";
-      return await sendText(from, "I didn't find any schedule rows. Please resend a clearer image, or type *cancel* to exit.");
-    }
-    s.rows = extracted.rows;
-    s.skipped = extracted.skipped;
-    // Where the screen can show a table, the person checks the rows against their
-    // schedule first; the questions come after "Looks right".
-    if (supports("rowCheck")) {
-      s.step = "awaitRowCheck";
-      const flow = store.getFlow(from);
-      if (flow && !flow.expired) flow.ttl = ROWCHECK_TTL_MS; // time to look through a long table
-      return await sendRowCheck(from, s.rows, s.skipped);
-    }
-    return await askScheduleCondition(from, s, extracted.scheduleCondition, `I read *${extracted.rows.length}* rows.`);
-  }
-
-  // The table is on screen: typing does nothing but remind (cancel and menu are
-  // handled before any flow). The table itself arrives as the rows-ok tap.
-  if (s.step === "awaitRowCheck") {
-    return await sendText(from, "Please use the table above: fix anything that does not match your schedule, then tap *Looks right*. Type *cancel* to stop.");
-  }
-
-  // While an extraction is in flight, a second file just gets a wait notice.
-  if (s.step === "processing") {
-    return await sendText(from, "⏳ Still reading the previous file — one moment…");
-  }
-
-  // 2) Rating condition.
-  if (s.step === "awaitCondition") {
-    if (vText === "1") s.cond = "T1";
-    else if (vText === "2") s.cond = "T3";
-    else return await sendText(from, "Reply *1* for T1 (35°C) or *2* for T3 (46°C).");
-    return await advanceScheduleQuestions(from, s);
-  }
-
-  // 3) Split brand.
-  if (s.step === "awaitSplitBrand") {
-    const map = { "1": "toshiba", "2": "tcl", "3": "skm" };
-    if (!map[vText]) return await sendText(from, "Reply *1* Toshiba, *2* TCL, or *3* SKM.");
-    s.splitBrand = map[vText];
-    return await advanceScheduleQuestions(from, s);
-  }
-
-  // 4) Package vendor.
-  if (s.step === "awaitPkgVendor") {
-    if (vText === "1") { s.pkgVendor = "skm"; s.step = "awaitPkgSeries";
-      return await sendText(from, "*APMR or APMR-A?*\n1. APMR\n2. APMR-A"); }
-    if (vText === "2") { s.pkgVendor = "trane"; s.pkgSeries = null;
-      return await advanceScheduleQuestions(from, s); }
-    return await sendText(from, "Reply *1* SKM or *2* Trane.");
-  }
-
-  // 5) Package SKM series.
-  if (s.step === "awaitPkgSeries") {
-    if (vText === "1") s.pkgSeries = "apmr";
-    else if (vText === "2") s.pkgSeries = "apmr-a";
-    else return await sendText(from, "Reply *1* APMR or *2* APMR-A.");
-    return await advanceScheduleQuestions(from, s);
-  }
-}
-
-// After the rows are known: carry on with the rating the schedule printed, or ask for one.
-async function askScheduleCondition(from, s, scheduleCondition, lead) {
-  if (scheduleCondition) {
-    s.cond = scheduleCondition;
-    const label = s.cond === "T1" ? "T1 (35°C)" : "T3 (46°C)";
-    await sendText(from, `${lead} Detected rating *${label}* from the schedule.`);
-    return await advanceScheduleQuestions(from, s);
-  }
-  s.step = "awaitCondition";
-  return await sendText(from, `${lead}\n\n*Rate capacities at?*\n1. T1 (35°C)\n2. T3 (46°C)`);
-}
-
-const MSG_TABLE_CLOSED = "That table is no longer open. Send *Schedule Selection* to read a schedule again.";
-const MSG_TABLE_STALE = "That table is out of date. Please use the newest table in the chat.";
-
-// "Looks right" on the schedule table: the rows as the person left them. The
-// numbers are untrusted, so applyRowEdits checks every field and works the kW out
-// again itself. A rejected table changes nothing and comes back with the typing kept.
-async function handleRowsOk(from, data) {
-  const flow = store.getFlow(from);
-  const s = flow && !flow.expired && flow.type === "schedule" ? flow.data : null;
-  if (!s || s.step !== "awaitRowCheck") return await sendText(from, MSG_TABLE_CLOSED);
-  store.touchFlow(from);
-  // Rows are matched by position, so a tap from an older table (another tab, another schedule)
-  // must not be applied to this one: the table's id has to be this table's.
-  if (!data || typeof data !== "object" || data.tableId !== tableId(s.rows, s.skipped)) return await sendText(from, MSG_TABLE_STALE);
-  const sent = data.rows;
-  const out = applyRowEdits(s.rows, s.skipped, sent);
-  if (out.errors.length) {
-    await sendText(from, "I haven't changed anything yet. Please fix:\n" + out.errors.map((e) => `• ${e}`).join("\n"));
-    return await sendRowCheck(from, s.rows, s.skipped, { errors: out.errors, errorIds: out.errorIds, draft: sent });
-  }
-  s.rows = out.rows;
-  s.skipped = out.skipped;
-  return await askScheduleCondition(from, s, schedule.summarize(s.rows).scheduleCondition, `Thanks, *${s.rows.length}* ${s.rows.length === 1 ? "row" : "rows"} confirmed.`);
-}
-
-// Ask the next needed question, or produce the result when all answered.
-async function advanceScheduleQuestions(from, s) {
-  const sum = schedule.summarize(s.rows);
-  if (sum.hasSplit && !s.splitBrand) {
-    s.step = "awaitSplitBrand";
-    return await sendText(from, "*Which split brand?*\n1. Toshiba\n2. TCL\n3. SKM");
-  }
-  if (sum.hasPackage && !s.pkgVendor) {
-    s.step = "awaitPkgVendor";
-    return await sendText(from, "*Package line?*\n1. SKM (APMR)\n2. Trane (MTZ)");
-  }
-  const reply = schedule.buildReply(s.rows, s.skipped, {
-    cond: s.cond, splitBrand: s.splitBrand, pkgVendor: s.pkgVendor, pkgSeries: s.pkgSeries,
-  });
-
-  // Store results for PDF print: plain JSON, kept 30 days. The PDFs are made when
-  // asked for and never kept.
-  const saved = {
-    cond: s.cond, splitBrand: s.splitBrand, pkgVendor: s.pkgVendor, pkgSeries: s.pkgSeries,
-    rows: s.rows, skipped: s.skipped, at: resultStamp(),
-  };
-  store.setCtx(from, "scheduleResult", saved, RESULT_TTL_MS);
-
-  store.endFlow(from);
-  await sendLongText(from, reply + "\n\nReply *Print* or *Datasheet* for a PDF report + package datasheets · *Schedule Selection* to run again.");
-  return await sendButtons(from, PRINT_PROMPT, [printButton(saved.at)]);
-}
-
 // Results stay available for 30 days; the button under them is "PDF report".
 const RESULT_TTL_MS = 30 * 24 * 60 * 60 * 1000;
-const ROWCHECK_TTL_MS = 30 * 60 * 1000;
 // The button's id says which saved result it sits under ("print|<when it was saved>"), so an old
 // button never prints a newer result. A bare "print" (the word, or a chip from before) means the newest.
 const PRINT_TAP = "print";
 const printButton = (at) => ({ id: `${PRINT_TAP}|${at}`, title: "PDF report" });
-const RESULT_KEYS = ["splitResult", "scheduleResult"]; // kept when the conversation is cleared
-const MSG_NOTHING_TO_PRINT = "No recent results to print. Run *Schedule Selection* or *Split Selection* first.";
+const RESULT_KEYS = ["splitResult"]; // kept when the conversation is cleared
+const MSG_NOTHING_TO_PRINT = "No recent results to print. Run *Split Selection* first.";
 const MSG_RESULT_REPLACED = "That result was replaced; tap the newest, or type print.";
 // " (results from 14 Mar, 09:12)", in Qatar time; empty when the save time is not known.
 function savedAt(at) {
@@ -1185,21 +1019,14 @@ const PRINT_PROMPT = "Want these results as a PDF report?";
 let lastResultAt = 0;
 const resultStamp = () => (lastResultAt = Math.max(Date.now(), lastResultAt + 1));
 
-// Which saved result a Print / Datasheet request is for, as the function that
-// sends it, or null when there is nothing to send. Both a split and a schedule
-// result can be saved at once; "Print" means the newest.
+// Which saved result a Print request is for, as the function that sends it, or
+// null when there is nothing to send.
 function printTarget(from, word, at) {
   const split = /^print$/i.test(word) ? store.getCtx(from, "splitResult") : null;
-  const sched = /^(print|datasheet)$/i.test(word) ? store.getCtx(from, "scheduleResult") : null;
   if (at !== undefined) { // a button: only the result it sits under
-    if (split && split.at === at) return handleSplitPrint;
-    if (sched && sched.at === at) return handleSchedulePrint;
-    return null;
+    return split && split.at === at ? handleSplitPrint : null;
   }
-  if (split && sched) return (sched.at || 0) > (split.at || 0) ? handleSchedulePrint : handleSplitPrint;
-  if (split) return handleSplitPrint;
-  if (sched) return handleSchedulePrint;
-  return null;
+  return split ? handleSplitPrint : null;
 }
 
 // Send split PDF report when user replies "Print"
@@ -1227,111 +1054,6 @@ async function handleSplitPrint(from) {
   } catch (err) {
     console.error("❌ Split PDF send error:", err.message);
     return sendText(from, "❌ PDF generated but could not be sent. Please try again.");
-  }
-}
-
-// Send schedule/BOQ PDF report when user replies "Print"
-async function handleSchedulePrint(from) {
-  const stored = store.getCtx(from, "scheduleResult");
-  if (!stored) {
-    return sendText(from, "❌ No recent schedule results found. Run *Schedule Selection* first.");
-  }
-
-  await sendText(from, `⏳ Generating PDF report…${savedAt(stored.at)}`);
-
-  let pdfBuffer;
-  try {
-    pdfBuffer = await generateSchedulePdf({
-      cond: stored.cond, splitBrand: stored.splitBrand,
-      pkgVendor: stored.pkgVendor, pkgSeries: stored.pkgSeries,
-      rows: stored.rows, skipped: stored.skipped,
-    });
-  } catch (err) {
-    console.error("❌ Schedule PDF error:", err.message);
-    return sendText(from, "❌ Failed to generate PDF. Please try again.");
-  }
-
-  try {
-    await sendPdfBuffer(
-      from, pdfBuffer, "Schedule_Selection.pdf",
-      `Schedule / BOQ Selection — ${stored.rows.length} rows`
-    );
-  } catch (err) {
-    console.error("❌ Schedule PDF send error:", err.message);
-    return sendText(from, "❌ PDF generated but could not be sent. Please try again.");
-  }
-
-  // ── Package datasheets: SKM fetched from Drive, Trane MTZ regenerated
-  // fresh from the same inputs that picked the model in the report above.
-  // Split/ducted rows need nothing extra — the report's Required/Proposed
-  // columns already cover them.
-  const { pkgResults } = schedule.computeSelections(stored.rows, {
-    cond: stored.cond, splitBrand: stored.splitBrand,
-    pkgVendor: stored.pkgVendor, pkgSeries: stored.pkgSeries,
-  });
-  if (!pkgResults.length) return;
-
-  await sendText(from, "⏳ Sending package datasheets…");
-
-  // Fetch the Drive file index once up front (not per row) so a single
-  // Drive failure surfaces one clear diagnostic instead of N identical ones.
-  let driveFiles = null;
-  let driveError = null;
-  if (pkgResults.some((p) => p.vendor === "skm")) {
-    try {
-      driveFiles = await listFolderFiles();
-      console.log(`📄 SKM datasheet lookup: Drive index has ${driveFiles.length} file(s)`);
-    } catch (err) {
-      driveError = err;
-      console.error("❌ SKM datasheet Drive fetch error:", err.response?.data || err.stack || err.message);
-    }
-  }
-
-  for (const { row: r, vendor, match: m } of pkgResults) {
-    if (vendor === "skm") {
-      const seriesKey = m.series === "apmr-a" ? "APMR-A" : "APMR";
-      if (driveError) {
-        await sendText(from,
-          `❌ Could not reach Drive for the ${seriesKey} ${m.code} datasheet (${driveError.message}). Please try again.`
-        );
-        continue;
-      }
-      try {
-        const matches = findDatasheetFiles(seriesKey, m.code, driveFiles);
-        const exact = matches.find((f) => f.condition === stored.cond);
-        const file = exact || matches[0];
-        console.log(
-          `📄 SKM datasheet lookup: ${seriesKey} ${m.code} @ ${stored.cond} -> ` +
-          `${matches.length} match(es)${file ? `, sending "${file.name}"` : ", none found"}`
-        );
-        if (file) {
-          await sendDriveFile(from, file);
-        } else {
-          await sendText(from,
-            `Apologies — the ${seriesKey} ${m.code} datasheet isn't available yet; kindly email hassan.saleem@mannai.com.qa to get the required document.`
-          );
-        }
-      } catch (err) {
-        console.error("❌ SKM datasheet error:", err.response?.data || err.stack || err.message);
-        await sendText(from, `❌ Could not fetch the ${seriesKey} ${m.code} datasheet for ${r.location} (${err.message}). Please try again.`);
-      }
-    } else if (vendor === "trane") {
-      try {
-        const mtzBuffer = await generateMtzPdf({
-          reqTC: m.reqTC, reqSC: 0, db: m.db, wb: m.wb, amb: m.amb,
-          airflow: r.airflow || null, tag: r.location,
-        });
-        if (mtzBuffer) {
-          await sendPdfBuffer(
-            from, mtzBuffer, `MTZ_Selection_${r.location}.pdf`,
-            `Trane MTZ ${m.key} — ${r.location}`
-          );
-        }
-      } catch (err) {
-        console.error("❌ MTZ datasheet error:", err.message);
-        await sendText(from, `❌ Could not generate the MTZ datasheet for ${r.location}.`);
-      }
-    }
   }
 }
 
@@ -1523,48 +1245,12 @@ async function sendPageTap(to, tapId) {
   }
 }
 
-// ── Welcome menu, schedule flow, saved work ─────────────────────────────
+// ── Welcome menu, saved work ────────────────────────────────────────────
 // The menu as a list (a numbered reply still works for 15 minutes).
 async function showWelcomeMenu(from, profileName) {
   const m = welcomeMenuList(profileName, crm.isKnownContact(from));
   store.setCtx(from, "menu", { open: true }, 15 * 60 * 1000); // numbers are read against the menu as it is now
   return await sendList(from, m.body, m.buttonLabel, m.rows);
-}
-
-async function startScheduleFlow(from) {
-  store.startFlow(from, "schedule", { step: "awaitImage" });
-  return await sendText(from, SCHEDULE_PROMPT);
-}
-
-// A photo or PDF with no flow open starts the schedule flow and is read at once,
-// with a note saying so. A sheet (xlsx, xls, csv) is only read by VRF Selection,
-// so it is pointed there. Web chat only (see the caller).
-async function handleStrayAttachment(from, message) {
-  // The caller has already dealt with an expired flow and an open schedule flow,
-  // so any flow found here is a split or MTZ one in progress. It is not ours to
-  // overwrite: leave it as it is and say what to do.
-  const open = store.getFlow(from);
-  if (open && !open.expired) {
-    return await sendText(from, "Finish this first, or type *cancel* to stop it, then send the file again.");
-  }
-  const doc = message.type === "document" ? message.document : null;
-  const isPdf = !!doc && (/pdf/i.test(doc.mime_type || "") || /\.pdf$/i.test(doc.filename || ""));
-  if (message.type === "image" || isPdf) {
-    const data = store.startFlow(from, "schedule", { step: "awaitImage" });
-    await sendText(from, "📎 Nothing was waiting for a file, so I'm reading this as an equipment schedule.");
-    try {
-      return await handleScheduleStep(from, data, message, "");
-    } finally {
-      // Nobody asked for a schedule, so a read that failed or found no rows must not
-      // leave the flow waiting for one (the next question would be answered with
-      // "Please send the schedule as an image or PDF"). The person's reply stays as sent.
-      const now = store.getFlow(from);
-      if (now && !now.expired && now.data === data && data.step === "awaitImage") store.endFlow(from);
-    }
-  }
-  if (doc) {
-    return await sendText(from, "I read Excel and CSV sheets inside *VRF Selection*. Type *VRF Selection*, then attach the sheet again.");
-  }
 }
 
 // What an old tap gets when the option it belonged to has gone.
@@ -1645,9 +1331,6 @@ async function handleIncomingMessage(value, message) {
       // "Saved work" on the web chat: the person's recent files again, at the bottom.
       // WhatsApp never offers this tap, so there it is an unknown tap like any other.
       if (btnId === "saved|open" && currentChannel()?.name === "web") return await sendSavedWork(from);
-
-      // The schedule table's "Looks right" (web only): the table rides along as the tap's data.
-      if (btnId === "rows-ok") return await handleRowsOk(from, message.interactive?.button_reply?.data);
 
       // "PDF report" under results: the same as typing Print.
       if (btnId === PRINT_TAP || btnId.startsWith(`${PRINT_TAP}|`)) {
@@ -1837,33 +1520,17 @@ async function handleIncomingMessage(value, message) {
       return await onVrfKeyword(from);
     }
 
-    // ── Schedule / BOQ image selection ───────────────────────────
-    // Trigger: exact "Image Selection" / "BOQ Selection" / "Schedule Selection".
-    if (message.type === "text" &&
-        /^(image|boq|schedule)\s+selection$/i.test(message.text.body.trim())) {
-      return await startScheduleFlow(from);
-    }
-
-    // ── Active guided flow (split / mtz / schedule) ─────────────
+    // ── Active guided flow (split / mtz) ─────────────
     const flow = store.getFlow(from);
     if (flow?.expired) {
-      const names = { split: "Split Selection", mtz: "MTZ Selection", schedule: "Schedule Selection" };
+      const names = { split: "Split Selection", mtz: "MTZ Selection" };
       return await sendText(from, `⏰ ${names[flow.type] || "Your"} session timed out. Type *${names[flow.type] || "menu"}* to start again.`);
     }
     if (flow) store.touchFlow(from);
 
-    if (flow?.type === "schedule") {
-      const vText = message.type === "text" ? message.text.body.trim() : "";
-      return await handleScheduleStep(from, flow.data, message, vText);
-    }
-
-    if (message.type !== "text") {
-      // The web chat's attach button is always on screen, and a redeploy or a
-      // sleep drops an open VRF session (kept in memory), so a file can arrive
-      // with nothing waiting for it. WhatsApp keeps ignoring such files.
-      if (currentChannel()?.name === "web") return await handleStrayAttachment(from, message);
-      return;
-    }
+    // Nothing reads a photo or a file any more, so one that arrives with no VRF
+    // session waiting for it is left alone.
+    if (message.type !== "text") return;
     let text = message.text.body.trim(); // a "find ..." that is really a document request continues without the verb
 
     // Reply to a pending document list: "2", "1,3,5", "1-4", or "all".
@@ -1903,7 +1570,7 @@ async function handleIncomingMessage(value, message) {
       }
     }
 
-    // ── Split / Schedule PDF print request ───────────────────────
+    // ── Split PDF print request ───────────────────────
     const printNow = printTarget(from, text.trim());
     if (printNow) return await printNow(from);
 

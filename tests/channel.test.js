@@ -5,18 +5,18 @@ const channel = require("../lib/channel.js");
 const { whatsappAdapter } = require("../lib/channel-whatsapp.js");
 
 const {
-  runWithChannel, currentChannel, supports, downloadMedia, showTyping,
+  runWithChannel, currentChannel, downloadMedia, showTyping,
   sendText, sendLongText, sendButtons, sendList, sendDriveFile, sendPdfBuffer, sendDocument, sendPageHits,
 } = channel;
 
 // An adapter that records every call it gets, tagged with its own name.
-function recorder(name, features = {}) {
+function recorder(name) {
   const calls = [];
   const rec = (method) => async (...args) => { calls.push([method, ...args]); return `${name}:${method}`; };
   return {
     calls,
     adapter: {
-      name, supports: features,
+      name,
       typing: rec("typing"), downloadMedia: rec("downloadMedia"),
       text: rec("text"), longText: rec("longText"), buttons: rec("buttons"), list: rec("list"),
       driveFile: rec("driveFile"), generatedFile: rec("generatedFile"), pageHits: rec("pageHits"),
@@ -95,17 +95,6 @@ test("currentChannel is the adapter inside, null outside", async () => {
   assert.equal(currentChannel(), null);
 });
 
-test("supports reads the adapter's plain object, true only when exactly true", async () => {
-  const r = recorder("a", { rowCheck: true, other: false, odd: "yes" });
-  await runWithChannel(r.adapter, async () => {
-    assert.equal(supports("rowCheck"), true);
-    assert.equal(supports("other"), false);
-    assert.equal(supports("odd"), false);
-    assert.equal(supports("missing"), false);
-  });
-  assert.equal(supports("rowCheck"), false); // no channel: nothing is supported
-});
-
 test("an adapter error reaches the caller", async () => {
   const r = recorder("a");
   r.adapter.text = async () => { throw new Error("boom"); };
@@ -116,7 +105,6 @@ test("an adapter error reaches the caller", async () => {
 
 test("whatsappAdapter has the contract's shape", () => {
   assert.equal(whatsappAdapter.name, "whatsapp");
-  assert.deepEqual(whatsappAdapter.supports, {});
   for (const m of ["typing", "downloadMedia", "text", "longText", "buttons", "list", "driveFile", "generatedFile", "pageHits"]) {
     assert.equal(typeof whatsappAdapter[m], "function", m);
   }
