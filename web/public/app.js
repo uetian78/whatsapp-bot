@@ -75,7 +75,7 @@
   let loaded = false;
   let openRef = null;       // the file card that was newest when the chat opened: it is fetched ahead
   let liveAfter = null;     // its seq: cards after this arrived live and are fetched ahead too
-  let stick = true;        // the person is at the bottom, so new messages scroll into view
+  let stick = true;         // the person is at the bottom, so new messages scroll into view
   let pollTimer = null;
   let inFlight = false;
   let queued = false;
