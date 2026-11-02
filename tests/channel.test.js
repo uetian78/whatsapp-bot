@@ -6,7 +6,7 @@ const { whatsappAdapter } = require("../lib/channel-whatsapp.js");
 
 const {
   runWithChannel, currentChannel, showTyping,
-  sendText, sendLongText, sendButtons, sendList, sendDriveFile, sendPdfBuffer, sendDocument, sendPageHits,
+  sendText, sendLongText, sendButtons, sendList, sendDriveFile, sendPdfBuffer, sendDocument,
 } = channel;
 
 // An adapter that records every call it gets, tagged with its own name.
@@ -19,7 +19,7 @@ function recorder(name) {
       name,
       typing: rec("typing"),
       text: rec("text"), longText: rec("longText"), buttons: rec("buttons"), list: rec("list"),
-      driveFile: rec("driveFile"), generatedFile: rec("generatedFile"), pageHits: rec("pageHits"),
+      driveFile: rec("driveFile"), generatedFile: rec("generatedFile"),
     },
   };
 }
@@ -42,7 +42,6 @@ test("every facade function maps to its adapter method", async () => {
     await sendDriveFile("u", file);
     await sendPdfBuffer("u", buf, "a.pdf", "cap");
     await sendDocument("u", buf, "b.xlsx", "cap2");
-    await sendPageHits("u", "Pages:", [{ fileId: "f1", name: "A.pdf", page: 2 }]);
     await showTyping("wamid.1");
   });
   assert.deepEqual(r.calls, [
@@ -52,7 +51,6 @@ test("every facade function maps to its adapter method", async () => {
     ["driveFile", "u", file],
     ["generatedFile", "u", buf, "a.pdf", "cap"],
     ["generatedFile", "u", buf, "b.xlsx", "cap2"],
-    ["pageHits", "u", "Pages:", [{ fileId: "f1", name: "A.pdf", page: 2 }]],
     ["typing", "wamid.1"],
   ]);
 });
@@ -102,7 +100,7 @@ test("an adapter error reaches the caller", async () => {
 
 test("whatsappAdapter has the contract's shape", () => {
   assert.equal(whatsappAdapter.name, "whatsapp");
-  for (const m of ["typing", "text", "longText", "buttons", "list", "driveFile", "generatedFile", "pageHits"]) {
+  for (const m of ["typing", "text", "longText", "buttons", "list", "driveFile", "generatedFile"]) {
     assert.equal(typeof whatsappAdapter[m], "function", m);
   }
 });
@@ -131,21 +129,6 @@ test("whatsappAdapter forwards each send to wa and returns its result", async (t
   assert.deepEqual(mocks.sendList.mock.calls[0].arguments, ["u", "t", "L", [{ id: "1", title: "A" }]]);
   assert.deepEqual(mocks.sendDriveFile.mock.calls[0].arguments, ["u", file]);
   assert.deepEqual(mocks.markReadWithTyping.mock.calls[0].arguments, ["wamid.1"]);
-});
-
-test("whatsappAdapter.pageHits sends the pages as one plain text message and says it did", async (t) => {
-  const long = t.mock.method(wa, "sendLongText", async () => undefined);
-  const hits = [{ fileId: "f1", name: "APMR-A.pdf", folder: "Catalogues", page: 14, snippet: "sound level 82 dB", size: 1 }];
-  const sent = await runWithChannel(whatsappAdapter, () => sendPageHits("u", 'Pages that mention "sound":', hits));
-  assert.equal(sent, true);
-  assert.equal(long.mock.calls.length, 1);
-  const [to, body] = long.mock.calls[0].arguments;
-  assert.equal(to, "u");
-  assert.match(body, /^Pages that mention "sound":\n\n1\. APMR-A, page 14\n/);
-  assert.match(body, /sound level 82 dB/);
-  // nothing to show: nothing sent
-  assert.equal(await runWithChannel(whatsappAdapter, () => sendPageHits("u", "x", [])), false);
-  assert.equal(long.mock.calls.length, 1);
 });
 
 test("whatsappAdapter.generatedFile sends a PDF as before and any other file as a document", async (t) => {

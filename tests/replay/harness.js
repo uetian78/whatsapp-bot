@@ -258,7 +258,6 @@ function createHarness(deliver) {
       globalThis.fetch = realFetch;
       if (ownDataDir) { // release the files before the folder goes (Windows locks open files)
         try { require("../../lib/db.js").closeDb(); } catch (_) { /* never opened */ }
-        try { require("../../lib/page-index.js").getPageIndex().close(); } catch (_) { /* never opened */ }
       }
       delete require.cache[dotenvId];
       for (const k of Object.keys(process.env)) if (!(k in savedEnv)) delete process.env[k];

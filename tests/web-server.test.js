@@ -23,7 +23,7 @@ function setup(name = "web") {
     longText: async (to, body) => { sent.push({ kind: "text", body }); return true; },
     buttons: async (to, text) => { sent.push({ kind: "buttons", body: text }); return true; },
     list: async (to, text, label, rows) => { sent.push({ kind: "list", body: text, rows }); return true; },
-    driveFile: async () => true, generatedFile: async () => true, pageHits: async () => true,
+    driveFile: async () => true, generatedFile: async () => true,
   };
   const h = createHarness(async (value, message) => {
     const { deliverMessage } = require("../server.js");
@@ -74,6 +74,45 @@ test("an old menu row gets the no-longer-available reply, with no tip and no cra
       assert.equal(t.sent.length, before + 1, id);
       assert.match(t.sent.at(-1).body, /no longer available/, id);
     }
+  } finally { t.done(); }
+});
+
+// What the bot sends for one message from a fresh person, as plain data to compare.
+async function replyTo(phrase) {
+  const t = setup();
+  try {
+    await t.say(textMsg(phrase));
+    return t.sent.map((s) => ({ kind: s.kind, body: s.body, rows: s.rows && s.rows.map((r) => [r.id, r.title, r.description]) }));
+  } finally { t.done(); }
+}
+
+test("find X and search X are document requests: the same reply as typing X, with no page results", { skip }, async () => {
+  const pairs = [
+    ["find APMR catalogue", "APMR catalogue"],
+    ["search APMR IOM", "APMR IOM"],
+    ["Find   hisense catalogue  ", "hisense catalogue"],
+    ["find me the apmra 51004", "apmra 51004"],
+    ["find APCY-H 30 tr", "APCY-H 30 tr"],
+    ["search please package unit 20 tr t3", "package unit 20 tr t3"],
+    ["find coil connection sheet", "coil connection sheet"],
+    ["find sound level", "sound level"],
+  ];
+  for (const [withVerb, plain] of pairs) {
+    const a = await replyTo(withVerb);
+    const b = await replyTo(plain);
+    assert.ok(a.length > 0, `${withVerb}: the bot answered`);
+    assert.deepEqual(a, b, `${withVerb} should answer exactly like ${plain}`);
+    assert.doesNotMatch(JSON.stringify(a), /Pages in the PDFs|Pages used for this answer|page \d+/i, withVerb);
+  }
+});
+
+test("search all still means the wider scan of the last request, not a verb", { skip }, async () => {
+  const t = setup();
+  try {
+    await t.say(textMsg("apmr catalogue"));
+    t.sent.length = 0;
+    await t.say(textMsg("search all"));
+    assert.match(t.sent.map((s) => s.body).join("\n"), /Searching every file for "apmr catalogue"|across all folders|found nothing close/);
   } finally { t.done(); }
 });
 

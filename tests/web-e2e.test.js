@@ -55,7 +55,6 @@ test.before(async () => {
 test.after(async () => {
   if (server) await new Promise((r) => { server.closeAllConnections?.(); server.close(r); });
   try { require("../lib/db.js").closeDb(); } catch (_) { /* never opened */ }
-  try { require("../lib/page-index.js").getPageIndex().close(); } catch (_) { /* never opened */ }
   fs.rmSync(DATA, { recursive: true, force: true, maxRetries: 5 });
   globalThis.fetch = realFetch;
 });
@@ -103,16 +102,18 @@ test("everyday messages that do get an answer don't also get the catch-all", asy
 // ---- what older versions left behind ----
 // Messages saved by features that are gone must still be served (the screen shows
 // them as a short note), and taps on their old buttons get the usual reply.
-const OLD_TAPS = ["rows-ok", "print", "print|1767225600000"];
+const OLD_TAPS = ["rows-ok", "print", "print|1767225600000", "page|1AbCdEf|14|pdf", "page|1AbCdEf|14|image"];
 
 test("old result messages are still served, and an old tap on a removed button gets the no-longer-available reply", async () => {
   await settle();
   const { createConversations } = require("../lib/conversations.js");
   const conversations = createConversations({ db: require("../lib/db.js").getDb() });
   conversations.append(USER, "bot", "rowcheck", { text: "old table", rows: [], skipped: [] });
-  const served = (await messages()).messages.filter((m) => m.kind === "rowcheck");
-  assert.equal(served.length, 1);
-  assert.equal(served[0].body.text, "old table");
+  conversations.append(USER, "bot", "pages", { prompt: "Pages", hits: [{ fileId: "1AbCdEf", name: "A.pdf", page: 14, snippet: "x" }] });
+  const served = (await messages()).messages;
+  assert.equal(served.filter((m) => m.kind === "rowcheck").length, 1);
+  assert.equal(served.filter((m) => m.kind === "rowcheck")[0].body.text, "old table");
+  assert.equal(served.filter((m) => m.kind === "pages")[0].body.hits[0].page, 14);
 
   for (const id of OLD_TAPS) {
     const before = (await messages()).messages.length;

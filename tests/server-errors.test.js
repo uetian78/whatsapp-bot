@@ -67,7 +67,7 @@ const LEAKS = /\bat\s+\S+\s+\(|node_modules|SyntaxError|\.js:\d+|[A-Za-z]:\\/;
 
 test("bad JSON, without credentials, answers a short JSON error and never a stack or a path", async () => {
   await withServer(async (port) => {
-    for (const p of ["/", "/admin/search-index", "/app/api/messages", "/webhook", "/drive-index"]) {
+    for (const p of ["/", "/app/api/messages", "/webhook", "/drive-index"]) {
       const r = await request(port, "POST", p, { body: "{not json" });
       assert.equal(r.status, 400, p);
       assert.match(r.type, /json/, p);

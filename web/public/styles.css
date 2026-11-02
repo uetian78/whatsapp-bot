@@ -225,20 +225,6 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .btn:active { filter: brightness(0.92); }
 .btn:disabled { opacity: 0.6; cursor: default; }
 .btn svg { flex: none; }
-.page-pill { flex: none; padding: 3px 10px; border-radius: 999px; background: var(--accent-soft); color: var(--accent-strong); font-size: 0.78rem; font-weight: 650; }
-.snippet {
-  margin: 0;
-  padding: 0 12px 10px;
-  font-size: 0.9rem;
-  color: var(--text);
-  overflow-wrap: anywhere;
-  display: -webkit-box;
-  -webkit-line-clamp: 5;
-  line-clamp: 5;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-.prompt { margin-bottom: 8px; }
 
 /* ---- jump, banner, toast ---- */
 .jump {

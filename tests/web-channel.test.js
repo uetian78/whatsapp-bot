@@ -6,7 +6,6 @@ const path = require("node:path");
 const { openDb } = require("../lib/db.js");
 const { createConversations } = require("../lib/conversations.js");
 const { createWebChannel } = require("../lib/channel-web.js");
-const { pageTapId } = require("../lib/page-extract.js");
 
 const DAY = 24 * 60 * 60 * 1000;
 
@@ -25,7 +24,7 @@ function make(extra = {}) {
 test("the adapter has the contract's methods", () => {
   const { channel, done } = make();
   assert.equal(channel.name, "web");
-  for (const m of ["typing", "text", "longText", "buttons", "list", "driveFile", "generatedFile", "pageHits"]) {
+  for (const m of ["typing", "text", "longText", "buttons", "list", "driveFile", "generatedFile"]) {
     assert.equal(typeof channel[m], "function", m);
   }
   done();
@@ -98,130 +97,6 @@ test("driveFile stores ref, name, folder and size and resolves truthy", async ()
   const [m] = conversations.since("u1", 0);
   assert.equal(m.kind, "file");
   assert.deepEqual(m.body, { ref: "drive:F1", name: "Spec.pdf", folder: "Trane", size: 1234 });
-  done();
-});
-
-test("pageHits stores a pages message with file ref, page, snippet and the tap ids", async () => {
-  const { channel, conversations, done } = make();
-  const hits = [{ fileId: "F1", name: "Manual.pdf", folder: "Carrier", page: 7, snippet: "sound level 62 dB", size: 5000 }];
-  assert.equal(await channel.pageHits("u1", "Found it:", hits), true);
-  const [m] = conversations.since("u1", 0);
-  assert.equal(m.kind, "pages");
-  assert.equal(m.body.prompt, "Found it:");
-  assert.deepEqual(m.body.hits, [{
-    ref: "drive:F1", fileId: "F1", name: "Manual.pdf", folder: "Carrier", page: 7,
-    snippet: "sound level 62 dB", size: 5000,
-    pdfTap: pageTapId("F1", 7, "pdf"), imageTap: pageTapId("F1", 7, "image"),
-  }]);
-  done();
-});
-
-test("pageHits with no hits stores nothing and resolves false", async () => {
-  const { channel, conversations, done } = make();
-  assert.equal(await channel.pageHits("u1", "x", []), false);
-  assert.equal(conversations.isEmpty("u1"), true);
-  done();
-});
-
-test("generatedFile saves bytes under the data dir and returns a gen ref", async () => {
-  const { channel, conversations, dir, done } = make();
-  const bytes = Buffer.from("%PDF-1.4 hello");
-  assert.ok(await channel.generatedFile("u1", bytes, "Submittal.pdf", "Here you go"));
-  const [m] = conversations.since("u1", 0);
-  assert.equal(m.kind, "file");
-  assert.match(m.body.ref, /^gen:[0-9a-f-]{36}$/);
-  assert.equal(m.body.name, "Submittal.pdf");
-  assert.equal(m.body.size, bytes.length);
-  assert.equal(m.body.mime, "application/pdf");
-  assert.equal(m.body.caption, "Here you go");
-  const id = m.body.ref.slice(4);
-  const got = channel.readGenerated(id, "u1");
-  assert.equal(got.name, "Submittal.pdf");
-  assert.equal(got.mime, "application/pdf");
-  assert.ok(got.path.startsWith(path.join(dir, "generated")));
-  assert.deepEqual(fs.readFileSync(got.path), bytes);
-  done();
-});
-
-test("generated mime comes from the filename extension", async () => {
-  const { channel, conversations, done } = make();
-  await channel.generatedFile("u1", Buffer.from("a"), "photo.JPG");
-  await channel.generatedFile("u1", Buffer.from("b"), "sel.xlsx");
-  await channel.generatedFile("u1", Buffer.from("c"), "thing.bin");
-  const mimes = conversations.since("u1", 0).map((m) => m.body.mime);
-  assert.deepEqual(mimes, [
-    "image/jpeg",
-    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    "application/octet-stream",
-  ]);
-  done();
-});
-
-test("another user cannot read a generated file", async () => {
-  const { channel, conversations, done } = make();
-  await channel.generatedFile("u1", Buffer.from("x"), "a.pdf");
-  const id = conversations.since("u1", 0)[0].body.ref.slice(4);
-  assert.notEqual(channel.readGenerated(id, "u1"), null);
-  assert.equal(channel.readGenerated(id, "other"), null);
-  done();
-});
-
-test("readGenerated rejects ids that are not uuids and missing files", async () => {
-  const { channel, conversations, done } = make();
-  assert.equal(channel.readGenerated("../../etc/passwd", "u1"), null);
-  assert.equal(channel.readGenerated("", "u1"), null);
-  assert.equal(channel.readGenerated(undefined, "u1"), null);
-  await channel.generatedFile("u1", Buffer.from("x"), "a.pdf");
-  const id = conversations.since("u1", 0)[0].body.ref.slice(4);
-  fs.unlinkSync(channel.readGenerated(id, "u1").path);
-  assert.equal(channel.readGenerated(id, "u1"), null);
-  done();
-});
-
-test("generated files older than 30 days are removed at startup", async () => {
-  const { channel, conversations, clock, db, done } = make();
-  await channel.generatedFile("u1", Buffer.from("old"), "old.pdf");
-  clock.t += 29 * DAY;
-  await channel.generatedFile("u1", Buffer.from("new"), "new.pdf");
-  clock.t += 2 * DAY; // old is now 31 days, new is 2
-  const [oldMsg, newMsg] = conversations.since("u1", 0);
-  const oldId = oldMsg.body.ref.slice(4), newId = newMsg.body.ref.slice(4);
-  const oldPath = channel.readGenerated(oldId, "u1").path;
-  channel.cleanupGenerated();
-  assert.equal(fs.existsSync(oldPath), false);
-  assert.equal(channel.readGenerated(oldId, "u1"), null);
-  assert.notEqual(channel.readGenerated(newId, "u1"), null);
-  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM generated_files").get().n, 1);
-  // the saved message stays
-  assert.equal(conversations.since("u1", 0).length, 2);
-  done();
-});
-
-test("generated files are kept under GENERATED_MAX_MB, oldest first", async () => {
-  const prev = process.env.GENERATED_MAX_MB;
-  process.env.GENERATED_MAX_MB = "1";
-  const { channel, conversations, clock, done } = make();
-  try {
-    const mb = (n) => Buffer.alloc(Math.floor(n * 1024 * 1024), 1);
-    await channel.generatedFile("u1", mb(0.6), "a.pdf");
-    clock.t += 1000;
-    await channel.generatedFile("u1", mb(0.6), "b.pdf");
-    clock.t += 1000;
-    await channel.generatedFile("u1", mb(0.3), "c.pdf");
-    const ids = conversations.since("u1", 0).map((m) => m.body.ref.slice(4));
-    channel.cleanupGenerated();
-    assert.equal(channel.readGenerated(ids[0], "u1"), null); // oldest goes first
-    assert.notEqual(channel.readGenerated(ids[1], "u1"), null);
-    assert.notEqual(channel.readGenerated(ids[2], "u1"), null);
-  } finally {
-    if (prev === undefined) delete process.env.GENERATED_MAX_MB; else process.env.GENERATED_MAX_MB = prev;
-    done();
-  }
-});
-
-test("cleanupGenerated with no generated folder does nothing", () => {
-  const { channel, done } = make();
-  assert.doesNotThrow(() => channel.cleanupGenerated());
   done();
 });
 

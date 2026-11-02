@@ -93,6 +93,12 @@ test("every example the Documents and selection tips advertise is a request the 
   assert.ok(typed.length >= 8, "the tips carry examples");
   for (const e of typed) {
     for (const variant of e.split(/\s+or\s+/i)) {
+      const { stripFindVerb } = require("../lib/broad-search.js");
+      const rest = stripFindVerb(variant.trim());
+      if (rest) { // "find X" is X typed without the verb
+        assert.equal(classify(variant.trim()), classify(rest), variant);
+        continue;
+      }
       const kind = classify(variant.trim());
       assert.ok(!["other", "empty", "question"].includes(kind), `"${variant}" classifies as ${kind}`);
     }

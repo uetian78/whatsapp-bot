@@ -98,7 +98,7 @@
 
   // Message kinds whose features no longer exist. Old messages of these kinds are
   // still in people's chats; the screen shows OLD_RESULT_NOTE in their place.
-  const RETIRED_KINDS = ["rowcheck"];
+  const RETIRED_KINDS = ["rowcheck", "pages"];
   const isRetiredKind = (kind) => RETIRED_KINDS.includes(kind);
   const OLD_RESULT_NOTE = "This older result is no longer available.";
 

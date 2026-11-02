@@ -2,7 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert");
 const {
   meaningfulTokens, hasSearchableExtras, rankFiles,
-  isSearchAllTrigger, isAiSearchTrigger,
+  isSearchAllTrigger, isAiSearchTrigger, stripFindVerb,
 } = require("../lib/broad-search.js");
 const { isIndexableFile, displayName } = require("../lib/drive-index.js");
 
@@ -241,4 +241,24 @@ test("weighting doesn't break a query whose words are all common", () => {
   ];
   // Every word is common here; both still rank, nothing is dropped.
   assert.equal(rankFiles("trane mtz", index).length, 2);
+});
+
+// ---- "find X" / "search X" is X typed without the verb ----
+test("stripFindVerb takes find/search commands and nothing else", () => {
+  assert.equal(stripFindVerb("find sound level"), "sound level");
+  assert.equal(stripFindVerb("  Search  Trane country of origin "), "Trane country of origin");
+  assert.equal(stripFindVerb("FIND apmr"), "apmr");
+  for (const t of ["find", "search", "search ", "finder", "searching for x", "research apmr", "search all", "search all files", "search everything", "ai search", "search with ai", "hello find me"]) {
+    assert.equal(stripFindVerb(t), null, t);
+  }
+});
+
+test("stripFindVerb drops filler words after the verb and leaves the wider search-all forms alone", () => {
+  assert.equal(stripFindVerb("find me the apmr iom"), "apmr iom");
+  assert.equal(stripFindVerb("find me an apmr"), "apmr");
+  assert.equal(stripFindVerb("search for the Trane country of origin"), "Trane country of origin");
+  assert.equal(stripFindVerb("search please package unit 20 tr t3"), "package unit 20 tr t3");
+  for (const t of ["find the", "find me", "search all manuals", "search all trane", "find all apmr", "search everything about trane"]) {
+    assert.equal(stripFindVerb(t), null, t);
+  }
 });

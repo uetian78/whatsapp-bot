@@ -254,51 +254,6 @@
     return withTime(el, m.ts);
   }
 
-  function pagesMsg(m) {
-    const b = m.body && typeof m.body === "object" ? m.body : {};
-    const hits = Array.isArray(b.hits) ? b.hits.filter((x) => x && typeof x === "object") : [];
-    const el = h("div", "msg bot wide");
-    if (b.prompt) {
-      const p = h("div", "text prompt");
-      p.innerHTML = R.renderRich(b.prompt);
-      el.append(p);
-    }
-    for (const x of hits) {
-      const name = typeof x.name === "string" && x.name ? x.name : "Document";
-      const page = Number(x.page);
-      const card = h("div", "card");
-      const head = h("div", "card-head");
-      const title = h("div", "card-title");
-      title.append(h("div", "card-name", name));
-      if (typeof x.folder === "string" && x.folder) title.append(h("div", "card-meta", x.folder));
-      head.append(h("span", "badge", "PDF"), title);
-      if (Number.isFinite(page)) head.append(h("span", "page-pill", `Page ${page}`));
-      card.append(head);
-      if (typeof x.snippet === "string" && x.snippet.trim()) card.append(h("p", "snippet", x.snippet.trim()));
-
-      const actions = h("div", "card-actions");
-      if (typeof x.pdfTap === "string") {
-        const pdf = h("button", "btn primary", "Page as PDF");
-        pdf.type = "button";
-        pdf.addEventListener("click", () => sendTap(x.pdfTap, `Page ${page} as PDF`, pdf));
-        actions.append(pdf);
-      }
-      if (typeof x.imageTap === "string") {
-        const img = h("button", "btn", "Page as image");
-        img.type = "button";
-        img.addEventListener("click", () => sendTap(x.imageTap, `Page ${page} as image`, img));
-        actions.append(img);
-      }
-      if (typeof x.ref === "string" && /^(drive|gen):/.test(x.ref)) {
-        const open = openLink(R.fileRefUrl(x.ref, true) + (Number.isFinite(page) ? `#page=${page}` : ""), "Open");
-        actions.append(open);
-      }
-      card.append(actions);
-      el.append(card);
-    }
-    return withTime(el, m.ts);
-  }
-
   function buildMessage(m, entry) {
     // Results from features that are gone (old messages still in the chat) show as a muted note.
     if (R.isRetiredKind(m.kind)) return noteMsg({ body: R.OLD_RESULT_NOTE });
@@ -306,7 +261,6 @@
       case "text": return textMsg(m);
       case "choices": return choicesMsg(m, entry);
       case "file": return fileMsg(m, entry);
-      case "pages": return pagesMsg(m);
       default: return typeof m.body === "string" ? noteMsg(m) : null;
     }
   }

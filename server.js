@@ -23,7 +23,7 @@ const { detectSeriesEntry, filenameFor, folderToDocType, datasheetFolderForSerie
 const { routeChillerText, handleChillerButton } = require("./chillers.js");
 const { findBrandDocs } = require("./brand-docs.js");
 const { findFilesByName } = require("./lib/find-files-by-name.js");
-const { hasSearchableExtras, rankFiles, meaningfulTokens, isSearchAllTrigger, SEARCH_ALL_HINT, isAiSearchTrigger, AI_SEARCH_HINT } = require("./lib/broad-search.js");
+const { hasSearchableExtras, rankFiles, stripFindVerb, isSearchAllTrigger, SEARCH_ALL_HINT, isAiSearchTrigger, AI_SEARCH_HINT } = require("./lib/broad-search.js");
 const { parseSelection } = require("./lib/multi-select.js");
 
 // One reply must not trigger dozens of Drive downloads and media uploads.
@@ -34,7 +34,6 @@ const { getDb, dataDir } = require("./lib/db.js");
 const { createConversations } = require("./lib/conversations.js");
 const { createWebChannel } = require("./lib/channel-web.js");
 const { createWebRoutes, webErrorHandler } = require("./web/routes.js");
-const { getPageIndex, createUploadHandler, uploadLimitBytes } = require("./lib/page-index.js");
 const { findAccount, runWithAccount, currentAccount } = require("./lib/accounts.js");
 const { loadSheet } = require("./lib/control-sheet.js");
 const { mountWeb, cleanSecret, MIN_SECRET_LENGTH } = require("./web/auth.js");
@@ -61,11 +60,9 @@ const { createNumberHealth, metaEventLines, CHECK_EVERY_MS } = require("./lib/nu
 // Sender router and the number-health check.
 const {
   runWithChannel, currentChannel, showTyping,
-  sendText, sendLongText, sendButtons, sendList, sendDocument, sendDriveFile, sendPdfBuffer, sendPageHits,
+  sendText, sendLongText, sendButtons, sendList, sendDocument, sendDriveFile, sendPdfBuffer,
 } = require("./lib/channel.js");
-const { answerFromLibrary, formatAnswer, pageHitsForSources, libraryQuery, searchStatusLine } = require("./lib/answers.js");
 const { whatsappAdapter } = require("./lib/channel-whatsapp.js");
-const { getPageExtractor, parsePageTap, PageError, MSG_BAD_PAGE, MSG_FAILED } = require("./lib/page-extract.js");
 const { NOT_FOUND_MSG } = wa;
 
 const app = express();
@@ -384,7 +381,7 @@ async function fallbackResolve(seriesNameOrText, docType, files) {
   if (hits.length >= 1) return hits[0];
 
   // Nothing found: return null. No AI here — the caller drops to
-  // sendNotFoundWithSuggestions, which runs the free ranked scan first and only
+  // sendNotFoundByName, which runs the free ranked scan first and only
   // then AI search, so no call is spent before the free scan has been tried.
   return null;
 }
@@ -573,82 +570,6 @@ async function handleDocRequest(from, name) {
   return sendText(from, docReq.confirmText(query));
 }
 
-async function sendNotFoundWithSuggestions(to, text, files) {
-  return runLibrarySearch(to, text, files);
-}
-
-// The library's record of a Drive file, or null (no Drive folder set, or not listed).
-const libraryRecordById = (id) => (process.env.DRIVE_FOLDER_ID ? require("./lib/drive-index.js").getLibraryIndex().findById(id) : null);
-
-// ── Search inside the PDFs ─────────────────────────────────────────────
-// The page index (lib/page-index.js) finds the PDF pages that mention the
-// words; with AI available the best few pages are read and the person gets an
-// answer with the pages it came from. At most ONE AI call is made here, and
-// only when pages were found; a message that finds no pages goes on to the old
-// AI search below instead, so the two never add up. With no index file the
-// stage finds nothing and this is exactly the not-found path it always was.
-// Returns true when it replied.
-async function libraryPageStage(to, text, files, { anyWord = false, announce = null } = {}) {
-  const hits = getPageIndex().search(text, { limit: 8, anyWord });
-  if (!hits.length) return false;
-  if (announce) await announce();
-  console.log(`📖 Page search "${text}": ${hits.length} page(s)`);
-
-  let knowledge = [];
-  try { knowledge = (await loadSheet()).knowledge; } catch (_) { /* answer from the specs and pages alone */ }
-  const answer = await answerFromLibrary(text, {
-    ai, knowledge, anyWord,
-    search: (q, o) => getPageIndex().search(q, o),
-  });
-  if (answer) {
-    console.log(`📖 Answered "${text}" from the pages: ${answer.sources.length} source(s)`);
-    await sendLongText(to, formatAnswer(answer));
-    // Then the pages it cited, as page results: on the web each is a card with
-    // "Page as PDF" / "Page as image"; WhatsApp gets them as one text list.
-    try {
-      const cited = pageHitsForSources(answer.sources, hits, libraryRecordById);
-      if (cited.length) await sendPageHits(to, "Pages used for this answer:", cited);
-    } catch (err) {
-      console.error("Cited pages not sent:", err && err.message);
-    }
-    return true;
-  }
-
-  await sendPageHits(to, `Pages in the PDFs that mention "${text}":`, hits);
-  const ranked = rankFiles(text, files || (await listFolderFiles()), 5);
-  if (ranked.length) {
-    await sendFileOptions(to, ranked, `Closest file names for "${text}":`, false, text);
-  }
-  return true;
-}
-
-// Page results first, then today's not-found path (close file names, then AI
-// search, then the request button). `anyWord`: a "find ..." command may match
-// pages on any one of its words when no page has them all; a lookup that already
-// missed may not, or "apmr52090 t1" would list every page that mentions T1.
-async function runLibrarySearch(to, text, files, { anyWord = false } = {}) {
-  if (await libraryPageStage(to, text, files, { anyWord })) return;
-  return sendNotFoundByName(to, text, files);
-}
-
-// "find ..." / "search ...", once the words are known not to be a series,
-// datasheet, chiller or selection request: a file name that matches is sent as
-// it always was; otherwise the PDF pages are searched. Returns false when it
-// found nothing, so the caller carries on exactly as if the verb were not there
-// (a spec question can still reach the product data, a miss the not-found path).
-async function runFindCommand(to, query, announce) {
-  const files = await listFolderFiles();
-  const docType = detectDocType(query); // "IOM", "Catalogue" or null
-  const named = findFilesByName(query, docType ? files.filter((f) => fileMatchesDocType(f, docType)) : files);
-  console.log(`🔎 Find "${query}" [${docType || "all"}]: ${named.length} file name hit(s)`);
-  if (named.length) {
-    await announce();
-    await sendFileOptions(to, named, "I found a few matches:");
-    return true;
-  }
-  return libraryPageStage(to, query, files, { anyWord: true, announce });
-}
-
 async function sendNotFoundByName(to, text, files) {
   const fileList = files || (await listFolderFiles());
 
@@ -698,22 +619,6 @@ async function runAiSearch(to, query, announce) {
     "It may not be uploaded yet.");
 }
 
-
-// A page button (page|<fileId>|<n>|pdf or |image): say it is working, then send
-// just that page. The extractor checks the file against the library and the page
-// against the file; its PageError messages are written to be shown as they are.
-async function sendPageTap(to, tapId) {
-  const tap = parsePageTap(tapId);
-  if (!tap) return sendText(to, MSG_BAD_PAGE);
-  await sendText(to, "Getting that page…");
-  try {
-    const { buffer, filename } = await getPageExtractor().getPage(tap);
-    return await sendDocument(to, buffer, filename, filename.replace(/\.(pdf|jpg)$/i, ""));
-  } catch (err) {
-    if (!(err instanceof PageError)) console.error("❌ Page send error:", err && err.message);
-    return sendText(to, err instanceof PageError ? err.userMessage : MSG_FAILED);
-  }
-}
 
 // ── Welcome menu, saved work ────────────────────────────────────────────
 // The menu as a list (a numbered reply still works for 15 minutes).
@@ -801,9 +706,6 @@ async function handleIncomingMessage(value, message) {
       // WhatsApp never offers this tap, so there it is an unknown tap like any other.
       if (btnId === "saved|open" && currentChannel()?.name === "web") return await sendSavedWork(from);
 
-      // Page button on a search result -> just that page, as a one-page PDF or a JPEG.
-      if (btnId.startsWith("page|")) return await sendPageTap(from, btnId);
-
       // Chiller buttons (chmodel|, chsel|, chds|) -> series pick / spec / datasheet.
       const chillerBtn = handleChillerButton(btnId);
       if (chillerBtn) return await sendChillerResponse(from, chillerBtn);
@@ -828,7 +730,7 @@ async function handleIncomingMessage(value, message) {
       if (action?.type === "folderFile") {
         const file = await resolveSeriesFile(action.series, action.docType, listFolderFiles);
         if (file) return await sendDriveFile(from, file);
-        return await sendNotFoundWithSuggestions(from, `${action.series} ${action.docType}`);
+        return await sendNotFoundByName(from, `${action.series} ${action.docType}`);
       }
       // Datasheet condition chosen (T1/T3) -> fetch that exact file by ID.
       if (action?.type === "datasheetFile") {
@@ -854,7 +756,7 @@ async function handleIncomingMessage(value, message) {
           if (condFiltered.length >= 1) hits = condFiltered;
         }
         if (hits.length >= 1) return await sendDriveFile(from, hits[0]);
-        return await sendNotFoundWithSuggestions(from, action.fileName, files);
+        return await sendNotFoundByName(from, action.fileName, files);
       }
       // Doc-type choice button: "doctype|IOM|<query>" or "doctype|Catalogue|<query>"
       if (btnId.startsWith("doctype|")) {
@@ -868,7 +770,7 @@ async function handleIncomingMessage(value, message) {
         if (named.length) return await sendFileOptions(from, named, `${docType} — which product?`);
         const ranked = rankFiles(query, filtered, 10);
         if (ranked.length) return await sendFileOptions(from, ranked, `${docType} — closest matches:`, false, query);
-        return await sendNotFoundWithSuggestions(from, query, files);
+        return await sendNotFoundByName(from, query, files);
       }
       // FCU model sheet: "fcu-sheet|DMP-10" -> find 3-row & 4-row datasheets for that model.
       if (btnId.startsWith("fcu-sheet|")) {
@@ -886,7 +788,7 @@ async function handleIncomingMessage(value, message) {
         // Fallback: search by name anywhere in Drive if folder filter missed
         const fallback = files.filter((f) => norm(f.name.replace(/\.[^.]+$/, "")).startsWith(q) && f.name.toLowerCase().endsWith(".pdf"));
         if (fallback.length >= 1) return await sendFileOptions(from, fallback, `${model} datasheets:`);
-        return await sendNotFoundWithSuggestions(from, model, files);
+        return await sendNotFoundByName(from, model, files);
       }
 
       // "📥 Request it" — ask for a missing document to be added to the library.
@@ -1000,9 +902,7 @@ async function handleIncomingMessage(value, message) {
     if (/^stats$/i.test(text)) {
       if (docReq.isAdmin(from)) {
         console.log(`📊 stats -> ${from}`);
-        const searchLine = searchStatusLine(getPageIndex().status());
-        const stats = await crm.statsMessage();
-        return await sendText(from, searchLine ? `${stats}\n\n${searchLine}` : stats);
+        return await sendText(from, await crm.statsMessage());
       }
     }
 
@@ -1077,28 +977,11 @@ async function handleIncomingMessage(value, message) {
       return await runAiSearch(from, lastQuery, announceSearch);
     }
 
-    // ── "find ..." / "search ...": look inside the PDFs ──────────────
-    // "search all" and "ai search" were caught above and keep their meaning.
-    // The words after the verb go to the series, datasheet, chiller and
-    // selection routers first (they deliver files and engine answers); only
-    // when none of them wants the words are the PDF pages searched, ahead of
-    // the product-question gate below so "find sound level" is a page search.
-    // Nothing found: carry on as if the verb had not been typed.
-    const findQuery = libraryQuery(text);
-    if (findQuery) {
-      store.setCtx(from, "lastquery", findQuery, 30 * 60 * 1000);
-      if (!meaningfulTokens(findQuery).length) {
-        return await sendText(from, "Tell me what to look for, e.g. *find sound level* or *search Trane country of origin*.");
-      }
-      const isDocumentRequest = (() => {
-        try {
-          return !!(parseSeriesRequest(findQuery) || parseDatasheetRequest(findQuery) ||
-            routeChillerText(findQuery) || buildSelectionInteractive(findQuery));
-        } catch (_) { return false; }
-      })();
-      if (!isDocumentRequest && await runFindCommand(from, findQuery, announceSearch)) return;
-      text = findQuery;
-    }
+    // "find ..." / "search ...": the same as typing what follows the verb. The
+    // words go through every router below exactly as if the verb were not there
+    // ("search all" and "ai search" were caught above and keep their meaning).
+    const findQuery = stripFindVerb(text);
+    if (findQuery) text = findQuery;
 
     // Remember what they actually asked for, so a later "search all" knows
     // what to re-run. Set once here rather than in each lookup path, so every
@@ -1201,7 +1084,7 @@ async function handleIncomingMessage(value, message) {
       // datasheet (word "datasheet"/spec or a T1/T3), say so. If it was just
       // "<series> <code>", fall through so the rest of the pipeline can try.
       if (dsReq.explicit) {
-        return await sendNotFoundWithSuggestions(from, text, files);
+        return await sendNotFoundByName(from, text, files);
       }
     }
 
@@ -1237,8 +1120,6 @@ async function handleIncomingMessage(value, message) {
             return await sendFileOptions(from, ranked,
               `Closest matches for "${text}":`, false);
           }
-          // No file name fits either: the words may be inside a PDF.
-          if (await libraryPageStage(from, text, allFiles)) return;
         }
 
         const menu = seriesMenu(seriesReq.series);
@@ -1248,7 +1129,7 @@ async function handleIncomingMessage(value, message) {
           await announceSearch("🔍 Fetching that document…");
           const file = await resolveSeriesFile(menu.only.series, menu.only.docType, listFolderFiles);
           if (file) return await sendDriveFile(from, file);
-          return await sendNotFoundWithSuggestions(from, text);
+          return await sendNotFoundByName(from, text);
         }
         // No buttons (nothing on file) -> just send the text.
         if (!menu.buttons || !menu.buttons.length) {
@@ -1262,7 +1143,7 @@ async function handleIncomingMessage(value, message) {
       await announceSearch("🔍 Fetching that document…");
       const file = await resolveSeriesFile(seriesReq.series, seriesReq.docType, listFolderFiles);
       if (file) return await sendDriveFile(from, file);
-      return await sendNotFoundWithSuggestions(from, text);
+      return await sendNotFoundByName(from, text);
     }
 
     // From here it's a free-form document lookup (bare code, filename, brand,
@@ -1353,7 +1234,7 @@ async function handleIncomingMessage(value, message) {
         if (resolved.length === 1) return await sendDriveFile(from, resolved[0]);
         if (resolved.length > 1) return await sendFileOptions(from, resolved, "Here are the matching documents:");
         // filename listed in brand-docs.js but not yet on Drive
-        return await sendNotFoundWithSuggestions(from, text, files);
+        return await sendNotFoundByName(from, text, files);
       }
     }
 
@@ -1366,7 +1247,7 @@ async function handleIncomingMessage(value, message) {
     const hasModelCode = /\d{5}/.test(text);
     if (hasModelCode && !wantsDetail && !isKnowledgeQuestion) {
       console.log(`🚫 model code without "detail" -> not-found (no AI details): "${text}"`);
-      return await sendNotFoundWithSuggestions(from, text, files);
+      return await sendNotFoundByName(from, text, files);
     }
 
     // 3) General question -> answer from the Knowledge tab via Claude Haiku.
@@ -1381,7 +1262,7 @@ async function handleIncomingMessage(value, message) {
     }
 
     // 4) Nothing matched -> free scan, then AI suggests related documents, or the standard apology
-    await sendNotFoundWithSuggestions(from, text, files);
+    await sendNotFoundByName(from, text, files);
 }
 
 // ── Bot Sender app API ──────────────────────────────────────────────────────
@@ -1543,11 +1424,6 @@ app.get("/drive-index", requireAdmin(), async (req, res) => {
     res.status(500).send("Error: " + e.message);
   }
 });
-// The PC builds the page-search file (scripts/build-index.js) and uploads it
-// here as the raw request body. The handler streams it to a temp file, checks
-// it, and only then swaps it in. Limit: SEARCH_INDEX_MAX_MB (default 400).
-app.post("/admin/search-index", requireAdmin(), createUploadHandler({ index: getPageIndex(), maxBytes: uploadLimitBytes() }));
-
 crm.init({ getSheets });
 
 // Last in line, for every route: whatever NODE_ENV is, an error answers with a
@@ -1558,25 +1434,7 @@ app.use(webErrorHandler);
 
 // The replay test (tests/replay) imports this file: it gets the app and the
 // message handler, and nothing listens, ticks or calls out until it's run.
-module.exports = { app, handleIncomingMessage, deliverMessage, resolveSeriesFile, runLibrarySearch };
-
-// Keep the page search up to date: when the Drive list refreshes, read any new
-// or changed PDFs (small ones; the PC build handles the rest), one at a time.
-// It only starts from the library refresh, or once at start to finish a queue
-// the last run left, and stops when the queue is empty: no timer. With no
-// index file yet (the PC hasn't uploaded one) the server doesn't build it.
-function startPageIndexing() {
-  const pageIndex = getPageIndex();
-  if (!pageIndex.exists()) {
-    console.log("🔎 No page-search file yet: page search stays empty until one is uploaded to /admin/search-index");
-  }
-  require("./lib/drive-index.js").getLibraryIndex().onRefresh((files) => {
-    if (!pageIndex.exists()) return;
-    pageIndex.sync(files);
-    return pageIndex.drain();
-  });
-  pageIndex.drain();
-}
+module.exports = { app, handleIncomingMessage, deliverMessage, resolveSeriesFile };
 
 if (require.main === module) {
   try { store.restore(); } // bring back conversations saved before the last restart
@@ -1584,7 +1442,6 @@ if (require.main === module) {
   crm.warmUp(); // preload contacts so "Welcome back" works from the first message
   try { webChannel.cleanupGenerated(); } // old generated files, once at start: no timer, so the app can sleep
   catch (err) { console.error("Generated-file cleanup failed:", err.message); }
-  startPageIndexing();
   app.listen(PORT, () => {
     console.log(`🚀 Listening on ${PORT}`);
     if (numberHealth) {
