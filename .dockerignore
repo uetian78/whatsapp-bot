@@ -13,9 +13,11 @@ _vrf_extract
 FCU DCMP Datasheets
 FCU DMP Datasheets
 
-# Secrets are provided via Render env vars, not files — never bake them in
+# Secrets are provided via Railway env vars, not files — never bake them in
 .env
 .env.*
+# Replay captures hold real messages and Drive listings: local only
+tests/replay/*.local.json
 *.pem
 *service-account*.json
 *credentials*.json

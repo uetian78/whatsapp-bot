@@ -40,7 +40,7 @@ const { findAccount, runWithAccount, currentAccount } = require("./lib/accounts.
 const { loadSheet } = require("./lib/control-sheet.js");
 const { mountWeb, cleanSecret, MIN_SECRET_LENGTH } = require("./web/auth.js");
 const { requireAdmin } = require("./lib/http-auth.js");
-const { whatsappEnabled, requiredEnv } = require("./lib/app-config.js");
+const { whatsappEnabled, requiredEnv, startupWarnings } = require("./lib/app-config.js");
 const { parseRelatedFilesResponse } = require("./lib/related-files.js");
 const { isMenuTrigger, smallTalkReply, welcomeMenu, welcomeMenuList, tipFor, MENU_HINT, MENU_OPTIONS, SCHEDULE_PROMPT } = require("./menu.js");
 const { PRODUCT_KB, parseListRequest, parseUnsupportedSeriesListRequest, buildUnitList } = require("./product-facts.js");
@@ -128,6 +128,8 @@ if (require.main === module) {
   if (!cleanSecret(process.env.WEB_SECRET)) {
     console.warn(`⚠️  WEB_SECRET is missing or shorter than ${MIN_SECRET_LENGTH} characters — the web app (/app) is switched off (503). Generate one with the command in .env.example.`);
   }
+  for (const line of startupWarnings()) console.warn(line);
+  console.log(`📁 Data folder: ${dataDir()}`);
 }
 
 // `anthropic` still serves the Bot Sender polish (lib/sender-polish.js) and is the
@@ -297,7 +299,7 @@ ${list}`;
 async function aiGuidance(text) {
   if (!ai.available()) return null;
 
-  const system = `You are the Mannai HVAC WhatsApp assistant. A customer's message did NOT match any document or command. Act like a helpful human colleague: figure out what they probably want and point them to a command that actually works.
+  const system = `You are the HVAC Assistant. A customer's message did NOT match any document or command. Act like a helpful human colleague: figure out what they probably want and point them to a command that actually works.
 
 These are the ONLY real things the bot can do — never invent a command, model number, or capability outside this list:
 ${BOT_CAPABILITIES}
@@ -2440,7 +2442,7 @@ if (WA_ON) app.post("/webhook", (req, res) => {
   deliverMessage(value, message, whatsappAdapter);
 });
 
-app.get("/", (_, res) => res.send("WhatsApp AI bot running ✅"));
+app.get("/", (_, res) => res.send("HVAC Assistant is running ✅"));
 
 // The web app lives under /app and nothing else is served from there. Signing in
 // uses a personal link (web/auth.js). mountWeb puts the sign-in pages and then a
@@ -2529,6 +2531,12 @@ app.get("/vrf-health", requireAdmin(), async (_, res) => {
 
 initVrf({ sendText, sendDocument }); // the facade, so VRF replies follow the channel
 crm.init({ getSheets });
+
+// Last in line, for every route: whatever NODE_ENV is, an error answers with a
+// short JSON message and never Express's default page, which carries a stack
+// trace and file paths. (A body that isn't JSON fails in express.json() before
+// any route is reached.)
+app.use(webErrorHandler);
 
 // The replay test (tests/replay) imports this file: it gets the app and the
 // message handler, and nothing listens, ticks or calls out until it's run.

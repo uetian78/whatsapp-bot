@@ -21,6 +21,43 @@ test("required env with WhatsApp adds its three settings", () => {
   ]);
 });
 
+// ---- startup warnings: data loss and dead share links must not be silent ----
+const { startupWarnings } = require("../lib/app-config.js");
+const { dataDir } = require("../lib/db.js");
+
+test("DATA_DIR wins, then the Railway volume mount, then the home folder", () => {
+  assert.equal(dataDir({ DATA_DIR: "/d", RAILWAY_VOLUME_MOUNT_PATH: "/data" }), "/d");
+  assert.equal(dataDir({ RAILWAY_VOLUME_MOUNT_PATH: "/data" }), "/data");
+  assert.equal(dataDir({ DATA_DIR: "", RAILWAY_VOLUME_MOUNT_PATH: "/data" }), "/data");
+  assert.match(dataDir({}), /\.hvac-assistant$/);
+});
+
+test("a Railway deploy with no volume, or a data folder that isn't the volume, warns loudly", () => {
+  const noVolume = startupWarnings({ RAILWAY_ENVIRONMENT: "production", DATA_DIR: "/data", PUBLIC_URL: "https://x" });
+  assert.equal(noVolume.length, 1);
+  assert.match(noVolume[0], /DATA LOSS.*no volume/);
+  const elsewhere = startupWarnings({ RAILWAY_ENVIRONMENT: "production", DATA_DIR: "/app/data", RAILWAY_VOLUME_MOUNT_PATH: "/data", PUBLIC_URL: "https://x" });
+  assert.equal(elsewhere.length, 1);
+  assert.match(elsewhere[0], /DATA LOSS.*\/app\/data.*\/data/);
+});
+
+test("a Railway deploy whose data folder is the volume is quiet about data", () => {
+  const w = startupWarnings({ RAILWAY_ENVIRONMENT: "production", DATA_DIR: "/data", RAILWAY_VOLUME_MOUNT_PATH: "/data", PUBLIC_URL: "https://x" });
+  assert.deepEqual(w, []);
+  const fallback = startupWarnings({ RAILWAY_ENVIRONMENT: "production", RAILWAY_VOLUME_MOUNT_PATH: "/data", PUBLIC_URL: "https://x" });
+  assert.equal(fallback.length, 1);
+  assert.match(fallback[0], /DATA_DIR is not set — using the Railway volume at \/data/);
+  assert.doesNotMatch(fallback[0], /DATA LOSS/);
+});
+
+test("an unset DATA_DIR off Railway and an unset PUBLIC_URL are each warned about", () => {
+  const w = startupWarnings({});
+  assert.equal(w.length, 2);
+  assert.ok(w.some((l) => /DATA_DIR is not set/.test(l)));
+  assert.ok(w.some((l) => /PUBLIC_URL is not set.*503/.test(l)));
+  assert.deepEqual(startupWarnings({ DATA_DIR: "/somewhere", PUBLIC_URL: "https://x" }), []);
+});
+
 // ---- the idle app makes no network calls, so Railway can put it to sleep ----
 // Runs the real server.js (WhatsApp off, dummy settings) in a child with
 // tests/idle-hook.js preloaded. Startup may call out (crm.warmUp reads the contacts

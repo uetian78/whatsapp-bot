@@ -1,16 +1,22 @@
 # ============================================================
-#  Single Render service: Node WhatsApp bot + Python VRF engine
-#  co-hosted in one container.
+#  Single Railway service: Node HVAC Assistant (web app, and the
+#  WhatsApp webhook when enabled) + Python VRF engine co-hosted
+#  in one container.
 #
-#  - The bot (server.js) listens on Render's public $PORT and
-#    receives the WhatsApp webhook.
+#  - The app (server.js) listens on Railway's public $PORT.
 #  - The VRF engine (vrf-sidecar, FastAPI) listens on 127.0.0.1:8000,
-#    internal only. The bot reaches it via VRF_SIDECAR_URL.
+#    internal only. The app reaches it via VRF_SIDECAR_URL.
 #
 #  This removes the separate free-tier sidecar service that slept and
 #  cold-started (502s). The Python engine is UNCHANGED — only co-hosted.
+#  Data (databases, generated files) lives on the Railway volume:
+#  mount it and set DATA_DIR to its mount path (see .env.example).
 # ============================================================
 FROM node:24-slim
+
+# Express prints stack traces and file paths on errors unless this is
+# "production". (server.js also never returns one, whatever this is.)
+ENV NODE_ENV=production
 
 # Python runtime for the VRF sidecar.
 RUN apt-get update \
