@@ -114,6 +114,55 @@ test("a malformed command falls back to the guided steps, as the bare command do
   } finally { h.close(); }
 });
 
+// ---- the guided load step reads units the way the shortcut does ----
+const { parseLoadReply } = require("../lib/mtz-express.js");
+
+test("the guided load takes TR, MBH and a bare number (as MBH), like the shortcut", () => {
+  assert.deepEqual(parseLoadReply("8.5 TR"), { tc: 102, sc: null });
+  assert.deepEqual(parseLoadReply("8.5tons"), { tc: 102, sc: null });
+  assert.deepEqual(parseLoadReply("100 MBH"), { tc: 100, sc: null });
+  assert.deepEqual(parseLoadReply("100"), { tc: 100, sc: null });
+  assert.deepEqual(parseLoadReply("100 MBTU/H"), { tc: 100, sc: null });
+  assert.deepEqual(parseLoadReply("8.5TR / 7TR"), { tc: 102, sc: 84 });
+  assert.deepEqual(parseLoadReply("8.5 TR, 9 TR"), { tc: 102, sc: null }, "a sensible load above the total is ignored");
+});
+
+test("the guided load refuses kW, BTU and the rest instead of reading them as MBH", () => {
+  for (const t of ["100 kW", "100kw", "12000 btu/h", "12000 BTUH", "100 BTU", "100 W", "100 kcal/h", "8.5TR / 20 kW", "100 kW / 80 kW"]) {
+    assert.deepEqual(parseLoadReply(t), { error: "unit" }, t);
+  }
+  for (const t of ["", "abc", "TR", "0", "0 TR", "-5", "8.5.3 TR"]) {
+    assert.deepEqual(parseLoadReply(t), { error: "read" }, t);
+  }
+});
+
+test("a guided load and the shortcut agree on every load they both take", () => {
+  for (const [load, expected] of [["8.5TR", 102], ["102 MBH", 102], ["102", 102], ["1 ton", 12]]) {
+    assert.equal(parseLoadReply(load).tc, expected, load);
+    assert.equal(parseMtzExpress(`MTZ Selection ${load} 80/67/115`).reqTC, expected, load);
+  }
+  for (const load of ["100 kW", "12000 btu/h"]) {
+    assert.equal(parseMtzExpress(`MTZ Selection ${load} 80/67/115`), null, load);
+    assert.equal(parseLoadReply(load).error, "unit", load);
+  }
+});
+
+test("typing 100 kW at the guided load step is refused and the step stays open", { skip }, async () => {
+  const h = createHarness(createServerDeliver());
+  try {
+    await h.send(USER, "MTZ Selection");
+    for (const t of ["100 kW", "12000 btu/h", "100 BTU"]) {
+      const out = await h.send(USER, t);
+      assert.equal(out.length, 1, t);
+      assert.match(out[0].text, /only take the load in \*TR\* or \*MBH\*/, t);
+      assert.doesNotMatch(out[0].text, /Step 2\/3/, "it did not move on with a guessed load");
+    }
+    const ok = await h.send(USER, "100 MBH");
+    assert.match(ok[0].text, /Load: \*100\.0 MBH/);
+    assert.match(ok[0].text, /Step 2\/3/);
+  } finally { h.close(); }
+});
+
 test("a comma between digits is never read as a separator or a decimal point", () => {
   for (const t of [
     "MTZ Selection 8,5TR 80/67/115", "MTZ Selection 8,5 TR 80/67/115", "MTZ Selection 1,000 MBH 80/67/115",

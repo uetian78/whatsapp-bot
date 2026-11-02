@@ -1340,30 +1340,11 @@ async function handleSchedulePrint(from) {
 // ============================================================
 const TR_TO_MBH = 12; // 1 TR = 12 MBtu/h
 const { rankModels: mtzRank } = require("./mtz-engine.js");
-const { parseMtzExpress } = require("./lib/mtz-express.js");
+const { parseMtzExpress, parseLoadReply } = require("./lib/mtz-express.js");
 
-// Parse a cooling load like "8.5 TR", "100", "100 MBH"
-function parseMbh(text) {
-  const t = text.toLowerCase().trim();
-  const trMatch = t.match(/^([\d.]+)\s*(?:tr|ton|tons)\b/);
-  if (trMatch) return parseFloat(trMatch[1]) * TR_TO_MBH;
-  const numMatch = t.match(/^([\d.]+)\s*(?:mbh|mbtu\/h|mbtuh)?\b/);
-  if (numMatch) return parseFloat(numMatch[1]);
-  return null;
-}
-
-// Parse "8.5TR / 7TR sc" → { tc: 102, sc: 84 }  or just "8.5 TR" → { tc: 102, sc: null }
-function parseLoad(text) {
-  const parts = text.split(/[,\/|]+/);
-  const tc = parseMbh(parts[0]);
-  if (!tc) return null;
-  let sc = null;
-  if (parts[1]) {
-    const v = parseMbh(parts[1]);
-    if (v && v < tc) sc = v;
-  }
-  return { tc, sc };
-}
+// The load step reads "8.5 TR", "100 MBH", a bare number (MBH) and
+// "8.5TR / 7TR" with the same parser as the one-line command
+// (lib/mtz-express.js), which refuses other units instead of guessing.
 
 // Parse "80/67/115" or "80 67 115" → { db, wb, amb }
 function parseConditions(text) {
@@ -1406,8 +1387,17 @@ function mtzRankSummary(reqTC, reqSC, db, wb, amb) {
 async function handleMtzStep(from, s, text) {
   // ── Step 1: cooling load ────────────────────────────────────
   if (s.step === "load") {
-    const load = parseLoad(text);
-    if (!load || load.tc <= 0) {
+    const parsed = parseLoadReply(text);
+    const load = parsed.error ? null : parsed;
+    if (parsed.error === "unit") {
+      return sendText(from,
+        "❌ I only take the load in *TR* or *MBH*, and I don't convert other units (kW, BTU/h…) for you.\n" +
+        "• `8.5 TR`  or  `100 MBH`  _(a bare number counts as MBH)_\n" +
+        "• With sensible: `8.5TR / 7TR`\n" +
+        "Type *cancel* to exit."
+      );
+    }
+    if (!load) {
       return sendText(from,
         "❌ Couldn't read that load. Try:\n" +
         "• `8.5 TR`  or  `100 MBH`\n" +
