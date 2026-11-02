@@ -3,9 +3,9 @@ const assert = require("node:assert");
 const store = require("../lib/session-store.js");
 
 test("flow lifecycle: start, get, touch, end", () => {
-  store.startFlow("u1", "split", { step: "brand" }, 60_000);
+  store.startFlow("u1", "alpha", { step: "brand" }, 60_000);
   const f = store.getFlow("u1");
-  assert.equal(f.type, "split");
+  assert.equal(f.type, "alpha");
   assert.equal(f.data.step, "brand");
   f.data.step = "condition"; // callers mutate data in place, like today
   assert.equal(store.getFlow("u1").data.step, "condition");
@@ -14,15 +14,15 @@ test("flow lifecycle: start, get, touch, end", () => {
 });
 
 test("starting a flow replaces the previous one", () => {
-  store.startFlow("u2", "split", {}, 60_000);
-  store.startFlow("u2", "mtz", { step: "load" }, 60_000);
-  assert.equal(store.getFlow("u2").type, "mtz");
+  store.startFlow("u2", "alpha", {}, 60_000);
+  store.startFlow("u2", "beta", { step: "load" }, 60_000);
+  assert.equal(store.getFlow("u2").type, "beta");
 });
 
 test("expired flow reports { expired, type } exactly once", () => {
-  store.startFlow("u3", "schedule", {}, -1); // already expired
+  store.startFlow("u3", "gamma", {}, -1); // already expired
   const f = store.getFlow("u3");
-  assert.deepEqual(f, { expired: true, type: "schedule" });
+  assert.deepEqual(f, { expired: true, type: "gamma" });
   assert.equal(store.getFlow("u3"), null); // reported once, then gone
 });
 
@@ -34,7 +34,7 @@ test("ctx: independent keys, silent expiry", () => {
 });
 
 test("clearAll wipes flow and ctx", () => {
-  store.startFlow("u5", "split", {}, 60_000);
+  store.startFlow("u5", "alpha", {}, 60_000);
   store.setCtx("u5", "menu", {}, 60_000);
   store.clearAll("u5");
   assert.equal(store.getFlow("u5"), null);
@@ -50,12 +50,12 @@ const rows = (db, user) => db.prepare("SELECT key, expires_at FROM user_state WH
 test("a flow and its later edits survive a restart", () => {
   const db = openDb(":memory:");
   const a = createSessionStore({ db });
-  const s = a.startFlow("u", "split", { step: "brand" });
+  const s = a.startFlow("u", "alpha", { step: "brand" });
   s.step = "condition"; // handlers mutate in place; persist writes the current state
   a.persist("u");
   const b = createSessionStore({ db });
   b.restore();
-  assert.equal(b.getFlow("u").type, "split");
+  assert.equal(b.getFlow("u").type, "alpha");
   assert.equal(b.getFlow("u").data.step, "condition");
 });
 
@@ -63,7 +63,7 @@ test("after a restart an expired ctx is gone, but an expired flow still reports 
   const db = openDb(":memory:");
   let t = 1_000;
   const a = createSessionStore({ db, now: () => t });
-  a.startFlow("u", "split", { step: "x" }, 100);
+  a.startFlow("u", "alpha", { step: "x" }, 100);
   a.setCtx("u", "menu", { o: 1 }, 100);
   a.setCtx("u", "list", ["a"], 10_000);
   a.persist("u");
@@ -74,7 +74,7 @@ test("after a restart an expired ctx is gone, but an expired flow still reports 
   assert.equal(b.getCtx("u", "menu"), null, "an expired ctx is not brought back");
   assert.deepEqual(b.getCtx("u", "list"), ["a"]);
   assert.deepEqual(rows(db, "u").map((r) => r.key), ["ctx:list", "flow"], "the ctx row is deleted; the flow row waits to be reported");
-  assert.deepEqual(b.getFlow("u"), { expired: true, type: "split" });
+  assert.deepEqual(b.getFlow("u"), { expired: true, type: "alpha" });
   assert.equal(b.getFlow("u"), null, "reported once");
   b.persist("u"); // the end of the message that reported it
   assert.deepEqual(rows(db, "u").map((r) => r.key), ["ctx:list"], "and then its row is gone");
@@ -88,8 +88,8 @@ test("an expired flow that nobody came back to is dropped after 24 hours", () =>
   const DAY = 24 * 60 * 60 * 1000;
   let t = 1_000;
   const a = createSessionStore({ db, now: () => t });
-  a.startFlow("fresh", "mtz", {}, 100);
-  a.startFlow("old", "split", {}, 100);
+  a.startFlow("fresh", "beta", {}, 100);
+  a.startFlow("old", "alpha", {}, 100);
   a.persist("fresh"); a.persist("old");
   t = 1_000 + 100 + DAY - 1; // just inside the day
   const b = createSessionStore({ db, now: () => t });
@@ -106,43 +106,23 @@ test("persist keeps an expired flow for the day too, and the sweep leaves it to 
   const db = openDb(":memory:");
   let t = 1_000;
   const a = createSessionStore({ db, now: () => t });
-  a.startFlow("u", "schedule", { step: "awaitImage" }, 100);
+  a.startFlow("u", "gamma", { step: "awaitImage" }, 100);
   t = 2_000; // expired, not yet reported
   a.persist("u");
   assert.deepEqual(rows(db, "u").map((r) => r.key), ["flow"]);
   a.sweep();
-  assert.deepEqual(a.getFlow("u"), { expired: true, type: "schedule" });
+  assert.deepEqual(a.getFlow("u"), { expired: true, type: "gamma" });
   assert.equal(a.getFlow("u"), null);
 });
 
 test("expires_at comes from each entry's own ts + ttl", () => {
   const db = openDb(":memory:");
   const a = createSessionStore({ db, now: () => 2_000 });
-  a.startFlow("u", "mtz", {}, 500);
+  a.startFlow("u", "beta", {}, 500);
   a.setCtx("u", "menu", {}, 1_500);
   a.persist("u");
   const got = Object.fromEntries(rows(db, "u").map((r) => [r.key, r.expires_at]));
   assert.deepEqual(got, { flow: 2_500, "ctx:menu": 3_500 });
-});
-
-test("a schedule flow stuck on processing restarts at awaitImage", () => {
-  const db = openDb(":memory:");
-  const a = createSessionStore({ db });
-  a.startFlow("u", "schedule", { step: "processing" });
-  a.persist("u");
-  const b = createSessionStore({ db });
-  b.restore();
-  assert.equal(b.getFlow("u").data.step, "awaitImage");
-});
-
-test("a non-schedule flow on a step called processing is left alone", () => {
-  const db = openDb(":memory:");
-  const a = createSessionStore({ db });
-  a.startFlow("u", "split", { step: "processing" });
-  a.persist("u");
-  const b = createSessionStore({ db });
-  b.restore();
-  assert.equal(b.getFlow("u").data.step, "processing");
 });
 
 test("ctx values round-trip as JSON", () => {
@@ -161,7 +141,7 @@ test("ctx values round-trip as JSON", () => {
 test("persist replaces the user's rows: ended flows and cleared ctx do not come back", () => {
   const db = openDb(":memory:");
   const a = createSessionStore({ db });
-  a.startFlow("u", "split", {});
+  a.startFlow("u", "alpha", {});
   a.setCtx("u", "menu", {});
   a.persist("u");
   a.endFlow("u");
@@ -176,8 +156,8 @@ test("persist replaces the user's rows: ended flows and cleared ctx do not come 
 test("persist only touches the named user", () => {
   const db = openDb(":memory:");
   const a = createSessionStore({ db });
-  a.startFlow("u1", "split", {});
-  a.startFlow("u2", "mtz", {});
+  a.startFlow("u1", "alpha", {});
+  a.startFlow("u2", "beta", {});
   a.persist("u1");
   a.persist("u2");
   a.endFlow("u1");
@@ -189,7 +169,7 @@ test("persist only touches the named user", () => {
 test("a value that cannot be serialized is skipped with a warning, the rest is kept", () => {
   const db = openDb(":memory:");
   const a = createSessionStore({ db });
-  a.startFlow("u", "split", { step: "x" });
+  a.startFlow("u", "alpha", { step: "x" });
   a.setCtx("u", "bad-buffer", { pdf: Buffer.from("SECRET-DOC-TEXT") });
   a.setCtx("u", "bad-fn", { cb: () => 1 });
   const cyc = {}; cyc.self = cyc;
@@ -214,7 +194,7 @@ test("a value that cannot be serialized is skipped with a warning, the rest is k
 test("a corrupt row is dropped on restore without stopping the others", () => {
   const db = openDb(":memory:");
   const a = createSessionStore({ db });
-  a.startFlow("u", "split", { step: "x" });
+  a.startFlow("u", "alpha", { step: "x" });
   a.persist("u");
   db.prepare("INSERT INTO user_state (user, key, value, expires_at) VALUES ('u', 'ctx:junk', '{not json', ?)").run(Date.now() + 60_000);
   const b = createSessionStore({ db });
@@ -227,21 +207,80 @@ test("the store's clock is injected, and the default follows Date.now at call ti
   const db = openDb(":memory:");
   let t = 10_000;
   const a = createSessionStore({ db, now: () => t });
-  a.startFlow("u", "split", {}, 1_000);
+  a.startFlow("u", "alpha", {}, 1_000);
   t = 10_999;
   assert.ok(a.getFlow("u").type);
   t = 11_001;
-  assert.deepEqual(a.getFlow("u"), { expired: true, type: "split" });
+  assert.deepEqual(a.getFlow("u"), { expired: true, type: "alpha" });
 
   const realNow = Date.now;
   let frozen = 50_000;
   Date.now = () => frozen; // the replay harness freezes the clock like this
   try {
     const d = createSessionStore({ db });
-    d.startFlow("v", "split", {}, 1_000);
+    d.startFlow("v", "alpha", {}, 1_000);
     frozen = 50_500;
     assert.ok(d.getFlow("v").type);
     frozen = 51_001;
     assert.equal(d.getFlow("v").expired, true);
   } finally { Date.now = realNow; }
+});
+
+// ── flows and saved results from features that no longer exist ──
+// A person who was in the middle of one when the app was updated has the row in
+// user_state. It must not come back: nothing would know what to do with it.
+test("a saved flow of a removed feature is dropped on restore, without an error", () => {
+  const db = openDb(":memory:");
+  const a = createSessionStore({ db });
+  const save = (user, type, data) => { a.startFlow(user, type, data); a.persist(user); };
+  save("s", "schedule", { step: "awaitCondition" });
+  save("p", "split", { step: "capacities", brand: "TCL" });
+  save("m", "mtz", { step: "extras" });
+  save("k", "alpha", { step: "x" }); // not a removed one
+  const b = createSessionStore({ db });
+  assert.doesNotThrow(() => b.restore());
+  for (const user of ["s", "p", "m"]) {
+    assert.equal(b.getFlow(user), null, user);
+    assert.deepEqual(rows(db, user), [], `${user}: the saved row is gone`);
+  }
+  assert.equal(b.getFlow("k").type, "alpha", "other flows are untouched");
+});
+
+test("an expired saved flow of a removed feature does not report a timeout after the update", () => {
+  const db = openDb(":memory:");
+  let t = 1_000;
+  const a = createSessionStore({ db, now: () => t });
+  a.startFlow("u", "schedule", {}, 100);
+  t = 2_000; // expired, but still inside the day it is kept for
+  a.persist("u");
+  const b = createSessionStore({ db, now: () => t });
+  b.restore();
+  assert.equal(b.getFlow("u"), null);
+});
+
+test("saved results of removed features are dropped on restore; other saved state stays", () => {
+  const db = openDb(":memory:");
+  const a = createSessionStore({ db });
+  a.setCtx("u", "splitResult", { brand: "TCL", units: [], at: 1 }, 60_000);
+  a.setCtx("u", "scheduleResult", { rows: [], at: 2 }, 60_000);
+  a.setCtx("u", "unitList", { kind: "product", keys: ["apmr"], system: "imp" }, 60_000);
+  a.setCtx("u", "lastquery", "apmr catalogue", 60_000);
+  a.persist("u");
+  const b = createSessionStore({ db });
+  b.restore();
+  assert.equal(b.getCtx("u", "splitResult"), null);
+  assert.equal(b.getCtx("u", "scheduleResult"), null);
+  assert.deepEqual(b.getCtx("u", "unitList"), { kind: "product", keys: ["apmr"], system: "imp" });
+  assert.equal(b.getCtx("u", "lastquery"), "apmr catalogue");
+  assert.deepEqual(rows(db, "u").map((r) => r.key), ["ctx:lastquery", "ctx:unitList"]);
+});
+
+test("a saved unit list of the removed split kind is dropped on restore", () => {
+  const db = openDb(":memory:");
+  const a = createSessionStore({ db });
+  a.setCtx("u", "unitList", { kind: "split", keys: ["PKV"], system: "si" }, 60_000);
+  a.persist("u");
+  const b = createSessionStore({ db });
+  b.restore();
+  assert.equal(b.getCtx("u", "unitList"), null);
 });
