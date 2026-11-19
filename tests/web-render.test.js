@@ -146,3 +146,35 @@ test("a card for a generated file from an older version is recognised, a Drive c
   assert.equal(isGeneratedRef("gen:0b1c2d3e-0000-4000-8000-000000000000"), true);
   for (const ref of ["drive:abc", "", null, undefined, 5]) assert.equal(isGeneratedRef(ref), false, String(ref));
 });
+
+// ---- Multi-file share helpers ----
+const { splitSelection, selectionSummary, linksMessage, SELECT_MAX } = require("../web/public/render.js");
+
+test("up to 10 files can be ticked", () => {
+  assert.equal(SELECT_MAX, 10);
+});
+
+test("splitSelection: small known-size files share as files, the rest as links", () => {
+  const a = { ref: "drive:a", size: 1000 };
+  const big = { ref: "drive:b", size: SHARE_FILE_MAX + 1 };
+  const unknown = { ref: "drive:c", size: null };
+  const d = { ref: "drive:d", size: 2000 };
+  const out = splitSelection([a, big, unknown, d], true);
+  assert.deepStrictEqual(out.files.map((c) => c.ref), ["drive:a", "drive:d"]);
+  assert.deepStrictEqual(out.links.map((c) => c.ref), ["drive:b", "drive:c"]);
+  const noShare = splitSelection([a, d], false);
+  assert.equal(noShare.files.length, 0);
+  assert.equal(noShare.links.length, 2);
+  assert.deepStrictEqual(splitSelection([], true), { files: [], links: [] });
+});
+
+test("selectionSummary counts files and adds the known total size", () => {
+  assert.equal(selectionSummary([{ size: null }]), "1 selected");
+  assert.equal(selectionSummary([{ size: 1.5 * 1024 * 1024 }, { size: 2.7 * 1024 * 1024 }, { size: null }]), "3 selected · 4.2 MB");
+});
+
+test("linksMessage puts each file name above its link", () => {
+  assert.equal(
+    linksMessage([{ name: "A.pdf", url: "https://x/1" }, { name: "B.pdf", url: "https://x/2" }]),
+    "A.pdf\nhttps://x/1\n\nB.pdf\nhttps://x/2");
+});

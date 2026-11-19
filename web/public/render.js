@@ -96,6 +96,33 @@
     return t.length <= max ? t : t.slice(0, max - 1) + "…";
   }
 
+  // ---- Sharing several ticked files at once ----
+  const SELECT_MAX = 10; // ticked files held at once, to keep phone memory safe
+
+  // Ticked cards that go in the share sheet as files, and those that go as links.
+  function splitSelection(cards, canShareFiles) {
+    const files = [];
+    const links = [];
+    for (const fc of cards || []) (shareMode(fc.size, canShareFiles) === "file" ? files : links).push(fc);
+    return { files, links };
+  }
+
+  // "3 selected · 4.2 MB" (the size counts only files whose size is known).
+  function selectionSummary(cards) {
+    const list = cards || [];
+    let total = 0;
+    let known = false;
+    for (const fc of list) {
+      if (typeof fc.size === "number" && Number.isFinite(fc.size) && fc.size > 0) { total += fc.size; known = true; }
+    }
+    return `${list.length} selected` + (known ? ` · ${formatSize(total)}` : "");
+  }
+
+  // One WhatsApp message carrying several links: the file name above each one.
+  function linksMessage(items) {
+    return (items || []).map((it) => `${it.name}\n${it.url}`).join("\n\n");
+  }
+
   // Message kinds whose features no longer exist. Old messages of these kinds are
   // still in people's chats; the screen shows OLD_RESULT_NOTE in their place.
   const RETIRED_KINDS = ["rowcheck", "pages"];
@@ -105,5 +132,5 @@
   const isGeneratedRef = (ref) => typeof ref === "string" && ref.startsWith("gen:");
   const OLD_RESULT_NOTE = "This older result is no longer available.";
 
-  return { isRetiredKind, isGeneratedRef, OLD_RESULT_NOTE, renderRich, shareMode, fileRefUrl, formatSize, fileKind, shareOutcome, prefetchWanted, clipTitle, escapeHtml, SHARE_FILE_MAX };
+  return { isRetiredKind, isGeneratedRef, OLD_RESULT_NOTE, renderRich, shareMode, fileRefUrl, formatSize, fileKind, shareOutcome, prefetchWanted, clipTitle, escapeHtml, SHARE_FILE_MAX, SELECT_MAX, splitSelection, selectionSummary, linksMessage };
 }));

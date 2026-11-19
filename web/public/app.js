@@ -32,6 +32,9 @@
     shareFailed: "Couldn't open the share sheet. Try again.",
     shareLinkFailed: "Couldn't make a share link. Try again.",
     fileGone: "This file is no longer available.",
+    selectMax: "You can tick up to 10 files at a time.",
+    selectFailed: "Couldn't get a file, so it was unticked. Try again.",
+    linksLeft: "Files shared. These go as links:",
   };
 
   const MIME_BY_EXT = {
@@ -47,6 +50,7 @@
     messages: $("messages"), text: $("text"), form: $("composer"), send: $("send"),
     saved: $("saved"), banner: $("banner"), toast: $("toast"), jump: $("jump"),
     gate: $("gate"), gateMsg: $("gate-msg"),
+    selbar: $("selbar"), selSummary: $("sel-summary"), selClear: $("sel-clear"), selShare: $("sel-share"),
   };
 
   function h(tag, cls, text) {
@@ -75,6 +79,7 @@
   let pollTimer = null;
   let inFlight = false;
   let queued = false;
+  const selected = new Map(); // ref -> file card ticked for sharing together (see "Share several files")
 
   const typingEl = (() => {
     const e = h("div", "typing");
@@ -243,6 +248,13 @@
     title.append(h("div", "card-name", name));
     if (meta) title.append(h("div", "card-meta", meta));
     head.append(h("span", "badge", KIND_LABEL[kind]), title);
+    // Tick to share several files in one go (the bar above the message box).
+    const pick = h("label", "card-pick");
+    const check = document.createElement("input");
+    check.type = "checkbox";
+    check.setAttribute("aria-label", `Select ${name}`);
+    pick.append(check);
+    head.append(pick);
     card.append(head);
     if (typeof b.caption === "string" && b.caption && b.caption !== name.replace(/\.[^.]+$/, "")) card.append(h("div", "card-caption", b.caption));
 
@@ -258,7 +270,9 @@
     const linkBtn = h("button", "btn", COPY.sendLink);
     linkBtn.type = "button";
     linkBtn.hidden = true;
-    const fc = { seq: m.seq, ref: b.ref, name, size, btn, label, linkBtn, busy: false, denied: false };
+    const fc = { seq: m.seq, ref: b.ref, name, size, btn, label, linkBtn, busy: false, denied: false, check, card };
+    if (selected.has(fc.ref)) { check.checked = true; card.classList.add("picked"); }
+    check.addEventListener("change", () => toggleSelect(fc, check.checked));
     btn.addEventListener("click", () => onShareClick(fc));
     linkBtn.addEventListener("click", () => { linkBtn.hidden = true; shareLink(fc); });
     actions.append(btn, linkBtn);
@@ -567,7 +581,7 @@
     const wanted = R.prefetchWanted(fileCards, openRef, liveAfter, PREFETCH_MAX);
     if (liveAfter === null) openRef = wanted.length ? wanted[0].ref : null; // still opening: remember the newest
     const keep = new Set(wanted.map((fc) => fc.ref));
-    for (const [ref, e] of Array.from(cache)) if (!keep.has(ref) && !e.pinned) dropEntry(ref);
+    for (const [ref, e] of Array.from(cache)) if (!keep.has(ref) && !e.pinned && !selected.has(ref)) dropEntry(ref);
     for (const fc of wanted) {
       const e = cache.get(fc.ref);
       if (!e) fetchEntry(fc, false);
@@ -625,7 +639,7 @@
       let entry = cache.get(fc.ref);
       if (entry && entry.state === "ready") { await shareReadyFile(fc, entry); return; } // no waiting before the share sheet
       if (!entry || entry.state === "failed") {
-        for (const [ref, e] of Array.from(cache)) if (e.pinned) dropEntry(ref); // one tapped-card file at a time
+        for (const [ref, e] of Array.from(cache)) if (e.pinned && !selected.has(ref)) dropEntry(ref); // one tapped-card file at a time
         entry = fetchEntry(fc, true);
       }
       setShareLabel(fc, "Getting file…");
@@ -643,6 +657,177 @@
       fc.busy = false;
     }
   }
+
+  // ---------------------------------------------------------------
+  //  Share several files at once
+  //
+  //  Ticking a card downloads its file straight away (if it can go as a file)
+  //  and keeps it while ticked, so the Share tap opens the share sheet at once.
+  //  Files that can't go as files (over 25 MB, unknown size, or a browser that
+  //  can't share files) go afterwards as one WhatsApp message of links.
+  // ---------------------------------------------------------------
+  let selBusy = false;
+  let selDenied = false;     // the phone refused one share tap: the next refusal means "never"
+  let pendingLinks = null;   // cards still to send as links after the files went
+
+  const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+
+  function selCards() { return Array.from(selected.values()); }
+
+  function renderSelBar(note) {
+    const cards = selCards();
+    const show = cards.length > 0;
+    els.selbar.hidden = !show;
+    document.body.classList.toggle("has-sel", show);
+    if (!show) return;
+    if (pendingLinks) {
+      els.selSummary.textContent = COPY.linksLeft;
+      els.selShare.textContent = `Send ${plural(pendingLinks.length, "link", "links")}`;
+    } else {
+      els.selSummary.textContent = note || R.selectionSummary(cards);
+      const { files } = R.splitSelection(cards, canShareFiles);
+      els.selShare.textContent = files.length
+        ? `Share ${plural(cards.length, "file", "files")}`
+        : `Send ${plural(cards.length, "link", "links")}`;
+    }
+    els.selShare.disabled = selBusy;
+  }
+
+  function setPicked(ref, on) {
+    for (const fc of fileCards) {
+      if (fc.ref !== ref || !fc.check) continue;
+      fc.check.checked = on;
+      fc.card.classList.toggle("picked", on);
+    }
+  }
+
+  function ensureSelEntry(fc) {
+    let e = cache.get(fc.ref);
+    if (e && e.state !== "failed") return e;
+    e = fetchEntry(fc, false);
+    e.promise.then(() => {
+      if (cache.get(fc.ref) !== e || !selected.has(fc.ref)) return;
+      if (e.state === "toobig") { fc.size = R.SHARE_FILE_MAX + 1; renderSelBar(); }
+      else if (e.state === "failed" && !selBusy) { unselect(fc.ref); toast(COPY.selectFailed); }
+    });
+    return e;
+  }
+
+  function unselect(ref) {
+    selected.delete(ref);
+    setPicked(ref, false);
+    pendingLinks = null;
+    selDenied = false;
+    refreshPrefetch(); // lets the file go unless it is one of the few fetched ahead anyway
+    renderSelBar();
+  }
+
+  function toggleSelect(fc, on) {
+    if (selBusy) { setPicked(fc.ref, selected.has(fc.ref)); return; }
+    if (!on) { unselect(fc.ref); return; }
+    if (selected.has(fc.ref)) { setPicked(fc.ref, true); return; }
+    if (selected.size >= R.SELECT_MAX) { setPicked(fc.ref, false); toast(COPY.selectMax); return; }
+    selected.set(fc.ref, fc);
+    setPicked(fc.ref, true);
+    pendingLinks = null;
+    selDenied = false;
+    if (R.shareMode(fc.size, canShareFiles) === "file") ensureSelEntry(fc);
+    renderSelBar();
+  }
+
+  function clearSelection() {
+    const refs = Array.from(selected.keys());
+    selected.clear();
+    for (const ref of refs) setPicked(ref, false);
+    pendingLinks = null;
+    selDenied = false;
+    refreshPrefetch();
+    renderSelBar();
+  }
+
+  async function sendLinks(cards) {
+    selBusy = true;
+    renderSelBar("Getting links…");
+    let results;
+    try {
+      results = await Promise.all(cards.map((fc) => api("/app/api/share-link", {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ref: fc.ref }),
+      })));
+    } catch (_) { setOffline(true); toast(COPY.shareLinkFailed); return; }
+    finally { selBusy = false; renderSelBar(); }
+    if (results.some((r) => r.status === 401)) return;
+    const bad = results.find((r) => !r.ok || !r.data || typeof r.data.url !== "string");
+    if (bad) {
+      toast(bad.data && typeof bad.data.error === "string" && bad.status === 404 ? bad.data.error : COPY.shareLinkFailed);
+      return;
+    }
+    const text = R.linksMessage(cards.map((fc, i) => ({ name: fc.name, url: results[i].data.url })));
+    clearSelection();
+    // A plain navigation: a pop-up opened after a wait is blocked on phones.
+    window.location.href = `https://wa.me/?text=${encodeURIComponent(text)}`;
+  }
+
+  // Called inside the tap (or straight after the downloads), with every file ready.
+  async function shareFiles(fileCardsReady, linkCards) {
+    const files = [];
+    const links = linkCards.slice();
+    for (const fc of fileCardsReady) {
+      const f = cache.get(fc.ref).file;
+      let ok = false;
+      try { ok = navigator.canShare({ files: [f] }); } catch (_) { ok = false; }
+      if (ok) files.push(f); else links.push(fc);
+    }
+    if (!files.length) { await sendLinks(links); return; }
+    try {
+      await navigator.share({ files });
+    } catch (err) {
+      const outcome = R.shareOutcome(err && err.name, selDenied);
+      if (outcome === "again") { selDenied = true; renderSelBar(COPY.tapAgain); return; }
+      selDenied = false;
+      if (outcome === "aborted") return; // closed the share sheet: the ticks stay
+      await sendLinks(selCards());       // this browser won't share files: links for all
+      return;
+    }
+    selDenied = false;
+    if (links.length) { pendingLinks = links; renderSelBar(); return; }
+    clearSelection();
+  }
+
+  async function onSelShare() {
+    if (selBusy || !selected.size) return;
+    if (pendingLinks) { await sendLinks(pendingLinks); return; }
+    const cards = selCards();
+    const { files, links } = R.splitSelection(cards, canShareFiles);
+    if (!files.length) { await sendLinks(links); return; }
+    const entries = files.map((fc) => ensureSelEntry(fc));
+    if (entries.every((e) => e.state === "ready")) { await shareFiles(files, links); return; } // no waiting before the sheet
+    selBusy = true;
+    try {
+      const progress = () => {
+        const done = entries.filter((e) => e.state !== "loading").length;
+        renderSelBar(`Getting files… ${done}/${entries.length}`);
+      };
+      progress();
+      await Promise.all(entries.map((e) => e.promise.then(progress)));
+    } finally {
+      selBusy = false;
+    }
+    const failed = files.filter((fc, i) => entries[i].state === "failed" || entries[i].state === "dropped");
+    if (failed.length) {
+      for (const fc of failed) unselect(fc.ref);
+      toast(COPY.selectFailed);
+      return;
+    }
+    const big = files.filter((fc, i) => entries[i].state === "toobig");
+    for (const fc of big) fc.size = R.SHARE_FILE_MAX + 1;
+    const ready = files.filter((fc, i) => entries[i].state === "ready");
+    // The phone may no longer count this tap; if so the bar says "Tap again to share".
+    await shareFiles(ready, links.concat(big));
+    renderSelBar();
+  }
+
+  els.selShare.addEventListener("click", () => { onSelShare(); });
+  els.selClear.addEventListener("click", () => { if (!selBusy) clearSelection(); });
 
   // ---------------------------------------------------------------
   //  Go

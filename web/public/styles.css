@@ -226,6 +226,24 @@ button { cursor: pointer; -webkit-tap-highlight-color: transparent; }
 .btn:disabled { opacity: 0.6; cursor: default; }
 .btn svg { flex: none; }
 
+/* ---- tick boxes and the share-selected bar ---- */
+.card-pick { flex: none; display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; margin: -6px -6px -6px 0; cursor: pointer; }
+.card-pick input { width: 22px; height: 22px; margin: 0; accent-color: var(--accent); cursor: pointer; }
+.card.picked { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.selbar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px calc(10px + env(safe-area-inset-right)) 8px calc(10px + env(safe-area-inset-left));
+  background: var(--surface);
+  border-top: 1px solid var(--line);
+}
+.selbar[hidden] { display: none; }
+.sel-summary { flex: 1 1 auto; min-width: 0; font-size: 0.88rem; font-weight: 600; color: var(--text); overflow-wrap: anywhere; }
+.selbar .btn { flex: none; }
+body.has-sel .jump { bottom: calc(128px + env(safe-area-inset-bottom)); }
+body.has-sel .toast { bottom: calc(132px + env(safe-area-inset-bottom)); }
+
 /* ---- jump, banner, toast ---- */
 .jump {
   position: absolute;
